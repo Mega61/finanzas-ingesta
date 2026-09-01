@@ -1,0 +1,14 @@
+# Copia este archivo a productos.csv y pon tus datos reales.
+# productos.csv esta en .gitignore: tiene los ultimos 4 digitos de tus tarjetas.
+#
+# instrumento     los ultimos 4 digitos que manda el banco en la alerta
+# clase           tarjeta | cuenta   (una sola fila con clase=cuenta es la principal)
+# cuenta_firefly  el NOMBRE EXACTO de la cuenta en Firefly III
+# desde / hasta   vigencia. Es lo que permite que un plastico reemplazado siga
+#                 resolviendo bien en el historico. hasta vacio = sigue vigente.
+instrumento,clase,cuenta_firefly,desde,hasta,nota
+1111,cuenta,Banco Cuenta de ahorros,2022-01-01,,cuenta principal
+2222,tarjeta,VISA,2022-01-01,,
+3333,tarjeta,MASTERCARD,2022-01-01,2024-12-31,reemplazada por 4444
+4444,tarjeta,MASTERCARD,2025-01-01,,la de uso diario
+5555,tarjeta,AMEX,2022-01-01,,factura en USD

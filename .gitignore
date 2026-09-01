@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------- SECRETOS
+# Nada de esto puede salir de esta maquina. Un token empujado a un remoto
+# hay que considerarlo quemado, aunque el repo sea privado.
+.env
+.env.*
+!.env.ejemplo
+.cache_graph.json
+.cache_graph.json*
+*.bak
+*.token
+stack.env
+*.pem
+*.key
+
+# ------------------------------------------------------------------- DATOS
+# El repo es SOLO codigo. Los movimientos, extractos y correos se quedan
+# afuera: son datos financieros personales.
+*.db
+*.sqlite
+*.sqlite3
+*.eml
+*.xlsx
+*.csv
+!productos.ejemplo.csv
+productos.csv
+datos/
+/pdf/
+
+# ------------------------------------------------------------------ PYTHON
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --------------------------------------------------------------- EDITOR/OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

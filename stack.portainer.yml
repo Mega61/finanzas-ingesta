@@ -1,0 +1,65 @@
+# Plantilla de stack para Portainer / docker-compose.
+#
+# AJUSTA ESTO A TU INSTALACION antes de desplegar:
+#
+#   FIREFLY_URL   como alcanzar Firefly. Si corre en Docker en la misma
+#                 maquina, lo mejor es la red interna:
+#                     http://<nombre-del-contenedor-de-firefly>:8080
+#                 Asi no sale a internet, no pasa por el proxy inverso, y no
+#                 hace falta el truco del User-Agent para Cloudflare.
+#                 Tambien sirve la URL publica: https://firefly.tudominio.com
+#
+#   RED_FIREFLY   la red de Docker donde vive Firefly, para poder hablarle por
+#                 nombre. Truco: si el stack de Firefly declara una red
+#                 `external: true`, esa se llama exactamente como dice; la red
+#                 propia del stack, en cambio, se llama
+#                 `<nombre_del_stack>_<nombre_de_la_red>` y hay que buscarla con
+#                 `docker network ls`.
+#
+# Se despliega como stack SEPARADO del de Firefly: asi un redeploy de la
+# ingesta no puede tumbar Firefly.
+#
+# Los secretos van en stack.env o en las variables de entorno de Portainer.
+# NUNCA en este archivo ni en el repo.
+
+services:
+  ingesta:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: finanzas-ingesta:latest
+    container_name: finanzas_ingesta
+    hostname: ingesta
+    restart: unless-stopped
+    networks:
+      - firefly
+    volumes:
+      # la base de la cola y el token de OAuth
+      - finanzas_datos:/datos
+      # configuracion propia, que no esta en el repo
+      - ./productos.csv:/app/automatizacion/productos.csv:ro
+    environment:
+      TZ: ${TZ:-UTC}
+      FINANZAS_DATOS: /datos
+      FIREFLY_URL: ${FIREFLY_URL:?falta FIREFLY_URL}
+      # Solo se publica lo que sea de esta fecha en adelante. Ver la marca de
+      # agua en el README: sin esto se duplica todo lo que ya llevabas a mano.
+      INGESTA_DESDE: ${INGESTA_DESDE:-}
+    env_file:
+      - stack.env
+    # Sin puertos publicados: nadie tiene que entrarle de afuera.
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  finanzas_datos:
+
+networks:
+  firefly:
+    external: true
+    name: ${RED_FIREFLY:?falta RED_FIREFLY}
