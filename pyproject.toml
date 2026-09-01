@@ -1,0 +1,100 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "finanzas-ingesta"
+version = "0.2.0"
+description = "Ingesta de alertas bancarias a Firefly III, con conciliacion contra extractos y clasificacion por Telegram"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+dependencies = [
+    "msal==1.35.1",
+    "openpyxl==3.1.5",
+    "pdfplumber==0.11.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+finanzas = "finanzas.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finanzas"]
+
+
+# ----------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# -q para que el reporte quepa en pantalla; --strict-markers para que un marker
+# mal escrito falle en vez de ignorarse en silencio.
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "lento: toca red o disco de verdad, se salta con -m 'not lento'",
+    "necesita_firefly: requiere una instancia de Firefly configurada",
+    "necesita_correo: requiere el archivo local de .eml",
+]
+filterwarnings = ["error::DeprecationWarning"]
+
+
+# ------------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes: variables sin usar, imports sin usar
+    "I",         # isort: orden de imports
+    "B",         # bugbear: trampas reales (mutables por defecto, except amplio)
+    "UP",        # pyupgrade
+    "SIM",       # simplificaciones
+    "RUF",       # reglas propias de ruff
+    "PLC", "PLE", "PLW",  # pylint: convenciones, errores, avisos
+    "DTZ",       # datetimes sin zona horaria
+    "PTH",       # usar pathlib en vez de os.path
+    "T20",       # print olvidado en codigo de libreria
+    "ARG",       # argumentos sin usar
+    "TRY",       # manejo de errores: except amplio, raise sin from
+]
+ignore = [
+    "E501",      # el largo de linea lo maneja el formateador
+    "TRY003",    # mensajes largos en las excepciones: aqui se quieren largos
+]
+
+[tool.ruff.lint.per-file-ignores]
+# los CLI y las herramientas si imprimen, es su trabajo
+"src/finanzas/cli.py" = ["T20"]
+"herramientas/*" = ["T20"]
+"tests/*" = ["T20", "ARG"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["finanzas"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+
+# ---------------------------------------------------------------- cobertura
+[tool.coverage.run]
+source = ["src/finanzas"]
+branch = true
+
+[tool.coverage.report]
+# El dominio es logica pura: ahi la cobertura tiene que ser alta porque no hay
+# excusa. Los adaptadores tocan red y se cubren con pruebas de integracion.
+exclude_lines = [
+    "pragma: sin cobertura",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]

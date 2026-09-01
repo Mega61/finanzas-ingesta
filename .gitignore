@@ -45,3 +45,8 @@ venv/
 Thumbs.db
 desktop.ini
 .DS_Store
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
