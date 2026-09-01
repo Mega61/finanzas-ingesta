@@ -261,28 +261,104 @@ base de la cola y el token de OAuth.
 
 ---
 
-## Archivos
+## Cómo está organizado
 
-| | |
-|---|---|
-| `parsers/bancolombia_alertas.py` | alertas de correo → movimiento |
-| `parsers/extracto_tarjeta.py` | PDF de extracto → movimientos |
-| `ingesta/graph.py` | Microsoft Graph (Outlook) |
-| `clasificador.py` | cuenta, categoría y presupuesto |
-| `publicador.py` | escribe en Firefly, idempotente |
-| `conciliador.py` | cruza extractos y cierra movimientos |
-| `bot.py` · `telegram.py` | el bot |
-| `demonio.py` | orquestador |
-| `db.py` · `esquema.sql` | la cola |
-| `config.py` | secretos, con el entorno por encima de los archivos |
+Los diagramas están en [`docs/arquitectura.md`](docs/arquitectura.md): el
+recorrido de un movimiento, las capas y quién puede llamar a quién, los
+estados de un pendiente, y lo que corre en el contenedor.
+
+Dos capas, con una regla que se verifica en las pruebas: **el dominio no sabe de
+red ni de base de datos.**
+
+```
+src/finanzas/
+  dominio/          lógica pura, sin I/O
+    dinero.py         parsear y formatear plata (Decimal, no float)
+    fechas.py         todo en hora de Bogotá; nada de datetime naive
+    texto.py          normalizar nombres de comercio
+    conciliacion.py   emparejar libro contra extracto
+  adaptadores/
+    almacen.py        TODO el SQL, un método con nombre por consulta
+
+<raíz>/             módulos de aplicación, todavía planos
+  servicio.py         el proceso del contenedor: ingesta con horario + bot
+  demonio.py          las acciones sueltas por CLI
+  bot.py              Telegram: pregunta, aprende y responde
+  clasificador.py     cuenta, categoría y presupuesto
+  publicador.py       escribe en Firefly, idempotente por external_id
+  conciliador.py      cruza extractos y cierra movimientos
+  interprete.py       entiende «fue la comida de la gata en Tierragro»
+  asesor.py           responde «¿me alcanza para esto?» con tus números
+  presupuestos.py     estado de los presupuestos y categoría → presupuesto
+  taxonomia.py        qué es categoría y qué es etiqueta
+  firefly.py · telegram.py · ia.py · config.py    los cuatro de afuera
+  db.py               capa delgada sobre el almacén, por compatibilidad
+  esquema.sql         la fuente de verdad del esquema
+
+parsers/            correo y PDF → movimiento
+ingesta/            Microsoft Graph
+herramientas/       diagnóstico y migraciones, se corren a mano
+tests/              unidad (dominio), integración (SQLite real), arquitectura
+```
+
+El dominio se prueba sin montar nada. Los adaptadores se prueban contra SQLite
+en memoria con el esquema real. Los de afuera (Firefly, Telegram, Gemini) se
+reemplazan por dobles.
+
+### Por qué esta forma
+
+Ocho bugs llegaron a producción. Siete estaban en módulos sin una sola prueba, y
+no se podían probar porque la lógica venía enredada con las llamadas de red: para
+verificar una regla de conciliación había que tener un Firefly andando. El único
+módulo con pruebas de verdad no produjo ninguno.
+
+Sacar la lógica pura a `dominio/` es lo que hizo posible escribirlas. Cada
+prueba rara que hay ahí documenta el bug del que salió.
+
+---
+
+## Correr las pruebas
+
+```bash
+pip install -e ".[dev]"
+
+pytest tests                       # 305 pruebas, ~1 segundo
+pytest tests --cov=src/finanzas    # el CI exige 90%, hoy va en 93%
+python pruebas/test_alertas.py     # el parser contra los correos reales
+python pruebas/test_config.py      # que toda variable llegue al contenedor
+
+ruff check src tests *.py herramientas parsers ingesta pruebas
+ruff format --check src tests
+```
+
+Tres pruebas cuidan la estructura, y valen la pena entenderlas:
+
+- **`test_el_sql_solo_vive_en_el_almacen`** — había 69 consultas repartidas en
+  siete archivos, varias con la misma lógica escrita distinto. Cambiar el
+  esquema obligaba a cazarlas todas y siempre se escapaba una.
+- **`test_el_dominio_no_sabe_de_sqlite`** — si el dominio importa la base, deja
+  de poderse probar sin montar una, y ahí es donde se acumularon los bugs.
+- **`test_nadie_crea_tablas_en_tiempo_de_ejecucion`** — `bot.py` creaba tres
+  tablas al vuelo con `CREATE TABLE IF NOT EXISTS`, así que `esquema.sql` no era
+  la fuente de verdad y las pruebas veían un esquema distinto al de producción.
+
+El CI construye la imagen y comprueba que arranque. Eso también existe por un
+motivo: el contenedor llegó a producción sin el paquete `finanzas` instalado.
 
 ---
 
 ## Estado
 
-Funciona de punta a punta: baja correo, parsea, clasifica, publica, concilia y
-pregunta. Falta unir el demonio y el bot en un solo proceso con horario para el
-contenedor, y el segundo usuario por Gmail.
+Funciona de punta a punta y corre solo: baja correo, parsea, clasifica, publica,
+concilia, pregunta lo que no sabe y manda el resumen diario. Un único proceso
+(`servicio.py`) hace la ingesta con horario y atiende el bot.
+
+- parser: 100% de 863 correos reales
+- clasificador: ~70% sin preguntar, o sea unas 28 preguntas al mes
+- cobertura del paquete: 93%
+
+Falta el segundo usuario por Gmail, y terminar de mover los módulos planos a
+`src/`.
 
 ## Licencia
 
