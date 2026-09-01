@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Interpreta texto libre con Gemini, cuando el emparejamiento por palabras no
 alcanza.
 
@@ -31,7 +30,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config  # noqa: E402
+import config
 
 BASE = 'https://generativelanguage.googleapis.com/v1beta'
 MODELO = config.get('GEMINI_MODELO', 'gemini-3.7-flash')

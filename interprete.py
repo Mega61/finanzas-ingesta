@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Convierte una respuesta en espanol coloquial en categoria, comercio y
 presupuesto.
 
@@ -24,8 +23,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import clasificador  # noqa: E402
-import db  # noqa: E402
+import clasificador
+import db
 
 # Formas coloquiales -> nombre de la categoria en Firefly. La clave es el
 # nombre normalizado de la categoria, para que resuelva contra la lista real.
@@ -174,7 +173,6 @@ def catalogo(cx, usuario_id):
     """Lo que existe en el Firefly del usuario, para restringir la respuesta."""
     import firefly
     import presupuestos
-
     import taxonomia
     cats = sorted({c['attributes']['name']
                    for c in firefly.get_all('/api/v1/categories')})
@@ -315,7 +313,6 @@ def _con_gemini(cx, usuario_id, pendiente, texto, cat):
 
 
 if __name__ == '__main__':
-    import config
     db.inicializar()
     cx = db.conectar()
     cat = catalogo(cx, 1)

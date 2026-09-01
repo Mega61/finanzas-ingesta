@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Convierte categorias que en realidad son atributos en etiquetas.
 
     python migrar_taxonomia.py                 # SECO, muestra que haria
@@ -21,8 +20,7 @@ from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import firefly  # noqa: E402
-import taxonomia  # noqa: E402
+import firefly
 
 # Cuanto hacia atras se toca. Mas viejo que esto se deja quieto.
 DIAS = 31

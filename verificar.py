@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Verifica una por una las credenciales de la Fase 1.
 
     python automatizacion/verificar.py            # revisa todo lo que este configurado

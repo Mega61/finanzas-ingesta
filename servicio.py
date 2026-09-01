@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """El proceso que corre siempre. Es lo que arranca el contenedor.
 
 Junta las dos mitades que antes eran comandos separados:
@@ -29,11 +28,11 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import bot  # noqa: E402
-import config  # noqa: E402
-import db  # noqa: E402
-import demonio  # noqa: E402
-import telegram  # noqa: E402
+import bot
+import config
+import db
+import demonio
+import telegram
 
 # Cada cuanto se revisa el correo.
 INTERVALO_MIN = int(config.get('INGESTA_INTERVALO_MIN', '15'))

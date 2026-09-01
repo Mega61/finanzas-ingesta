@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """El asesor. Responde preguntas de plata con TUS numeros, no con opiniones.
 
     "quiero comprar un conjunto de ropa deportiva, ¿deberia?"
@@ -14,21 +13,22 @@ le falta, no estimarlo.
 """
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config  # noqa: E402
-import firefly  # noqa: E402
-import presupuestos  # noqa: E402
+import firefly
+import presupuestos
+
+from finanzas.dominio import dinero as _dinero
+from finanzas.dominio import fechas as _fechas
 
 
 def _plata(v):
-    return f"${abs(v):,.0f}".replace(',', '.')
+    return _dinero.formatear(v)
 
 
-def _fin_de_mes(d):
-    return (d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+_fin_de_mes = _fechas.fin_de_mes
 
 
 # ------------------------------------------------------------------ contexto

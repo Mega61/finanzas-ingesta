@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Parser de las alertas por correo de Bancolombia.
 
 Convierte un .eml de alertasynotificaciones@an.notificacionesbancolombia.com
@@ -13,10 +12,12 @@ import email
 import email.utils
 import re
 import unicodedata
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, date
+from dataclasses import asdict, dataclass, field
+from datetime import date
 from email import policy
-from typing import Optional
+
+from finanzas.dominio import dinero as _dinero
+from finanzas.dominio import fechas as _fechas
 
 REMITENTE = 'an.notificacionesbancolombia.com'
 
@@ -24,16 +25,16 @@ REMITENTE = 'an.notificacionesbancolombia.com'
 @dataclass
 class Evento:
     tipo: str                      # compra_tarjeta | pago_qr | transferencia_salida | ...
-    fecha: Optional[date]
-    hora: Optional[str]
+    fecha: date | None
+    hora: str | None
     moneda: str
     valor: float                   # negativo = sale plata, desde tu punto de vista
-    instrumento: Optional[str]     # ultimos 4 digitos del producto
+    instrumento: str | None     # ultimos 4 digitos del producto
     clase_instrumento: str         # tarjeta | cuenta
     contraparte: str
     descripcion: str
     plantilla: str                 # que familia lo cazo, para depurar
-    traslado_a: Optional[str] = None   # si es plata moviendose entre productos
+    traslado_a: str | None = None   # si es plata moviendose entre productos
                                        # propios, los 4 digitos del otro
     crudo: str = field(repr=False, default='')
 
@@ -51,44 +52,18 @@ def _sin_tildes(t):
                    if unicodedata.category(c) != 'Mn')
 
 
-def parse_monto(s):
-    """Los montos vienen en dos formatos mezclados, a veces en el mismo correo:
-    '178.679,08' (colombiano) y '205,967.00' (gringo). Tambien '9,000' sin
-    decimales, que es 9000 y no 9.
-
-    Regla: manda el ULTIMO separador. Si va seguido de exactamente 2 digitos
-    y ahi termina el numero, es el separador decimal; si no, todos los
-    separadores son de miles.
-    """
-    s = s.strip().replace(' ', '')
-    m = re.search(r'[.,](\d+)$', s)
-    if m and len(m.group(1)) == 2:
-        entero = s[:m.start()].replace('.', '').replace(',', '')
-        return float(f"{entero or 0}.{m.group(1)}")
-    return float(re.sub(r'[.,]', '', s))
+# La logica de montos y fechas vive en el dominio, con pruebas. Aqui solo se
+# re-exporta para no romper a quien ya importaba desde este modulo.
+parse_monto = _dinero.parse_monto
 
 
-def parse_fecha(s):
-    """dd/mm/yyyy, dd/mm/yy, yyyy/mm/dd."""
-    s = (s or '').strip()
-    for fmt in ('%d/%m/%Y', '%d/%m/%y', '%Y/%m/%d', '%d-%m-%Y'):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            pass
-    return None
+parse_fecha = _fechas.a_fecha
 
 
 _ES_HORA = re.compile(r'^\d{1,2}:\d{2}(:\d{2})?$')
 
 
-def _ordenar_fecha_hora(a, b):
-    """Varias plantillas traen la fecha y la hora invertidas:
-    'el 07:57 a las 10/12/2025'. Se decide por la forma, no por la posicion.
-    """
-    if _ES_HORA.match(a or ''):
-        return b, a
-    return a, b
+_ordenar_fecha_hora = _fechas.ordenar_fecha_hora
 
 
 def _html_a_texto(h):

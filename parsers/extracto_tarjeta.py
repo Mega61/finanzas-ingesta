@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Parsea un extracto de tarjeta de Bancolombia (PDF cifrado) a movimientos.
 
 Los PDF vienen protegidos con la cedula como clave. Hay dos formatos segun la
@@ -17,7 +16,6 @@ import datetime
 import os
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 # formato viejo: auth, fecha, desc, monto anglo con '-' opcional al final
 VIEJO = re.compile(
@@ -64,7 +62,7 @@ class MovExtracto:
     descripcion: str
     valor: float          # negativo = sale plata (igual que en las alertas)
     moneda: str
-    autorizacion: Optional[str]
+    autorizacion: str | None
     instrumento: str      # ultimos 4 digitos
     archivo: str
     en_periodo: bool
@@ -76,10 +74,10 @@ class Extracto:
     instrumento: str
     marca: str
     periodo_archivo: str
-    desde: Optional[datetime.date]
-    hasta: Optional[datetime.date]
-    movimientos: List[MovExtracto] = field(default_factory=list)
-    error: Optional[str] = None
+    desde: datetime.date | None
+    hasta: datetime.date | None
+    movimientos: list[MovExtracto] = field(default_factory=list)
+    error: str | None = None
 
 
 def num_anglo(s):

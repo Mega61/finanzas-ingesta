@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Baja correo de Hotmail / Outlook.com con Microsoft Graph.
 
 Por que Graph y no IMAP: en cuentas personales de Microsoft el app password
@@ -21,7 +20,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import config  # noqa: E402
+import config
 
 GRAPH = 'https://graph.microsoft.com/v1.0'
 CACHE = os.path.join(config.DATOS, '.cache_graph.json')

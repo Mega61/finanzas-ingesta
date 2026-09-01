@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """El bot de Telegram: pregunta lo que el clasificador no supo, y aprende.
 
     python bot.py escuchar        # long polling, es lo que corre en el server
@@ -16,12 +15,14 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import clasificador  # noqa: E402
-import config  # noqa: E402
-import db  # noqa: E402
-import firefly  # noqa: E402
-import publicador  # noqa: E402
-import telegram  # noqa: E402
+import clasificador
+import config
+import db
+import firefly
+import publicador
+import telegram
+
+from finanzas.dominio import dinero as _dinero
 
 # Cuantas categorias ofrecer como botones antes de pedir texto libre.
 MAX_BOTONES = 8
@@ -32,10 +33,7 @@ MAX_PREGUNTAS = 6
 # ------------------------------------------------------------------ formato
 
 def _plata(v, moneda='COP'):
-    signo = '-' if v < 0 else '+'
-    if moneda == 'USD':
-        return f"{signo}US${abs(v):,.2f}"
-    return f"{signo}${abs(v):,.0f}".replace(',', '.')
+    return _dinero.formatear(v, moneda, con_signo=True)
 
 
 def describir(p):
@@ -297,8 +295,8 @@ def _version_texto():
     una imagen vieja, que es facil que pase y dificil de ver de otra forma."""
     sha = config.get('GIT_SHA', 'desconocido')
     fecha = config.get('BUILD_FECHA', 'desconocida')
-    import interprete
     import ia
+    import interprete
     ia_txt = ('Gemini ' + ia.MODELO) if ia.disponible() else 'sin API key'
     lineas = [
         '<b>Versión</b>',

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """El orquestador. Una pasada completa: bajar, parsear, clasificar, publicar.
 
     python -m automatizacion.demonio estado          # que hay ahora mismo
@@ -24,11 +23,11 @@ from datetime import date, datetime, timedelta
 # viene por PYTHONPATH, pero no estorba.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import clasificador  # noqa: E402
-import config  # noqa: E402
-import db  # noqa: E402
-import publicador  # noqa: E402
-from parsers import bancolombia_alertas as alertas  # noqa: E402
+import clasificador
+import config
+import db
+import publicador
+from parsers import bancolombia_alertas as alertas
 
 
 def marca_de_agua():
@@ -128,9 +127,9 @@ def paso_importar(cx, uid, carpeta=None):
     conciliacion, y para que el parser se pueda re-correr sobre todo el
     historico sin volver al buzon.
     """
+    import email as _email
     import glob
     from email import policy
-    import email as _email
 
     carpeta = carpeta or os.path.join(config.RAIZ, 'Mensajes de Bancolombia')
     if not os.path.isdir(carpeta):

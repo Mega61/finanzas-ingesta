@@ -93,7 +93,12 @@ class TestInvariantes:
     def test_es_idempotente(self):
         """Normalizar dos veces tiene que dar lo mismo. Si no, cualquier
         comparacion depende de cuantas veces se paso por la funcion."""
-        for entrada in ['MERCADO PAGO*ZONAFIT', 'UBER RIDES*DL', 'Grupo Éxito',
-                        'CYCLE GEAR N169', '6985']:
+        for entrada in [
+            'MERCADO PAGO*ZONAFIT',
+            'UBER RIDES*DL',
+            'Grupo Éxito',
+            'CYCLE GEAR N169',
+            '6985',
+        ]:
             una = texto.normalizar(entrada)
             assert texto.normalizar(una) == una, entrada

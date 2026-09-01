@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Fase 5: cruza los extractos contra lo que se publico, y cierra el ciclo.
 
 Tres desenlaces por movimiento publicado:
@@ -22,11 +21,11 @@ from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config  # noqa: E402
-import db  # noqa: E402
-import firefly  # noqa: E402
-from parsers import extracto_tarjeta  # noqa: E402
-from publicador import ETIQUETA  # noqa: E402
+import config
+import db
+import firefly
+from parsers import extracto_tarjeta
+from publicador import ETIQUETA
 
 # Se prueba en este orden y gana el primer match mas cercano.
 TOLERANCIAS = (0, 1, 2, 3, 5, 8, 20, 45)

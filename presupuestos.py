@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Estado de los presupuestos, y la relacion categoria -> presupuesto.
 
 Tres cosas:
@@ -16,18 +15,20 @@ Tres cosas:
 """
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import firefly  # noqa: E402
+import firefly
+
+from finanzas.dominio import dinero as _dinero
+from finanzas.dominio import fechas as _fechas
 
 # Debajo de esto no se considera que la categoria decida el presupuesto sola.
 UMBRAL_DETERMINISTICO = 0.8
 
 
-def _fin_de_mes(d):
-    return (d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+_fin_de_mes = _fechas.fin_de_mes
 
 
 def activos():
@@ -151,7 +152,7 @@ def revienta(nombre_presupuesto, monto, est=None):
 
 
 def _plata(v):
-    return f"${abs(v):,.0f}".replace(',', '.')
+    return _dinero.formatear(v)
 
 
 def formatear(est=None):

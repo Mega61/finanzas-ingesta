@@ -18,6 +18,9 @@ from datetime import date, datetime
 
 import db
 
+from finanzas.dominio import texto as _texto
+from finanzas.dominio import fechas as _fechas
+
 AQUI = os.path.dirname(os.path.abspath(__file__))
 PRODUCTOS = os.path.join(AQUI, 'productos.csv')
 
@@ -44,37 +47,10 @@ RUIDO = re.compile(r'\b(COL|COLO|CO|BOGOTA|MEDELLIN|SAS|S\.A\.S|SA|LTDA|INC|COM)
 LOCAL = re.compile(r'\b[A-Z]?\d{1,5}\b')
 
 
-def normalizar(texto):
-    """Deja el nombre del comercio comparable entre las alertas y Firefly."""
-    if not texto:
-        return ''
-    t = ''.join(c for c in unicodedata.normalize('NFD', str(texto))
-                if unicodedata.category(c) != 'Mn')
-    t = t.upper()
-    t = PASARELAS_FIN.sub('', t)
-    t = PASARELAS.sub('', t)
-    t = re.sub(r'[^A-Z0-9 ]', ' ', t)
-    t = RUIDO.sub(' ', t)
-    # Solo se borran los numeros de local si queda texto de verdad. En una
-    # transferencia a la cuenta '6985' el numero ES la identidad, y borrarlo
-    # dejaba la clave vacia.
-    if re.search(r'[A-Z]{3}', t):
-        t = LOCAL.sub(' ', t)
-    t = re.sub(r'\s+', ' ', t).strip()
-    return t
+normalizar = _texto.normalizar
 
 
-def _a_fecha(v):
-    if isinstance(v, date):
-        return v
-    if not v:
-        return None
-    for f in ('%Y-%m-%d', '%d/%m/%Y', '%Y-%m-%dT%H:%M:%S'):
-        try:
-            return datetime.strptime(str(v)[:19], f).date()
-        except ValueError:
-            pass
-    return None
+_a_fecha = _fechas.a_fecha
 
 
 # ------------------------------------------------- instrumento -> cuenta
@@ -300,7 +276,8 @@ GENERICAS = {
 
 
 def _tokens(s):
-    return {t for t in s.split() if len(t) > 2}
+    # el dominio ya normaliza; aqui llega texto ya normalizado
+    return {t for t in (s or '').split() if len(t) > 2}
 
 
 class Indice:

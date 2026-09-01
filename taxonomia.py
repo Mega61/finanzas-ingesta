@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Que es categoria y que es etiqueta. Un solo lugar, para que no se desincronice.
 
 La regla: **categoria = QUE compraste, etiqueta = POR QUE o PARA QUIEN.**

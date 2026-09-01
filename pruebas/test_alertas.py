@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Prueba del parser de alertas contra el archivo real de correos.
 
 Uso:  python automatizacion/pruebas/test_alertas.py

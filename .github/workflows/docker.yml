@@ -27,12 +27,23 @@ jobs:
 
       - name: Pruebas
         run: |
-          python -m pip install --quiet -r requirements.txt
-          # Las pruebas del parser no necesitan el archivo de correos: cuando no
-          # lo encuentran corren solo las unitarias y no fallan.
+          python -m pip install --quiet -e ".[dev]"
+          # Las unitarias del dominio, mas la que verifica que TODO archivo
+          # compile y TODO modulo importe. Esa ultima existe porque un
+          # reemplazo por regex dejo un archivo roto y llego a main.
+          python -m pytest tests -q
+          # el parser contra el archivo real de correos; si no esta, corre solo
+          # las unitarias y no falla
           python pruebas/test_alertas.py
           # que toda variable que el codigo lee llegue al contenedor
           python pruebas/test_config.py
+
+      - name: Lint del dominio
+        run: |
+          # El codigo viejo todavia tiene deuda; el dominio nuevo se mantiene
+          # limpio desde el dia uno.
+          python -m ruff check src tests
+          python -m ruff format --check src tests
 
       - uses: docker/setup-buildx-action@v3
 

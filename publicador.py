@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Escribe los movimientos en Firefly III.
 
 Tres redes de seguridad, porque aqui es donde se puede hacer dano de verdad:

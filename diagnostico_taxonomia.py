@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Diagnostico de categorias y etiquetas. NO cambia nada.
 
     python diagnostico_taxonomia.py            # tabla en consola
@@ -19,7 +18,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import firefly  # noqa: E402
+import firefly
+
+from finanzas.dominio import dinero as _dinero
 
 # Debajo de este uso se considera cola larga y se propone fusion.
 COLA_LARGA = 5
@@ -182,7 +183,7 @@ def informe(d):
 
 
 def _plata(v):
-    return f"${v:,.0f}".replace(',', '.')
+    return _dinero.formatear(v)
 
 
 def main():

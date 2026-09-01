@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Auditoria de Firefly. NO cambia nada, solo busca lo que no cuadra.
 
     python auditar_firefly.py
@@ -25,11 +24,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import firefly  # noqa: E402
+import firefly
+
+from finanzas.dominio import dinero as _dinero
 
 
 def _plata(v):
-    return f"{v:,.2f}"
+    return _dinero.formatear(v)
 
 
 def cuentas_activo():
@@ -184,7 +185,7 @@ def comparar_con_real(cuentas, pares):
         # se recorre al reves buscando el punto donde el saldo corrido daria
         # el valor real: ahi es donde se separaron
         corr = c['saldo']
-        print(f"\n    ultimos movimientos, con saldo corrido hacia atras:")
+        print("\n    ultimos movimientos, con saldo corrido hacia atras:")
         for m in reversed(movs[-14:]):
             antes = corr - m['valor']
             pista = '   <== aqui el saldo era el real' if abs(antes - real) < 1 else ''

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Cliente de la API de Firefly III.
 
 Version autocontenida de reconciliacion/api/_firefly.py: lee la configuracion

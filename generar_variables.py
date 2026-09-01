@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Genera el bloque de variables de entorno para pegar en Portainer.
 
     python generar_variables.py
@@ -19,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config  # noqa: E402
+import config
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 SALIDA = os.path.join(config.RAIZ, 'portainer-variables.txt')
@@ -145,7 +144,7 @@ def main():
     if faltan:
         out.write(f"\nOJO: faltan por configurar: {', '.join(faltan)}\n")
 
-    with io.open(SALIDA, 'w', encoding='utf-8', newline='\n') as fh:
+    with open(SALIDA, 'w', encoding='utf-8', newline='\n') as fh:
         fh.write(out.getvalue())
 
     print(f"escrito: {SALIDA}")

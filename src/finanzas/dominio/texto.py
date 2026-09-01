@@ -38,13 +38,37 @@ _LOCAL = re.compile(r'\b[A-Z]?\d{1,5}\b')
 # Palabras demasiado comunes para decidir una categoria o un comercio por si
 # solas. Sin esto, 'comida' cazaba con 'Comida de calle' y le ganaba a que el
 # usuario hubiera dicho 'gata', que era la senal real.
-VAGAS = frozenset({
-    'COMIDA', 'COMPRA', 'COMPRAS', 'GASTO', 'PAGO', 'PAGOS', 'COSAS',
-    'ARTICULOS', 'TRANSPORTE', 'PERSONAL', 'CALLE', 'MES', 'MERCADO',
-    'TIENDA', 'SUPER', 'ALMACEN', 'ALMACENES', 'CENTRO', 'GRUPO',
-    'SERVICIO', 'SERVICIOS', 'COMERCIAL', 'DISTRIBUIDORA', 'INVERSIONES',
-    'SOLUCIONES', 'COLOMBIA', 'NACIONAL',
-})
+VAGAS = frozenset(
+    {
+        'COMIDA',
+        'COMPRA',
+        'COMPRAS',
+        'GASTO',
+        'PAGO',
+        'PAGOS',
+        'COSAS',
+        'ARTICULOS',
+        'TRANSPORTE',
+        'PERSONAL',
+        'CALLE',
+        'MES',
+        'MERCADO',
+        'TIENDA',
+        'SUPER',
+        'ALMACEN',
+        'ALMACENES',
+        'CENTRO',
+        'GRUPO',
+        'SERVICIO',
+        'SERVICIOS',
+        'COMERCIAL',
+        'DISTRIBUIDORA',
+        'INVERSIONES',
+        'SOLUCIONES',
+        'COLOMBIA',
+        'NACIONAL',
+    }
+)
 
 
 def sin_tildes(texto: str) -> str:
@@ -52,7 +76,8 @@ def sin_tildes(texto: str) -> str:
     if not texto:
         return ''
     return ''.join(
-        c for c in unicodedata.normalize('NFD', str(texto))
+        c
+        for c in unicodedata.normalize('NFD', str(texto))
         if unicodedata.category(c) != 'Mn'
     )
 

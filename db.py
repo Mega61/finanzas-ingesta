@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Acceso a la base de la cola. SQLite, en el volumen de datos.
 
 Todo pasa por aqui para que el resto del codigo no sepa de SQL.

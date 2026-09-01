@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Que toda variable que el codigo lee de verdad llegue al contenedor.
 
     python pruebas/test_config.py

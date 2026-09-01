@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Cliente de la Bot API de Telegram. Solo stdlib, sin dependencias nuevas."""
 import json
 import os

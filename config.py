@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Configuracion. Una sola forma de leer secretos en todos los entornos.
 
 Orden de precedencia (gana el primero que tenga valor):
