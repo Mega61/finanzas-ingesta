@@ -263,8 +263,9 @@ PRUEBAS = {
 }
 
 
-def main():
-    pedidas = [a.lower() for a in sys.argv[1:]] or list(PRUEBAS)
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    pedidas = [a.lower() for a in argv] or list(PRUEBAS)
     malas = [p for p in pedidas if p not in PRUEBAS]
     if malas:
         sys.exit(f"no conozco: {', '.join(malas)}\nopciones: {', '.join(PRUEBAS)}")

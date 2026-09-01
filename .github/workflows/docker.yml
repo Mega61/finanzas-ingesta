@@ -90,6 +90,10 @@ jobs:
 
       - name: Comprobar que la imagen arranca
         run: |
+          # El CMD del contenedor es `finanzas servicio`, asi que si el comando
+          # no existe el contenedor no levanta. Se comprueba aqui.
+          docker run --rm ${{ steps.img.outputs.ref }}:latest finanzas version
+          docker run --rm ${{ steps.img.outputs.ref }}:latest finanzas estado
           docker run --rm -e FINANZAS_DATOS=/datos \
             ${{ steps.img.outputs.ref }}:latest \
             python -c "import sys; sys.path.insert(0,'/app/automatizacion'); import finanzas.dominio.conciliacion, finanzas.dominio.dinero, finanzas.dominio.fechas, finanzas.dominio.texto; from finanzas.adaptadores.almacen import Almacen; import config, db, firefly, clasificador, publicador, conciliador, bot, telegram, ia, interprete, asesor, presupuestos, taxonomia, demonio, servicio; print('paquete + modulos planos: todo importa')"

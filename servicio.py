@@ -191,7 +191,7 @@ def hilo_bot():
 # ---------------------------------------------------------------------- main
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__,
+    ap = argparse.ArgumentParser(prog='finanzas servicio', description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--una-vuelta', action='store_true',
                     help='una pasada de ingesta y sale, sin bot')

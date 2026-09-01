@@ -15,6 +15,7 @@ precio estimado y despues cobra la tarifa real.
 Emparejamiento: por monto absoluto con tolerancia de fecha creciente, y gana
 el mas cercano. Es el metodo que ya funciono en la reconciliacion manual.
 """
+import argparse
 import os
 import sys
 from datetime import timedelta
@@ -357,17 +358,23 @@ def correr(cx, carpeta=None, dry_run=True, solo=None):
     return total
 
 
-if __name__ == '__main__':
-    import argparse
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--en-serio', action='store_true')
-    ap.add_argument('--carpeta')
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog='finanzas conciliar', description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--en-serio', action='store_true',
+                    help='aplicar los cambios en Firefly (por defecto es seco)')
+    ap.add_argument('--carpeta', help='carpeta con los PDF de extracto')
     ap.add_argument('--solo', help='filtra por nombre de archivo')
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     db.inicializar()
     cx = db.conectar()
     try:
         correr(cx, carpeta=a.carpeta, dry_run=not a.en_serio, solo=a.solo)
     finally:
         cx.close()
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

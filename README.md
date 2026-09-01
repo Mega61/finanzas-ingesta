@@ -250,6 +250,36 @@ Además hay dos redes más: `external_id` es un hash del `Message-ID` y se consu
 antes de crear, y hay un anti-duplicado por cuenta + monto + fecha cercana para
 el caso de que el movimiento se hubiera registrado a mano.
 
+### Los comandos
+
+Después de `pip install -e .` queda un solo comando, `finanzas`, que sin
+argumentos dice qué se puede hacer:
+
+```bash
+finanzas                        # el catálogo
+finanzas estado                 # cómo va la cola
+finanzas ciclo                  # bajar, procesar y publicar — SECO
+finanzas ciclo --en-serio       # lo mismo, escribiendo en Firefly
+finanzas bot escuchar           # el bot en primer plano
+finanzas conciliar --carpeta ../extractos
+finanzas revisar firefly telegram    # que las credenciales sirvan
+finanzas version                # qué commit está corriendo
+```
+
+**Nada escribe en Firefly sin `--en-serio`.** Es lo que hace seguro probar un
+comando sin saber bien qué hace.
+
+Dentro del contenedor también sirve, que es la forma rápida de ver qué está
+pasando sin abrir la base:
+
+```bash
+docker exec -it finanzas-ingesta finanzas estado
+docker exec -it finanzas-ingesta finanzas version
+```
+
+Cada módulo sigue corriéndose suelto (`python demonio.py estado`): el comando
+solo enruta, no reimplementa nada.
+
 ### Despliegue
 
 `stack.portainer.yml` es una plantilla. Hay que ajustar el nombre de la red y de
@@ -279,6 +309,7 @@ src/finanzas/
     conciliacion.py   emparejar libro contra extracto
   adaptadores/
     almacen.py        TODO el SQL, un método con nombre por consulta
+  cli.py            el comando `finanzas`: enruta, no reimplementa
 
 <raíz>/             módulos de aplicación, todavía planos
   servicio.py         el proceso del contenedor: ingesta con horario + bot

@@ -299,7 +299,7 @@ def paso_publicar(cx, en_serio=False, desde=None):
 # ---------------------------------------------------------------------- main
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__,
+    ap = argparse.ArgumentParser(prog='finanzas', description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('accion', choices=['estado', 'sembrar', 'bajar', 'importar',
                                        'procesar', 'reclasificar', 'publicar', 'conciliar',
