@@ -149,6 +149,25 @@ def pendientes_por_publicar(cx, limite=200):
                          ORDER BY fecha, id LIMIT ?""", (limite,)).fetchall()
 
 
+def marcar_preguntado(cx, pendiente_id):
+    cx.execute("UPDATE pendientes SET preguntado_en = datetime('now') WHERE id = ?",
+               (pendiente_id,))
+    cx.commit()
+
+
+def pendientes_abiertos(cx, usuario_id=None, limite=50):
+    """Todo lo que tiene pregunta abierta, sin importar si ya se pregunto. Es
+    lo que responde /pendientes cuando el usuario lo pide a proposito."""
+    q = """SELECT p.*, u.telegram_chat_id FROM pendientes p
+           JOIN usuarios u ON u.id = p.usuario_id
+           WHERE p.pregunta IS NOT NULL
+             AND p.estado IN ('nuevo', 'publicado', 'error') AND u.activo = 1"""
+    if usuario_id:
+        return cx.execute(q + ' AND p.usuario_id = ? ORDER BY p.fecha DESC LIMIT ?',
+                          (usuario_id, limite)).fetchall()
+    return cx.execute(q + ' ORDER BY p.fecha DESC LIMIT ?', (limite,)).fetchall()
+
+
 def pendientes_por_preguntar(cx, usuario_id=None, limite=50):
     if usuario_id:
         return cx.execute("""SELECT * FROM v_por_preguntar WHERE usuario_id = ?

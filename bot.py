@@ -133,10 +133,8 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
         texto = ("¿Qué categoría es esto?\n\n" + describir(p) +
                  f"\n\n<i>{p['descripcion'] or ''}</i>")
         try:
-            msg = telegram.enviar(chat, texto, botones)
-            db.pendiente_actualizar(
-                cx, p['id'], pregunta='categoria',
-                preguntado_en=f"{msg['message_id']}")
+            telegram.enviar(chat, texto, botones)
+            db.marcar_preguntado(cx, p['id'])
             # se guardan las sugerencias para poder resolver el indice despues
             _guardar_sugerencias(cx, p['id'], sug)
             mandadas += 1
@@ -159,6 +157,7 @@ def _preguntar_fantasma(cx, p, chat):
     ]
     try:
         telegram.enviar(chat, texto, botones)
+        db.marcar_preguntado(cx, p['id'])
         return True
     except telegram.TelegramError as ex:
         print(f"  no pude preguntar fantasma #{p['id']}: {ex}")
@@ -176,6 +175,7 @@ def _preguntar_monto(cx, p, chat):
     botones = [[('✅ Déjalo así', f"k:{p['id']}:0")]]
     try:
         telegram.enviar(chat, texto, botones)
+        db.marcar_preguntado(cx, p['id'])
         return True
     except telegram.TelegramError as ex:
         print(f"  no pude preguntar monto #{p['id']}: {ex}")
@@ -377,9 +377,16 @@ def manejar_update(cx, u):
     elif texto.startswith('/ayuda'):
         telegram.enviar(chat, AYUDA)
     elif texto.startswith('/pendientes'):
-        n = preguntar_pendientes(cx)
-        if n == 0:
+        # a proposito usa la lista completa: si el usuario lo pide, se le
+        # muestra aunque ya se le hubiera preguntado hoy
+        abiertos = db.pendientes_abiertos(cx, limite=MAX_PREGUNTAS)
+        if not abiertos:
             telegram.enviar(chat, "No tengo nada por preguntarte. ✅")
+        else:
+            for p in abiertos:
+                db.pendiente_actualizar(cx, p['id'], preguntado_en=None)
+            cx.commit()
+            preguntar_pendientes(cx)
     elif texto.startswith('/resumen'):
         cmd_resumen(cx, chat)
     elif texto.startswith('/sinconfirmar'):

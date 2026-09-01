@@ -32,4 +32,5 @@ HEALTHCHECK --interval=5m --timeout=20s --start-period=30s --retries=3 \
 p=os.path.join(os.environ['FINANZAS_DATOS'],'finanzas.db'); \
 sys.exit(0) if not os.path.exists(p) else sqlite3.connect(p).execute('select 1')"
 
-CMD ["python", "-m", "automatizacion.demonio"]
+# Un solo proceso: ingesta con horario + bot de Telegram.
+CMD ["python", "/app/automatizacion/servicio.py"]

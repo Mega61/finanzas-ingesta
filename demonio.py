@@ -208,6 +208,42 @@ def paso_procesar(cx, uid):
     return conteo
 
 
+def paso_reclasificar(cx, uid):
+    """Vuelve a clasificar lo que todavia no esta en Firefly.
+
+    Sirve cuando el clasificador mejora: lo ya publicado no se toca, pero lo
+    que sigue abierto se reevalua con las reglas nuevas.
+    """
+    filas = cx.execute("""SELECT * FROM pendientes
+                          WHERE estado IN ('nuevo', 'error')""").fetchall()
+    if not filas:
+        print("  nada por reclasificar")
+        return 0
+    idx = clasificador.Indice(cx, uid)
+    cambios = 0
+    for p in filas:
+        d = clasificador.clasificar(cx, p['usuario_id'], {
+            'tipo': p['tipo'], 'fecha': p['fecha'], 'instrumento': p['instrumento'],
+            'clase_instrumento': p['clase_instrumento'],
+            'traslado_a': p['traslado_a'], 'contraparte': p['contraparte'],
+            'descripcion': p['descripcion'],
+        }, indice=idx)
+        antes = (p['categoria'], p['cuenta_firefly'], p['pregunta'])
+        ahora = (d['categoria'], d['cuenta_firefly'], d['pregunta'])
+        if antes != ahora:
+            db.pendiente_actualizar(cx, p['id'], **{
+                k: d[k] for k in ('cuenta_firefly', 'cuenta_destino', 'categoria',
+                                  'presupuesto', 'confianza', 'decidido_por',
+                                  'pregunta')})
+            cambios += 1
+            print(f"    #{p['id']} {(p['contraparte'] or '')[:24]:26} "
+                  f"{antes[0]} -> {ahora[0]}"
+                  + ("  (ahora se pregunta)" if ahora[2] and not antes[2] else ""))
+    cx.commit()
+    print(f"  {len(filas)} revisados, {cambios} cambiaron")
+    return cambios
+
+
 def paso_publicar(cx, en_serio=False, desde=None):
     desde = desde or marca_de_agua()
     print(f"  marca de agua: {desde}" + ("" if en_serio else "   [SECO, no escribe]"))
@@ -225,7 +261,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('accion', choices=['estado', 'sembrar', 'bajar', 'importar',
-                                       'procesar', 'publicar', 'conciliar',
+                                       'procesar', 'reclasificar', 'publicar', 'conciliar',
                                        'ciclo'])
     ap.add_argument('--en-serio', action='store_true',
                     help='publicar de verdad en Firefly (por defecto es seco)')
@@ -254,6 +290,8 @@ def main(argv=None):
             paso_importar(cx, uid, carpeta=a.carpeta)
         elif a.accion == 'procesar':
             paso_procesar(cx, uid)
+        elif a.accion == 'reclasificar':
+            paso_reclasificar(cx, uid)
         elif a.accion == 'conciliar':
             import conciliador
             conciliador.correr(cx, carpeta=a.carpeta, dry_run=not a.en_serio)

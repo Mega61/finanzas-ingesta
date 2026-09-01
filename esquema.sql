@@ -175,12 +175,17 @@ CREATE TABLE IF NOT EXISTS bitacora (
 
 -- Lo que el bot tiene que preguntar ahora mismo. Incluye cosas ya publicadas
 -- en Firefly: estan en el libro, pero sin confirmar.
+-- Ojo con `preguntado_en`: sin ese filtro el servicio repetia la misma
+-- pregunta en cada pasada, o sea cada 15 minutos hasta que contestaras.
+-- Se vuelve a preguntar solo despues de 24h, como recordatorio.
 CREATE VIEW IF NOT EXISTS v_por_preguntar AS
 SELECT p.*, u.telegram_chat_id, u.nombre AS usuario
 FROM pendientes p JOIN usuarios u ON u.id = p.usuario_id
 WHERE p.pregunta IS NOT NULL
   AND p.estado IN ('nuevo', 'publicado', 'error')
   AND u.activo = 1
+  AND (p.preguntado_en IS NULL
+       OR julianday('now') - julianday(p.preguntado_en) > 1.0)
 ORDER BY p.fecha DESC, p.id DESC;
 
 -- El resumen diario: todo lo que sigue abierto.

@@ -28,7 +28,11 @@ UMBRAL = 0.72   # bajo esto, se le pregunta al usuario
 
 # Prefijos de pasarela que Bancolombia pega al nombre real del comercio.
 # 'DLO*Didi' y 'DL*DIDI RIDES CO' son el mismo Didi.
-_PASARELA = r'DLO|DL|PAYU|PAYULATAM|MERCADOPAGO|MP|EPAYCO|PSE|WOMPI|BOLD|RAPPI'
+# OJO con los espacios: el banco manda 'MERCADO PAGO*ZONAFIT', y si no se quita
+# 'MERCADO PAGO' entero, la palabra MERCADO se cuela como si fuera el comercio y
+# caza con 'MERCADO LIBRE'. Asi un gym termino clasificado como comida de gato.
+_PASARELA = (r'DLO|DL|PAYU|PAYULATAM|MERCADO\s?PAGO|MERCADOPAGO|MP|EPAYCO|PSE'
+             r'|WOMPI|BOLD|RAPPI|TPAGA|NEQUI')
 # Como prefijo: 'DLO*Didi'
 PASARELAS = re.compile(rf'^({_PASARELA})\s*\*\s*', re.I)
 # Y como sufijo, que es igual de comun: 'UBER RIDES*DL'
@@ -219,6 +223,16 @@ def sembrar_desde_firefly(cx, usuario_id):
     return n, n_splits
 
 
+# Palabras demasiado comunes en nombres de comercio para que compartirlas
+# signifique algo. Sin esto, cualquier 'TIENDA X' cazaba con cualquier
+# 'TIENDA Y'.
+GENERICAS = {
+    'MERCADO', 'PAGO', 'PAGOS', 'TIENDA', 'SUPER', 'COMPRA', 'ALMACEN',
+    'ALMACENES', 'CENTRO', 'GRUPO', 'SERVICIO', 'SERVICIOS', 'COMERCIAL',
+    'DISTRIBUIDORA', 'INVERSIONES', 'SOLUCIONES', 'COLOMBIA', 'NACIONAL',
+}
+
+
 def _tokens(s):
     return {t for t in s.split() if len(t) > 2}
 
@@ -281,7 +295,8 @@ class Indice:
                 continue
             # una palabra que aparece en muchos comercios no distingue nada
             distintivas = [t for t in comunes
-                           if len(t) >= 4 and self.doc_freq.get(t, 99) <= 3]
+                           if len(t) >= 4 and t not in GENERICAS
+                           and self.doc_freq.get(t, 99) <= 3]
             if not distintivas:
                 continue
             # coeficiente de solape, no Jaccard: 'SUPER NORTE 45' vs 'GRUPO
