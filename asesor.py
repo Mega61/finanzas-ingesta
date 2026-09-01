@@ -222,13 +222,16 @@ def preguntar(pregunta, historial=None, ctx_texto=None):
     payload = {
         'systemInstruction': {'parts': [{'text': INSTRUCCIONES}]},
         'contents': contenidos,
-        'generationConfig': {'temperature': 0.3, 'maxOutputTokens': 900},
+        # El tope tiene que cubrir lo que el modelo gasta PENSANDO mas la
+        # respuesta. Con 900 la respuesta salia cortada en media frase: el
+        # razonamiento se comia el presupuesto. Ver el comentario en ia.py.
+        'generationConfig': ia._config_generacion(
+            max_salida=int(ia.config.get('GEMINI_MAX_ASESOR', '4000')),
+            thinking=ia.THINKING_ASESOR,
+            extra={'temperature': 0.3}),
     }
     r = ia._llamar(payload)
-    try:
-        return r['candidates'][0]['content']['parts'][0]['text'].strip()
-    except (KeyError, IndexError):
-        raise ia.SinIA(f"respuesta inesperada: {str(r)[:200]}") from None
+    return ia.texto_de(r, ' del asesor')
 
 
 if __name__ == '__main__':

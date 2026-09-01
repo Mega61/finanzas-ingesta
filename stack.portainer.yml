@@ -72,6 +72,11 @@ services:
       # Sin la key el bot sigue andando, solo con emparejamiento por palabras.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODELO: ${GEMINI_MODELO:-gemini-3.7-flash}
+      # Los tokens de razonamiento cuentan contra el tope de salida: con un tope
+      # justo la respuesta sale cortada. Ver el comentario en ia.py.
+      GEMINI_THINKING_CLASIFICAR: ${GEMINI_THINKING_CLASIFICAR:-0}
+      GEMINI_THINKING_ASESOR: ${GEMINI_THINKING_ASESOR:-1024}
+      GEMINI_MAX_ASESOR: ${GEMINI_MAX_ASESOR:-4000}
 
       # El mapeo 4 digitos -> cuenta de Firefly, en una sola linea.
       PRODUCTOS_CSV: ${PRODUCTOS_CSV:-}

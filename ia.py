@@ -35,7 +35,56 @@ import config  # noqa: E402
 
 BASE = 'https://generativelanguage.googleapis.com/v1beta'
 MODELO = config.get('GEMINI_MODELO', 'gemini-3.7-flash')
-TIMEOUT = int(config.get('GEMINI_TIMEOUT', '30'))
+TIMEOUT = int(config.get('GEMINI_TIMEOUT', '60'))
+
+# TRAMPA IMPORTANTE de los modelos que razonan (Gemini 2.5 en adelante):
+# los tokens que el modelo gasta PENSANDO cuentan contra maxOutputTokens. Si el
+# tope es justo, el modelo se lo gasta razonando y la respuesta sale cortada, o
+# vacia, sin ningun error. Fue exactamente lo que paso con el asesor: tope de
+# 900 y la respuesta se corto en media frase.
+#
+# Por eso: presupuesto de pensamiento explicito, tope de salida holgado, y
+# deteccion de MAX_TOKENS para no devolver texto truncado como si estuviera bien.
+THINKING_CLASIFICAR = int(config.get('GEMINI_THINKING_CLASIFICAR', '0'))
+THINKING_ASESOR = int(config.get('GEMINI_THINKING_ASESOR', '1024'))
+
+
+def _config_generacion(max_salida, thinking, extra=None):
+    cfg = {'maxOutputTokens': max_salida, 'temperature': 0}
+    # thinkingBudget=0 apaga el razonamiento. Para extraer datos con esquema no
+    # aporta nada y solo se come el presupuesto; para el asesor si suma.
+    cfg['thinkingConfig'] = {'thinkingBudget': thinking}
+    if extra:
+        cfg.update(extra)
+    return cfg
+
+
+def texto_de(respuesta, que=''):
+    """Saca el texto y falla claro si vino truncado.
+
+    Devolver una respuesta cortada como si estuviera completa es peor que
+    fallar: el usuario lee media frase y no sabe que le falta la mitad.
+    """
+    try:
+        c = respuesta['candidates'][0]
+    except (KeyError, IndexError):
+        raise SinIA(f"respuesta sin candidatos{que}: {str(respuesta)[:250]}") from None
+
+    razon = c.get('finishReason')
+    partes = (c.get('content') or {}).get('parts') or []
+    txt = ''.join(p.get('text', '') for p in partes).strip()
+
+    if razon == 'MAX_TOKENS':
+        um = respuesta.get('usageMetadata') or {}
+        pensados = um.get('thoughtsTokenCount', 0)
+        raise SinIA(
+            f"la respuesta se corto por tope de tokens{que}. "
+            f"El modelo gasto {pensados} tokens pensando de "
+            f"{um.get('candidatesTokenCount', '?')} disponibles. "
+            f"Sube GEMINI_THINKING_* o el tope de salida.")
+    if not txt:
+        raise SinIA(f"respuesta vacia{que} (finishReason={razon})")
+    return txt
 
 
 class SinIA(Exception):
@@ -164,18 +213,16 @@ def interpretar(texto, movimiento, categorias, presupuestos, comercios,
     payload = {
         'systemInstruction': {'parts': [{'text': INSTRUCCIONES}]},
         'contents': [{'role': 'user', 'parts': [{'text': '\n'.join(partes)}]}],
-        'generationConfig': {
-            'responseMimeType': 'application/json',
-            'responseSchema': _esquema(categorias, presupuestos, comercios),
-            'temperature': 0,
-            'maxOutputTokens': 400,
-        },
+        'generationConfig': _config_generacion(
+            # holgado: el esquema con los enum hace que la salida sea corta,
+            # pero el tope tiene que dejar espacio de sobra
+            max_salida=1200,
+            thinking=THINKING_CLASIFICAR,
+            extra={'responseMimeType': 'application/json',
+                   'responseSchema': _esquema(categorias, presupuestos, comercios)}),
     }
     r = _llamar(payload)
-    try:
-        crudo = r['candidates'][0]['content']['parts'][0]['text']
-    except (KeyError, IndexError):
-        raise SinIA(f"respuesta inesperada de Gemini: {str(r)[:300]}") from None
+    crudo = texto_de(r, ' al clasificar')
     try:
         d = json.loads(crudo)
     except json.JSONDecodeError:
