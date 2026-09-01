@@ -96,14 +96,15 @@ def paso_bajar(cx, tope=None, interactivo=False, dias=None):
         return 0
     total_n = 0
     for b in buzones:
-        desde = None
-        if dias:
-            desde = (datetime.utcnow() - timedelta(days=dias)).strftime(
-                '%Y-%m-%dT%H:%M:%SZ')
-        elif b['ultimo_sync']:
-            # se re-pregunta un dia hacia atras por si algo llego tarde
-            desde = (datetime.utcnow() - timedelta(days=2)).strftime(
-                '%Y-%m-%dT%H:%M:%SZ')
+        # Sin ventana, la primera bajada en un contenedor nuevo se trae el
+        # buzon completo: fueron 1819 correos de anos atras, con 770 plantillas
+        # viejas que el parser no conoce. No hace dano pero ensucia el log y
+        # tarda. Por defecto se limita a INGESTA_DIAS_INICIAL.
+        atras = dias or int(config.get('INGESTA_DIAS_INICIAL', '30'))
+        if b['ultimo_sync'] and not dias:
+            atras = 2   # ya sincronizo antes: solo lo reciente, con holgura
+        desde = (datetime.utcnow() - timedelta(days=atras)).strftime(
+            '%Y-%m-%dT%H:%M:%SZ')
         try:
             nuevos, rep = graph.bajar(cx, b['id'], desde=desde, tope=tope,
                                       interactivo=interactivo)
@@ -165,6 +166,7 @@ def paso_procesar(cx, uid):
         print("  no hay correos sin procesar")
         return {}
     idx = clasificador.Indice(cx, uid)
+    marca = marca_de_agua()
     conteo = {'movimiento': 0, 'descartado': 0, 'sin_reconocer': 0, 'repetido': 0}
     for c in filas:
         try:
@@ -179,6 +181,43 @@ def paso_procesar(cx, uid):
             continue
         if ev is None:
             conteo['sin_reconocer'] += 1
+            db.correo_marcar_procesado(cx, c['id'])
+            continue
+
+        # La marca de agua se aplica AQUI, al nacer el movimiento, no al
+        # publicarlo. Antes se aplicaba en el publicador, que solo mira los que
+        # ya tienen cuenta resuelta: los viejos sin cuenta se quedaban en
+        # 'nuevo' para siempre y el bot preguntaba por transacciones de hace
+        # meses. Un movimiento anterior a la marca no se publica NI se pregunta.
+        fecha_ev = str(ev.fecha) if ev.fecha else None
+        if fecha_ev is None:
+            # sin fecha no se puede ubicar en el tiempo ni emparejar con un
+            # extracto; se guarda para poder mirarlo, pero no entra a la cola
+            db.pendiente_crear(
+                cx, correo_id=c['id'], usuario_id=c['usuario_id'],
+                tipo=ev.tipo, fecha=None, hora=ev.hora, moneda=ev.moneda,
+                valor=ev.valor, instrumento=ev.instrumento,
+                clase_instrumento=ev.clase_instrumento,
+                traslado_a=ev.traslado_a, contraparte=ev.contraparte,
+                descripcion=ev.descripcion, plantilla=ev.plantilla,
+                external_id=publicador.external_id(c['message_id']),
+                estado='descartado', decidido_por='sin_fecha')
+            conteo['sin_fecha'] = conteo.get('sin_fecha', 0) + 1
+            db.correo_marcar_procesado(cx, c['id'])
+            continue
+
+        if fecha_ev < marca:
+            db.pendiente_crear(
+                cx, correo_id=c['id'], usuario_id=c['usuario_id'],
+                tipo=ev.tipo, fecha=fecha_ev, hora=ev.hora, moneda=ev.moneda,
+                valor=ev.valor, instrumento=ev.instrumento,
+                clase_instrumento=ev.clase_instrumento,
+                traslado_a=ev.traslado_a, contraparte=ev.contraparte,
+                descripcion=ev.descripcion, plantilla=ev.plantilla,
+                external_id=publicador.external_id(c['message_id']),
+                estado='descartado',
+                decidido_por='anterior_a_la_marca_de_agua')
+            conteo['historico'] = conteo.get('historico', 0) + 1
             db.correo_marcar_procesado(cx, c['id'])
             continue
 

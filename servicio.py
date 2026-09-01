@@ -125,6 +125,34 @@ def hilo_ingesta(uid):
         cx.close()
 
 
+def limpiar_cola(cx):
+    """Saca de la cola lo que nunca debio entrar. Es idempotente.
+
+    Existe porque una version anterior aplicaba la marca de agua en el
+    publicador, y el publicador solo mira los movimientos que ya tienen cuenta
+    resuelta. Los viejos sin cuenta se quedaban en 'nuevo' para siempre, y el
+    bot preguntaba por transacciones de hace meses. Ahora la marca se aplica al
+    nacer, pero las filas que ya quedaron mal hay que arreglarlas.
+    """
+    marca = demonio.marca_de_agua()
+    viejos = cx.execute(
+        """UPDATE pendientes SET estado = 'descartado', pregunta = NULL,
+           decidido_por = 'anterior_a_la_marca_de_agua'
+           WHERE estado IN ('nuevo', 'error') AND fecha IS NOT NULL
+             AND fecha < ?""", (marca,)).rowcount
+    sinfecha = cx.execute(
+        """UPDATE pendientes SET estado = 'descartado', pregunta = NULL,
+           decidido_por = 'sin_fecha'
+           WHERE estado IN ('nuevo', 'error') AND fecha IS NULL""").rowcount
+    cx.commit()
+    if viejos or sinfecha:
+        log('limpieza', f"saque de la cola {viejos} anteriores a {marca} "
+                        f"y {sinfecha} sin fecha")
+    abiertas = cx.execute(
+        'SELECT count(*) FROM v_por_preguntar').fetchone()[0]
+    log('inicio', f"preguntas abiertas: {abiertas}")
+
+
 def _proxima_hora(hhmm):
     """El proximo datetime que caiga en esa hora. None si no esta configurada."""
     if not hhmm:
@@ -191,6 +219,8 @@ def main(argv=None):
     if n == 0:
         log('inicio', 'sembrando reglas desde Firefly (primera vez)...')
         demonio.paso_sembrar(cx, uid)
+
+    limpiar_cola(cx)
 
     log('inicio', f"base={db.ruta()}")
     log('inicio', f"intervalo={INTERVALO_MIN}min  resumen={HORA_RESUMEN or 'no'}  "
