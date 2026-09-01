@@ -21,6 +21,8 @@ importa para el asesor. Con este volumen el costo queda bajo un dolar al mes.
 
 Sin GEMINI_API_KEY todo sigue funcionando: se usa solo la heuristica.
 """
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -29,6 +31,9 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 import config
 
@@ -48,7 +53,8 @@ THINKING_CLASIFICAR = int(config.get('GEMINI_THINKING_CLASIFICAR', '0'))
 THINKING_ASESOR = int(config.get('GEMINI_THINKING_ASESOR', '1024'))
 
 
-def _config_generacion(max_salida, thinking, extra=None):
+def _config_generacion(max_salida: int, thinking: int,
+                       extra: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = {'maxOutputTokens': max_salida, 'temperature': 0}
     # thinkingBudget=0 apaga el razonamiento. Para extraer datos con esquema no
     # aporta nada y solo se come el presupuesto; para el asesor si suma.
@@ -58,7 +64,7 @@ def _config_generacion(max_salida, thinking, extra=None):
     return cfg
 
 
-def texto_de(respuesta, que=''):
+def texto_de(respuesta: dict[str, Any], que: str = '') -> str:
     """Saca el texto y falla claro si vino truncado.
 
     Devolver una respuesta cortada como si estuviera completa es peor que
@@ -90,11 +96,11 @@ class SinIA(Exception):
     """No hay API key, o la llamada no sirvio."""
 
 
-def disponible():
+def disponible() -> bool:
     return bool(config.get('GEMINI_API_KEY'))
 
 
-def _llamar(payload):
+def _llamar(payload: dict[str, Any]) -> dict[str, Any]:
     key = config.get('GEMINI_API_KEY')
     if not key:
         raise SinIA('falta GEMINI_API_KEY')
@@ -113,7 +119,7 @@ def _llamar(payload):
         raise SinIA(f"no pude llegar a Gemini: {ex.reason}") from None
 
 
-def modelos():
+def modelos() -> list[str]:
     """Los modelos que admite esta API key. Sirve para verificar el setup."""
     key = config.get('GEMINI_API_KEY')
     if not key:
@@ -155,7 +161,8 @@ Reglas:
 """
 
 
-def _esquema(categorias, presupuestos, comercios):
+def _esquema(categorias: Iterable[str], presupuestos: Iterable[str],
+             comercios: Iterable[str]) -> dict[str, Any]:
     def enum(vals):
         # se recorta porque el esquema viaja en cada peticion
         return {'type': 'string', 'enum': list(vals)[:250]}
@@ -179,8 +186,11 @@ def _esquema(categorias, presupuestos, comercios):
     }
 
 
-def interpretar(texto, movimiento, categorias, presupuestos, comercios,
-                similares=None):
+def interpretar(texto: str, movimiento: Mapping[str, Any],
+                categorias: Iterable[str], presupuestos: Iterable[str],
+                comercios: Iterable[str],
+                similares: list[tuple[str, str, str]] | None = None
+                ) -> dict[str, Any]:
     """texto: lo que escribio el usuario.
     movimiento: dict con fecha, valor, moneda, contraparte, descripcion.
     similares: lista de (descripcion, categoria, presupuesto) de compras

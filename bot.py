@@ -194,12 +194,6 @@ def _preguntar_monto(cx, p, chat):
         return True
 
 
-def _asegurar_tabla_sug(cx):
-    """Ya no hace nada: las tablas de conversacion estan en esquema.sql.
-    Se conserva porque servicio.py la llama al arrancar."""
-    return None
-
-
 def _guardar_sugerencias(cx, pendiente_id, sug):
     _a(cx).guardar_sugerencias(pendiente_id, sug)
 
@@ -604,11 +598,6 @@ HISTORIAL = {}
 MAX_HISTORIAL = 10
 
 
-def _asegurar_tabla_preguntas(cx):
-    """Ya no hace nada: la tabla esta en esquema.sql."""
-    return None
-
-
 def _guardar_mensaje(cx, chat, mensaje_id, pendiente_id):
     _a(cx).guardar_mensaje(chat, mensaje_id, pendiente_id)
 
@@ -733,7 +722,7 @@ def _consultar_asesor(cx, chat, texto):
 def escuchar(cx, una_vuelta=False):
     print(f"bot @{telegram.yo().get('username')} escuchando...")
     with contextlib.suppress(telegram.TelegramError):
-        telegram.poner_comandos()
+        telegram.poner_comandos(list(DESCRIPCIONES))
     while True:
         try:
             for u in telegram.updates(espera=30):
@@ -756,7 +745,6 @@ def main(argv=None):
     accion = argv[0] if argv else 'escuchar'
     db.inicializar()
     cx = db.conectar()
-    _asegurar_tabla_sug(cx)
     try:
         if accion == 'escuchar':
             escuchar(cx)

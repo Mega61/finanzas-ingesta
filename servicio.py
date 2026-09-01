@@ -166,10 +166,8 @@ def _proxima_hora(hhmm):
 def hilo_bot():
     cx = db.conectar()
     try:
-        bot._asegurar_tabla_sug(cx)
-        bot._asegurar_tabla_preguntas(cx)
         with contextlib.suppress(Exception):
-            telegram.poner_comandos()
+            telegram.poner_comandos(list(bot.DESCRIPCIONES))
         log('bot', f"escuchando como @{telegram.yo().get('username')}")
         while not _parar.is_set():
             try:

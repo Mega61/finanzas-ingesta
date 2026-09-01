@@ -6,10 +6,13 @@ funcione sin depender de nada de afuera de automatizacion/.
 
 Nunca imprime el token.
 """
+from __future__ import annotations
+
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 import config
 
@@ -24,17 +27,17 @@ TIMEOUT = int(config.get('FIREFLY_TIMEOUT', '60'))
 
 
 class ApiError(Exception):
-    def __init__(self, status, body):
+    def __init__(self, status: int, body: str):
         self.status, self.body = status, body
         super().__init__(f"HTTP {status}: {body[:600]}")
 
 
-def _base():
+def _base() -> str:
     url, _ = config.requerir('FIREFLY_URL', 'FIREFLY_TOKEN')
     return url.rstrip('/')
 
 
-def call(method, path, payload=None):
+def call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     url = _base() + path
     datos = json.dumps(payload).encode('utf-8') if payload is not None else None
     req = urllib.request.Request(url, data=datos, method=method)
@@ -53,7 +56,7 @@ def call(method, path, payload=None):
         raise ApiError(0, f"no pude conectarme a {_base()}: {ex.reason}") from None
 
 
-def get_all(path):
+def get_all(path: str) -> list[dict[str, Any]]:
     """GET paginado -> lista de objetos data[]."""
     salida, pagina = [], 1
     while True:
@@ -66,12 +69,12 @@ def get_all(path):
         pagina += 1
 
 
-def whoami():
+def whoami() -> str:
     a = call('GET', '/api/v1/about')['data']
     return f"Firefly III v{a.get('version')} · API {a.get('api_version')} · {_base()}"
 
 
-def accounts_index():
+def accounts_index() -> dict[str, dict[str, Any]]:
     """{nombre: {'id','type','active'}}. Si un nombre existe en varios tipos gana
     asset y luego liabilities: son los unicos que hay que referenciar por id."""
     PRIO = {'asset': 0, 'liabilities': 1}
@@ -86,11 +89,11 @@ def accounts_index():
     return idx
 
 
-def budgets_index():
+def budgets_index() -> dict[str, str]:
     return {b['attributes']['name']: b['id'] for b in get_all('/api/v1/budgets')}
 
 
-def buscar_por_external_id(external_id):
+def buscar_por_external_id(external_id: str) -> str | None:
     """La red de idempotencia: si esta transaccion ya se publico, devuelve su id.
 
     Firefly guarda external_id por transaction_journal. Se consulta antes de
@@ -112,12 +115,12 @@ def buscar_por_external_id(external_id):
 # Se usan en la conciliacion: confirmar quita la etiqueta, corregir cambia el
 # monto. Firefly exige mandar el transaction_journal_id de cada split.
 
-def _splits(tx_id):
+def _splits(tx_id: str) -> list[dict[str, Any]]:
     t = call('GET', f'/api/v1/transactions/{tx_id}')
     return t['data']['attributes']['transactions']
 
 
-def quitar_etiqueta(tx_id, etiqueta):
+def quitar_etiqueta(tx_id: str, etiqueta: str) -> bool:
     """Saca una etiqueta de todos los splits. Devuelve True si cambio algo."""
     nuevos, cambio = [], False
     for s in _splits(tx_id):
@@ -133,7 +136,7 @@ def quitar_etiqueta(tx_id, etiqueta):
     return True
 
 
-def cambiar_monto(tx_id, monto, nota_extra=None):
+def cambiar_monto(tx_id: str, monto: float, nota_extra: str | None = None) -> bool:
     """Corrige el monto cuando el extracto trae otro. Solo para transacciones
     de un solo split: si hay varios no se toca, se avisa."""
     ss = _splits(tx_id)
@@ -148,12 +151,12 @@ def cambiar_monto(tx_id, monto, nota_extra=None):
     return True
 
 
-def borrar(tx_id):
+def borrar(tx_id: str) -> bool:
     call('DELETE', f'/api/v1/transactions/{tx_id}')
     return True
 
 
-def actualizar_split(tx_id, **campos):
+def actualizar_split(tx_id: str, **campos: Any) -> bool:
     """Cambia campos de una transaccion de un solo split.
 
     Campos utiles: category_name, budget_name, destination_name,

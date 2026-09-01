@@ -95,3 +95,38 @@ def test_los_botones_se_recortan_al_limite_del_callback(tg, monkeypatch):
     boton = visto['reply_markup']['inline_keyboard'][0][0]
     assert len(boton['text']) == 64
     assert len(boton['callback_data']) == 64
+
+
+class TestMenuDeComandos:
+    """`poner_comandos` tenia la lista escrita a mano aqui, con cuatro de los
+    siete comandos: una tercera copia para desincronizarse, despues de la ayuda
+    y la tabla de despacho. Ahora la lista llega de afuera."""
+
+    def test_le_quita_la_barra_al_nombre(self, tg, monkeypatch):
+        """La API los quiere sin `/`: con barra rechaza la llamada completa y el
+        menu se queda con lo que hubiera antes."""
+        visto = {}
+        monkeypatch.setattr(
+            tg, 'call', lambda m, payload=None, timeout=60: visto.update(payload) or {}
+        )
+        tg.poner_comandos([('/resumen', 'como va'), ('ayuda', 'esto')])
+        assert [c['command'] for c in visto['commands']] == ['resumen', 'ayuda']
+
+    def test_manda_los_que_le_pasen_y_solo_esos(self, tg, monkeypatch):
+        visto = {}
+        monkeypatch.setattr(
+            tg, 'call', lambda m, payload=None, timeout=60: visto.update(payload) or {}
+        )
+        import bot
+
+        tg.poner_comandos(list(bot.DESCRIPCIONES))
+        enviados = {c['command'] for c in visto['commands']}
+        assert enviados == {c.lstrip('/') for c, _ in bot.DESCRIPCIONES}
+
+    def test_recorta_la_descripcion_al_limite(self, tg, monkeypatch):
+        visto = {}
+        monkeypatch.setattr(
+            tg, 'call', lambda m, payload=None, timeout=60: visto.update(payload) or {}
+        )
+        tg.poner_comandos([('/x', 'd' * 400)])
+        assert len(visto['commands'][0]['description']) == 256

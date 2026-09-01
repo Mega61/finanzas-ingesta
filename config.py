@@ -9,6 +9,9 @@ Orden de precedencia (gana el primero que tenga valor):
 Nunca imprime un valor. `describir()` esta hecho para poder depurar sin filtrar
 nada al log.
 """
+
+from __future__ import annotations
+
 import os
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +28,7 @@ ARCHIVOS = [
 DATOS = os.environ.get('FINANZAS_DATOS') or AQUI
 
 
-def _leer(ruta):
+def _leer(ruta: str) -> dict[str, str]:
     d = {}
     if not os.path.exists(ruta):
         return d
@@ -47,7 +50,7 @@ for _r in ARCHIVOS:
         _ARCHIVO.setdefault(_k, _v)
 
 
-def get(clave, defecto=None):
+def get(clave: str, defecto: str | None = None) -> str | None:
     """El entorno del proceso siempre gana sobre los archivos."""
     v = os.environ.get(clave)
     if v:
@@ -55,8 +58,12 @@ def get(clave, defecto=None):
     return _ARCHIVO.get(clave, defecto)
 
 
-def requerir(*claves):
-    """Devuelve los valores, o levanta con la lista de lo que falta."""
+def requerir(*claves: str) -> list[str]:
+    """Los valores, EN ORDEN, como lista. No es un dict.
+
+    Se usa como `url, tok = requerir('FIREFLY_URL', 'FIREFLY_TOKEN')`. Leerlo
+    como `requerir('X')['X']` no falla al importar, solo al llamar.
+    """
     faltan = [c for c in claves if not get(c)]
     if faltan:
         raise RuntimeError(
@@ -66,12 +73,12 @@ def requerir(*claves):
     return [get(c) for c in claves]
 
 
-def ruta_datos(*partes):
+def ruta_datos(*partes: str) -> str:
     os.makedirs(DATOS, exist_ok=True)
     return os.path.join(DATOS, *partes)
 
 
-def describir():
+def describir() -> str:
     """Que hay configurado, sin revelar valores. Para logs y diagnostico."""
     interes = [
         'FIREFLY_URL', 'FIREFLY_TOKEN',

@@ -121,3 +121,28 @@ def test_el_dominio_no_sabe_de_sqlite(archivo: Path):
         'config',
     }
     assert not prohibidos, f'{archivo.name} importa {prohibidos}'
+
+
+# Los cuatro modulos que hablan con el mundo. Son contratos: todo lo demas
+# depende de la forma exacta de lo que devuelven, y equivocarse ahi no da error
+# — da None en silencio. De ahi que se les exija firma completa.
+FRONTERA = ('config.py', 'firefly.py', 'telegram.py', 'ia.py')
+
+
+@pytest.mark.parametrize('nombre', FRONTERA)
+def test_la_frontera_esta_anotada(nombre: str):
+    """El bug: leer lo que devuelve `telegram.enviar` como
+    `r['result']['message_id']` cuando `call` ya quito el sobre. Y el mio, al
+    anotar este mismo modulo: `config.requerir('X')['X']`, cuando requerir
+    devuelve una lista. Los dos se ven de una si la firma esta escrita."""
+    arbol = ast.parse(_fuente(nombre))
+    sin = []
+    for n in arbol.body:
+        if not isinstance(n, ast.FunctionDef):
+            continue
+        faltan = [a.arg for a in n.args.args if a.annotation is None]
+        if n.returns is None:
+            faltan.append('-> retorno')
+        if faltan:
+            sin.append(f'{n.name}({", ".join(faltan)})')
+    assert not sin, f'{nombre} sin anotar: {sin}'
