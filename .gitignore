@@ -16,8 +16,11 @@ stack.env
 # El repo es SOLO codigo. Los movimientos, extractos y correos se quedan
 # afuera: son datos financieros personales.
 *.db
-*.sqlite
-*.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite*
+telegram_offset
 *.eml
 *.xlsx
 *.csv
