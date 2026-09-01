@@ -260,9 +260,16 @@ def sembrar_desde_firefly(cx, usuario_id):
     def top(d):
         return max(d, key=d.get) if d else None
 
+    import taxonomia
     n = 0
     for clave, d in porclave.items():
         cat, pres = top(d['cat']), top(d['pres'])
+        # no se aprende una categoria que ya se retiro: se deja el comercio para
+        # no perderlo, pero la categoria se va a preguntar
+        if cat in taxonomia.RETIRADAS:
+            cat = None
+        elif cat in taxonomia.FUSIONES:
+            cat = taxonomia.FUSIONES[cat]
         if not cat and not d['cp']:
             continue
         # Cuantas veces clasificaste ESTO con ESTA categoria, a mano, en
@@ -420,6 +427,7 @@ def clasificar(cx, usuario_id, evento, indice=None):
         'confianza': 0.0,
         'decidido_por': None,
         'pregunta': None,
+        'etiquetas': None,
     }
 
     # Traslado entre productos propios: los dos extremos son cuentas mias y no
@@ -449,11 +457,21 @@ def clasificar(cx, usuario_id, evento, indice=None):
     clave = normalizar(evento.get('contraparte') or evento.get('descripcion'))
     regla, conf = idx.buscar(clave)
     if regla is not None:
+        import taxonomia
+        # Una regla vieja puede apuntar a una categoria que ya se retiro por ser
+        # un atributo ('Viaticos') o que se fusiono. Se resuelve aqui para que
+        # el historico no siga reinyectando la taxonomia vieja.
+        cat_final, etiqueta, preguntar = taxonomia.resolver(regla['categoria'])
         r['cuenta_destino'] = regla['cuenta_firefly']
-        r['categoria'] = regla['categoria']
-        r['presupuesto'] = regla['presupuesto']
-        r['confianza'] = conf
+        r['categoria'] = cat_final
+        r['presupuesto'] = (taxonomia.presupuesto_de(cat_final)
+                            or regla['presupuesto'])
+        r['etiquetas'] = etiqueta
+        r['confianza'] = 0.4 if preguntar else conf
         r['decidido_por'] = 'historico' if regla['origen'] == 'historico' else 'regla'
+        if preguntar:
+            r['pregunta'] = 'categoria'
+            return r
     else:
         r['cuenta_destino'] = (evento.get('contraparte') or '').strip() or None
         r['confianza'] = 0.3

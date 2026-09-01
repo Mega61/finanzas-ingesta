@@ -152,3 +152,18 @@ def cambiar_monto(tx_id, monto, nota_extra=None):
 def borrar(tx_id):
     call('DELETE', f'/api/v1/transactions/{tx_id}')
     return True
+
+
+def actualizar_split(tx_id, **campos):
+    """Cambia campos de una transaccion de un solo split.
+
+    Campos utiles: category_name, budget_name, destination_name,
+    source_name, description, tags, notes.
+    """
+    ss = _splits(tx_id)
+    if len(ss) != 1:
+        raise ApiError(0, f'la transaccion {tx_id} tiene {len(ss)} splits, no la toco')
+    cambio = {'transaction_journal_id': ss[0].get('transaction_journal_id')}
+    cambio.update(campos)
+    call('PUT', f'/api/v1/transactions/{tx_id}', {'transactions': [cambio]})
+    return True

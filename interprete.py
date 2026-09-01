@@ -175,8 +175,11 @@ def catalogo(cx, usuario_id):
     import firefly
     import presupuestos
 
+    import taxonomia
     cats = sorted({c['attributes']['name']
                    for c in firefly.get_all('/api/v1/categories')})
+    # ni la heuristica ni Gemini pueden proponer una categoria retirada
+    cats = taxonomia.vigentes(cats)
     comercios = sorted({a['attributes']['name']
                         for a in firefly.get_all('/api/v1/accounts?type=expense')})
     return {
