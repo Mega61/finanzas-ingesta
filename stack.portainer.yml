@@ -29,10 +29,17 @@
 
 services:
   ingesta:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: finanzas-ingesta:latest
+    # Imagen ya construida por GitHub Actions. El servidor solo hace pull.
+    #
+    # Construir en el servidor es fragil: depende de que tenga salida a
+    # internet, memoria y disco durante el build, y cuando falla el error sale
+    # enterrado en el log de Portainer. Si de todas formas quieres construirla
+    # ahi, comenta la linea `image:` y descomenta el bloque `build:`.
+    image: ${IMAGEN:-ghcr.io/mega61/finanzas-ingesta:latest}
+    pull_policy: always
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     container_name: finanzas_ingesta
     hostname: ingesta
     restart: unless-stopped
