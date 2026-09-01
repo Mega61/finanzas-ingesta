@@ -73,10 +73,26 @@ def token(interactivo=False):
             _guardar_cache(cache)
             return res['access_token']
 
+    # Arranque en frio dentro de un contenedor: no hay cache y no se puede
+    # hacer el device flow porque nadie va a ver el codigo. Con el refresh
+    # token en una variable de entorno se siembra el cache y de ahi en
+    # adelante rota solo.
+    refresh = config.get('GRAPH_REFRESH_TOKEN')
+    if refresh:
+        res = app.acquire_token_by_refresh_token(refresh, scopes)
+        if res and 'access_token' in res:
+            _guardar_cache(cache)
+            return res['access_token']
+        if not interactivo:
+            raise SinAutorizacion(
+                f"GRAPH_REFRESH_TOKEN no sirvio: "
+                f"{res.get('error')}: {res.get('error_description', '')[:200]}. "
+                "Vuelve a sacarlo con: python verificar.py graph")
+
     if not interactivo:
         raise SinAutorizacion(
-            'no hay token valido en el cache. Corre en tu maquina: '
-            'python automatizacion/verificar.py graph')
+            'no hay token de Graph. Pon GRAPH_REFRESH_TOKEN en el entorno, o '
+            'corre en tu maquina: python verificar.py graph')
 
     flujo = app.initiate_device_flow(scopes=scopes)
     if 'user_code' not in flujo:

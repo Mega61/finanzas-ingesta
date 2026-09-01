@@ -1,26 +1,31 @@
-# Plantilla de stack para Portainer / docker-compose.
+# Stack para Portainer, metodo Repository.
 #
-# AJUSTA ESTO A TU INSTALACION antes de desplegar:
+# TODA la configuracion va por variables de entorno en la UI de Portainer —
+# ningun archivo hay que montar ni copiar por SSH. Eso es a proposito: los
+# secretos y el mapeo de tarjetas no estan en el repo, y con un stack de
+# repositorio no se pueden montar archivos que el repo no tiene.
 #
-#   FIREFLY_URL   como alcanzar Firefly. Si corre en Docker en la misma
-#                 maquina, lo mejor es la red interna:
-#                     http://<nombre-del-contenedor-de-firefly>:8080
-#                 Asi no sale a internet, no pasa por el proxy inverso, y no
-#                 hace falta el truco del User-Agent para Cloudflare.
-#                 Tambien sirve la URL publica: https://firefly.tudominio.com
+# Las dos que hay que ajustar a tu instalacion:
 #
-#   RED_FIREFLY   la red de Docker donde vive Firefly, para poder hablarle por
-#                 nombre. Truco: si el stack de Firefly declara una red
-#                 `external: true`, esa se llama exactamente como dice; la red
-#                 propia del stack, en cambio, se llama
-#                 `<nombre_del_stack>_<nombre_de_la_red>` y hay que buscarla con
-#                 `docker network ls`.
+#   RED_FIREFLY   la red de Docker donde vive Firefly, para hablarle por
+#                 nombre de contenedor. Truco: si el stack de Firefly declara
+#                 una red `external: true`, esa se llama exactamente como dice.
+#                 La red propia del stack se llama
+#                 `<nombre_del_stack>_<red>` y se busca con `docker network ls`.
 #
-# Se despliega como stack SEPARADO del de Firefly: asi un redeploy de la
-# ingesta no puede tumbar Firefly.
+#   FIREFLY_URL   http://<contenedor-de-firefly>:8080
+#                 Asi no sale a internet ni pasa por el proxy inverso.
+#                 Tambien sirve la URL publica.
 #
-# Los secretos van en stack.env o en las variables de entorno de Portainer.
-# NUNCA en este archivo ni en el repo.
+# El resto de variables estan en .env.ejemplo. Las importantes:
+#   GRAPH_REFRESH_TOKEN  para que el contenedor no tenga que hacer el device
+#                        flow (nadie veria el codigo). Se saca con
+#                        `python verificar.py graph` en tu maquina.
+#   PRODUCTOS_CSV        el contenido de productos.csv, en una linea, con \n
+#                        entre filas.
+#
+# Se despliega como stack SEPARADO del de Firefly: asi un redeploy de esto no
+# puede tumbar Firefly.
 
 services:
   ingesta:
@@ -34,19 +39,42 @@ services:
     networks:
       - firefly
     volumes:
-      # la base de la cola y el token de OAuth
+      # La cola, el token de OAuth ya rotado, y el offset de Telegram.
+      # Es lo unico que debe sobrevivir a un redeploy.
       - finanzas_datos:/datos
-      # configuracion propia, que no esta en el repo
-      - ./productos.csv:/app/automatizacion/productos.csv:ro
     environment:
       TZ: ${TZ:-UTC}
       FINANZAS_DATOS: /datos
+
       FIREFLY_URL: ${FIREFLY_URL:?falta FIREFLY_URL}
-      # Solo se publica lo que sea de esta fecha en adelante. Ver la marca de
-      # agua en el README: sin esto se duplica todo lo que ya llevabas a mano.
+      FIREFLY_TOKEN: ${FIREFLY_TOKEN:?falta FIREFLY_TOKEN}
+
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}
+      GRAPH_AUTHORITY: ${GRAPH_AUTHORITY:-consumers}
+      GRAPH_CUENTA: ${GRAPH_CUENTA:-}
+      GRAPH_REFRESH_TOKEN: ${GRAPH_REFRESH_TOKEN:-}
+
+      GMAIL_USUARIO: ${GMAIL_USUARIO:-}
+      GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD:-}
+
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:?falta TELEGRAM_TOKEN}
+      TELEGRAM_CHAT_ID_JUAN: ${TELEGRAM_CHAT_ID_JUAN:-}
+      TELEGRAM_CHAT_ID_NOVIA: ${TELEGRAM_CHAT_ID_NOVIA:-}
+
+      # El mapeo 4 digitos -> cuenta de Firefly, en una sola linea.
+      PRODUCTOS_CSV: ${PRODUCTOS_CSV:-}
+      # La clave de los PDF de extracto (el documento de identidad).
+      EXTRACTO_CLAVE: ${EXTRACTO_CLAVE:-}
+
+      INGESTA_INTERVALO_MIN: ${INGESTA_INTERVALO_MIN:-15}
+      RESUMEN_HORA: ${RESUMEN_HORA:-21:00}
+      CONCILIAR_HORA: ${CONCILIAR_HORA:-03:30}
+      # Arranca en 'no' a proposito: la primera vez conviene ver el log en seco.
+      INGESTA_EN_SERIO: ${INGESTA_EN_SERIO:-no}
+      # Nada anterior a esta fecha se publica. Si ya llevabas la contabilidad a
+      # mano, sin esto se crean cientos de duplicados.
       INGESTA_DESDE: ${INGESTA_DESDE:-}
-    env_file:
-      - stack.env
+
     # Sin puertos publicados: nadie tiene que entrarle de afuera.
     security_opt:
       - no-new-privileges:true

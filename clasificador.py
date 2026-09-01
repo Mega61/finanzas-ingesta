@@ -82,19 +82,62 @@ def _a_fecha(v):
 _PROD = None
 
 
+def _ruta_productos():
+    """productos.csv no esta en el repo: tiene los ultimos digitos de las
+    tarjetas. Se busca en tres lugares, en orden:
+
+      1. PRODUCTOS_CSV en el entorno, con el contenido del CSV. Sirve para
+         desplegar por Portainer sin montar archivos ni entrar por SSH.
+      2. el volumen de datos (por si se monto ahi)
+      3. al lado del codigo (que es como funciona en desarrollo)
+    """
+    import config as _cfg
+
+    inline = _cfg.get('PRODUCTOS_CSV')
+    if inline and ',' in inline:
+        destino = _cfg.ruta_datos('productos.csv')
+        # se reescribe solo si cambio, para no tocar disco en cada arranque
+        actual = ''
+        if os.path.exists(destino):
+            with open(destino, encoding='utf-8') as fh:
+                actual = fh.read()
+        texto = inline.replace('\\n', '\n')
+        if texto.strip() != actual.strip():
+            with open(destino, 'w', encoding='utf-8') as fh:
+                fh.write(texto)
+        return destino
+
+    en_datos = _cfg.ruta_datos('productos.csv')
+    if os.path.exists(en_datos):
+        return en_datos
+    return PRODUCTOS
+
+
 def productos():
     global _PROD
     if _PROD is None:
         _PROD = []
-        with open(PRODUCTOS, encoding='utf-8') as fh:
-            for r in csv.DictReader(fh):
-                _PROD.append({
-                    'instrumento': r['instrumento'].strip(),
-                    'clase': r['clase'].strip(),
-                    'cuenta': r['cuenta_firefly'].strip(),
-                    'desde': _a_fecha(r['desde']),
-                    'hasta': _a_fecha(r['hasta']),
-                })
+        ruta = _ruta_productos()
+        if not os.path.exists(ruta):
+            raise RuntimeError(
+                f"No encuentro productos.csv.\n"
+                f"Buscado en: {ruta}\n"
+                f"Copia productos.ejemplo.csv a productos.csv y pon tus datos, "
+                f"o define PRODUCTOS_CSV en el entorno con el contenido.")
+        with open(ruta, encoding='utf-8') as fh:
+            # productos.ejemplo.csv trae comentarios arriba; sin saltarlos,
+            # DictReader tomaria el primer '#' como cabecera.
+            lineas = [ln for ln in fh if not ln.lstrip().startswith('#')]
+        for r in csv.DictReader(lineas):
+            if not (r.get('instrumento') or '').strip():
+                continue
+            _PROD.append({
+                'instrumento': r['instrumento'].strip(),
+                'clase': (r.get('clase') or 'tarjeta').strip(),
+                'cuenta': (r.get('cuenta_firefly') or '').strip(),
+                'desde': _a_fecha(r.get('desde')),
+                'hasta': _a_fecha(r.get('hasta')),
+            })
     return _PROD
 
 
