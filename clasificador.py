@@ -96,15 +96,24 @@ def _ruta_productos():
     inline = _cfg.get('PRODUCTOS_CSV')
     if inline and ',' in inline:
         destino = _cfg.ruta_datos('productos.csv')
+        # Se aceptan tres formas de separar las filas, porque la UI de Portainer
+        # pone cada variable en UNA linea: ahi un salto de linea real partiria
+        # el valor en varias variables distintas.
+        #   ';'   lo recomendado, es lo que genera la plantilla
+        #   '\n'  la secuencia de dos caracteres, no un salto real
+        #   saltos de linea de verdad, para cuando el valor viene de un archivo
+        texto = inline.replace('\\n', '\n')
+        if '\n' not in texto and ';' in texto:
+            texto = '\n'.join(x.strip() for x in texto.split(';') if x.strip())
+
         # se reescribe solo si cambio, para no tocar disco en cada arranque
         actual = ''
         if os.path.exists(destino):
             with open(destino, encoding='utf-8') as fh:
                 actual = fh.read()
-        texto = inline.replace('\\n', '\n')
         if texto.strip() != actual.strip():
             with open(destino, 'w', encoding='utf-8') as fh:
-                fh.write(texto)
+                fh.write(texto.rstrip('\n') + '\n')
         return destino
 
     en_datos = _cfg.ruta_datos('productos.csv')
