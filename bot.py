@@ -133,8 +133,9 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
         texto = ("¿Qué categoría es esto?\n\n" + describir(p) +
                  f"\n\n<i>{p['descripcion'] or ''}</i>")
         try:
-            telegram.enviar(chat, texto, botones)
+            msg = telegram.enviar(chat, texto, botones)
             db.marcar_preguntado(cx, p['id'])
+            _guardar_mensaje(cx, chat, msg['message_id'], p['id'])
             # se guardan las sugerencias para poder resolver el indice despues
             _guardar_sugerencias(cx, p['id'], sug)
             mandadas += 1
@@ -156,8 +157,9 @@ def _preguntar_fantasma(cx, p, chat):
          ('✅ No, es real', f"k:{p['id']}:0")],
     ]
     try:
-        telegram.enviar(chat, texto, botones)
+        msg = telegram.enviar(chat, texto, botones)
         db.marcar_preguntado(cx, p['id'])
+        _guardar_mensaje(cx, chat, msg['message_id'], p['id'])
         return True
     except telegram.TelegramError as ex:
         print(f"  no pude preguntar fantasma #{p['id']}: {ex}")
@@ -174,8 +176,9 @@ def _preguntar_monto(cx, p, chat):
              "mensaje.")
     botones = [[('✅ Déjalo así', f"k:{p['id']}:0")]]
     try:
-        telegram.enviar(chat, texto, botones)
+        msg = telegram.enviar(chat, texto, botones)
         db.marcar_preguntado(cx, p['id'])
+        _guardar_mensaje(cx, chat, msg['message_id'], p['id'])
         return True
     except telegram.TelegramError as ex:
         print(f"  no pude preguntar monto #{p['id']}: {ex}")
@@ -503,7 +506,8 @@ def manejar_update(cx, u):
         telegram.enviar(chat, "<b>Presupuestos del mes</b>\n\n"
                               + presupuestos.formatear())
     elif texto:
-        _texto_libre(cx, chat, texto)
+        rp = (msg.get('reply_to_message') or {}).get('message_id')
+        _texto_libre(cx, chat, texto, respondiendo_a=rp)
 
 
 # Historial de conversacion por chat, en memoria. Se pierde al reiniciar y esta
@@ -513,22 +517,79 @@ HISTORIAL = {}
 MAX_HISTORIAL = 10
 
 
-def _texto_libre(cx, chat, texto):
-    """Un mensaje escrito a mano puede ser dos cosas muy distintas: la
-    respuesta a una pregunta abierta, o una consulta al asesor."""
-    # 1. ¿esta contestando algo?
-    esperando = cx.execute(
-        """SELECT p.id FROM pendientes p JOIN usuarios u ON u.id = p.usuario_id
+def _asegurar_tabla_preguntas(cx):
+    """Que mensaje de Telegram corresponde a que movimiento."""
+    cx.execute("""CREATE TABLE IF NOT EXISTS preguntas_enviadas (
+                    chat_id      TEXT NOT NULL,
+                    mensaje_id   INTEGER NOT NULL,
+                    pendiente_id INTEGER NOT NULL
+                        REFERENCES pendientes(id) ON DELETE CASCADE,
+                    PRIMARY KEY (chat_id, mensaje_id))""")
+
+
+def _guardar_mensaje(cx, chat, mensaje_id, pendiente_id):
+    _asegurar_tabla_preguntas(cx)
+    cx.execute("""INSERT OR REPLACE INTO preguntas_enviadas
+                  (chat_id, mensaje_id, pendiente_id) VALUES (?, ?, ?)""",
+               (str(chat), int(mensaje_id), int(pendiente_id)))
+    cx.commit()
+
+
+def _pendiente_de_mensaje(cx, chat, mensaje_id):
+    _asegurar_tabla_preguntas(cx)
+    r = cx.execute("""SELECT pendiente_id FROM preguntas_enviadas
+                      WHERE chat_id = ? AND mensaje_id = ?""",
+                   (str(chat), int(mensaje_id))).fetchone()
+    return r['pendiente_id'] if r else None
+
+
+def abiertas_del_chat(cx, chat):
+    return cx.execute(
+        """SELECT p.* FROM pendientes p JOIN usuarios u ON u.id = p.usuario_id
            WHERE p.pregunta IS NOT NULL
              AND p.estado IN ('nuevo', 'publicado', 'error')
              AND u.telegram_chat_id = ?
-           ORDER BY p.preguntado_en DESC, p.id DESC LIMIT 1""",
-        (str(chat),)).fetchone()
-    if esperando:
-        _responder_con_texto(cx, chat, esperando['id'], texto)
+           ORDER BY p.preguntado_en DESC, p.id DESC""", (str(chat),)).fetchall()
+
+
+def _texto_libre(cx, chat, texto, respondiendo_a=None):
+    """Un mensaje escrito a mano puede ser dos cosas muy distintas: la respuesta
+    a una pregunta abierta, o una consulta al asesor.
+
+    Y si es una respuesta, hay que saber A CUAL. Antes se tomaba la pregunta mas
+    reciente, asi que contestar la tercera de seis resolvia la sexta: la
+    respuesta se aplicaba al movimiento equivocado y el que creias contestado
+    seguia preguntandose. Ahora se usa el "responder a" de Telegram.
+    """
+    # 1. ¿es una respuesta a una pregunta concreta?
+    if respondiendo_a:
+        pid = _pendiente_de_mensaje(cx, chat, respondiendo_a)
+        if pid:
+            _responder_con_texto(cx, chat, pid, texto)
+            return
+
+    abiertas = abiertas_del_chat(cx, chat)
+
+    # 2. una sola pregunta abierta: no hay ambiguedad
+    if len(abiertas) == 1:
+        _responder_con_texto(cx, chat, abiertas[0]['id'], texto)
         return
 
-    # 2. si no, es para el asesor
+    # 3. varias abiertas y no dijo a cual: NO se adivina. Adivinar aqui mete la
+    #    categoria en el movimiento equivocado, que es peor que preguntar.
+    if len(abiertas) > 1:
+        lineas = [f"Tengo <b>{len(abiertas)}</b> preguntas abiertas y no sé a "
+                  f"cuál me respondes.", '',
+                  "Responde <b>al mensaje</b> de la que quieras contestar "
+                  "(mantén presionado → Responder), o usa los botones.", '',
+                  "Las abiertas:"]
+        for p in abiertas[:6]:
+            lineas.append(f"· {p['fecha']} {_plata(p['valor'], p['moneda'])} "
+                          f"{(p['contraparte'] or '')[:24]}")
+        telegram.enviar(chat, '\n'.join(lineas))
+        return
+
+    # 4. nada abierto: es para el asesor
     _consultar_asesor(cx, chat, texto)
 
 
@@ -556,7 +617,8 @@ def _responder_con_texto(cx, chat, pendiente_id, texto):
     # se guarda la propuesta y se pide confirmacion: una interpretacion
     # equivocada aplicada en silencio es peor que un mensaje mas
     _guardar_propuesta(cx, pendiente_id, d)
-    lineas = [f"Entendí: <b>{d['categoria']}</b>"]
+    lineas = [describir(p), '',
+              f"Entendí: <b>{d['categoria']}</b>"]
     if d['comercio']:
         lineas.append(f"comercio <b>{d['comercio']}</b>")
     if d['presupuesto']:

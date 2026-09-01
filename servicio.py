@@ -174,6 +174,7 @@ def hilo_bot():
     cx = db.conectar()
     try:
         bot._asegurar_tabla_sug(cx)
+        bot._asegurar_tabla_preguntas(cx)
         try:
             telegram.poner_comandos()
         except Exception:
