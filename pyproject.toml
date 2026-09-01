@@ -76,7 +76,10 @@ ignore = [
 # los CLI y las herramientas si imprimen, es su trabajo
 "src/finanzas/cli.py" = ["T20"]
 "herramientas/*" = ["T20"]
+# Las pruebas de fechas construyen datetime naive A PROPOSITO, para
+# verificar que a_instante los convierta a aware.
 "tests/*" = ["T20", "ARG"]
+"tests/unidad/test_fechas.py" = ["T20", "ARG", "DTZ001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["finanzas"]

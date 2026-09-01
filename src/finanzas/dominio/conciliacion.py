@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 
 from finanzas.dominio import dinero, texto
 from finanzas.dominio.fechas import a_fecha
@@ -46,7 +46,7 @@ MAX_DELTA_REL = 0.6
 TASA_MIN, TASA_MAX = 2600.0, 5400.0
 
 
-class Clase(str, Enum):
+class Clase(StrEnum):
     """Que se decidio para un movimiento publicado."""
 
     IGUAL = 'igual'  # el extracto lo trajo con el mismo monto
@@ -104,17 +104,17 @@ def tasa_implicita(libro: list[Linea], extracto: list[Linea]) -> float | None:
     mejor no emparejar que emparejar con una tasa inventada.
     """
     razones: list[float] = []
-    for l in libro:
-        if (l.moneda or 'COP').upper() != 'COP':
+    for mov in libro:
+        if (mov.moneda or 'COP').upper() != 'COP':
             continue
         for e in extracto:
             if (e.moneda or 'COP').upper() != 'USD' or not e.valor:
                 continue
-            dias = _dias(l.fecha, e.fecha)
+            dias = _dias(mov.fecha, e.fecha)
             if dias is not None and dias > 5:
                 continue
-            r = l.monto / e.monto
-            if TASA_MIN <= r <= TASA_MAX and _parecido(l, e):
+            r = mov.monto / e.monto
+            if TASA_MIN <= r <= TASA_MAX and _parecido(mov, e):
                 razones.append(r)
     if len(razones) < 2:
         return None
@@ -142,18 +142,18 @@ def emparejar(
     usados: set[int] = set()
     res = Resultado(tasa_usada=tasa)
 
-    def equivalente(l: Linea, e: Linea) -> float | None:
+    def equivalente(mov: Linea, ext: Linea) -> float | None:
         """El monto del extracto expresado en la moneda del libro."""
-        ml, me = (l.moneda or 'COP').upper(), (e.moneda or 'COP').upper()
+        ml, me = (mov.moneda or 'COP').upper(), (ext.moneda or 'COP').upper()
         if ml == me:
-            return e.monto
+            return ext.monto
         if tasa and ml == 'COP' and me == 'USD':
-            return e.monto * tasa
+            return ext.monto * tasa
         if tasa and ml == 'USD' and me == 'COP':
-            return e.monto / tasa
+            return ext.monto / tasa
         return None
 
-    for l in libro:
+    for mov in libro:
         # --- 1. mismo monto, con tolerancia de fecha creciente
         mejor: tuple[int, int, Linea] | None = None
         for tol in TOLERANCIAS:
@@ -161,16 +161,16 @@ def emparejar(
             for i, e in enumerate(extracto):
                 if i in usados:
                     continue
-                eq = equivalente(l, e)
+                eq = equivalente(mov, e)
                 if eq is None:
                     continue
                 misma_moneda = (e.moneda or 'COP').upper() == (
-                    l.moneda or 'COP'
+                    mov.moneda or 'COP'
                 ).upper()
-                margen = EPS if misma_moneda else max(l.monto * MARGEN_MONEDA, EPS)
-                if abs(eq - l.monto) > margen:
+                margen = EPS if misma_moneda else max(mov.monto * MARGEN_MONEDA, EPS)
+                if abs(eq - mov.monto) > margen:
                     continue
-                d = _dias(l.fecha, e.fecha)
+                d = _dias(mov.fecha, e.fecha)
                 if d is not None and d > tol:
                     continue
                 candidatos.append((d if d is not None else 0, i, e))
@@ -180,7 +180,7 @@ def emparejar(
                 break
         if mejor is not None:
             usados.add(mejor[1])
-            res.pares.append(Par(l, mejor[2], Clase.IGUAL))
+            res.pares.append(Par(mov, mejor[2], Clase.IGUAL))
             continue
 
         # --- 2. otro monto del mismo comercio
@@ -192,22 +192,22 @@ def emparejar(
         for i, e in enumerate(extracto):
             if i in usados:
                 continue
-            eq = equivalente(l, e)
+            eq = equivalente(mov, e)
             if eq is None:
                 continue
-            d = _dias(l.fecha, e.fecha)
+            d = _dias(mov.fecha, e.fecha)
             if d is None or d > 3:
                 continue
-            if not _parecido(l, e):
+            if not _parecido(mov, e):
                 continue
-            delta = abs(eq - l.monto) / l.monto if l.monto else 1.0
+            delta = abs(eq - mov.monto) / mov.monto if mov.monto else 1.0
             cands.append((delta, i, e))
 
         if len(cands) == 1 and cands[0][0] <= MAX_DELTA_REL:
             usados.add(cands[0][1])
             res.pares.append(
                 Par(
-                    l,
+                    mov,
                     cands[0][2],
                     Clase.OTRO_MONTO,
                     f'unico candidato, difiere {cands[0][0] * 100:.0f}%',
@@ -217,14 +217,14 @@ def emparejar(
             cands.sort(key=lambda c: c[0])
             res.pares.append(
                 Par(
-                    l,
+                    mov,
                     cands[0][2],
                     Clase.AMBIGUO,
                     f'{len(cands)} candidatos del mismo comercio: no se toca',
                 )
             )
         else:
-            res.sin_pareja.append(l)
+            res.sin_pareja.append(mov)
 
     res.solo_en_extracto = [e for i, e in enumerate(extracto) if i not in usados]
     return res
@@ -247,10 +247,10 @@ def es_fantasma(
 
 def formatear_par(p: Par) -> str:
     """Una linea legible, para el log y para Telegram."""
-    l, e = p.libro, p.extracto
+    mov, ext = p.libro, p.extracto
     if p.clase is Clase.IGUAL:
-        return f'{l.fecha} {dinero.formatear(l.monto)} confirmado'
+        return f'{mov.fecha} {dinero.formatear(mov.monto)} confirmado'
     return (
-        f'{l.fecha} {dinero.formatear(l.monto)} -> '
-        f'{dinero.formatear(e.monto)} {e.moneda} [{p.clase.value}] {p.por_que}'
+        f'{mov.fecha} {dinero.formatear(mov.monto)} -> '
+        f'{dinero.formatear(ext.monto)} {ext.moneda} [{p.clase.value}] {p.por_que}'
     )

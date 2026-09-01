@@ -51,7 +51,8 @@ MESES_ES = {
     'dic': 12,
 }
 _PERIODO_ES = re.compile(
-    r'(\d{1,2})\s+([a-z]{3})\.?\s*[-–]\s*(\d{1,2})\s+([a-z]{3})\.?\s*(\d{4})',
+    # El guion largo (EN DASH) es a proposito: los extractos usan los dos.
+    r'(\d{1,2})\s+([a-z]{3})\.?\s*[-–]\s*(\d{1,2})\s+([a-z]{3})\.?\s*(\d{4})',  # noqa: RUF001
     re.I,
 )
 
@@ -91,12 +92,13 @@ def a_fecha(valor: str | date | datetime | None) -> date | None:
     if 'T' in s:
         s_corto = s[:10]
         try:
-            return datetime.strptime(s_corto, '%Y-%m-%d').date()
+            # sin zona a proposito: un dia de calendario no tiene zona
+            return datetime.strptime(s_corto, '%Y-%m-%d').date()  # noqa: DTZ007
         except ValueError:
             pass
     for fmt in _FORMATOS_FECHA:
         try:
-            return datetime.strptime(s, fmt).date()
+            return datetime.strptime(s, fmt).date()  # noqa: DTZ007
         except ValueError:
             continue
     return None
@@ -120,7 +122,8 @@ def a_instante(valor: str | datetime | None, tz: timezone = BOGOTA) -> datetime 
         f = a_fecha(s)
         if f is None:
             return None
-        d = datetime(f.year, f.month, f.day)
+        # se construye ya con zona, para que nunca exista un naive aqui
+        d = datetime(f.year, f.month, f.day, tzinfo=tz)
     return d if d.tzinfo else d.replace(tzinfo=tz)
 
 
