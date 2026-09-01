@@ -15,6 +15,12 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# El commit con el que se construyo, para que /version lo pueda reportar. Asi
+# se sabe de una si el contenedor esta corriendo codigo viejo.
+ARG GIT_SHA=desconocido
+ARG BUILD_FECHA=desconocida
+ENV GIT_SHA=$GIT_SHA BUILD_FECHA=$BUILD_FECHA
+
 COPY . /app/automatizacion/
 ENV PYTHONPATH=/app/automatizacion
 

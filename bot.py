@@ -289,6 +289,26 @@ def aplicar_respuesta(cx, pendiente_id, categoria=None, descartar=False,
 
 # ---------------------------------------------------------------- comandos
 
+def _version_texto():
+    """Que codigo esta corriendo. Sirve para saber si el contenedor quedo con
+    una imagen vieja, que es facil que pase y dificil de ver de otra forma."""
+    sha = config.get('GIT_SHA', 'desconocido')
+    fecha = config.get('BUILD_FECHA', 'desconocida')
+    import interprete
+    import ia
+    ia_txt = ('Gemini ' + ia.MODELO) if ia.disponible() else 'sin API key'
+    lineas = [
+        '<b>Versión</b>',
+        f'commit <code>{sha[:12]}</code>',
+        f'construida {fecha[:19]}',
+        '',
+        f'IA: {ia_txt}',
+        f'texto libre: {"sí" if hasattr(interprete, "interpretar") else "no"}',
+        f'asesor: {"sí" if ia.disponible() else "necesita GEMINI_API_KEY"}',
+    ]
+    return '\n'.join(lineas)
+
+
 AYUDA = (
     "<b>Qué hago</b>\n\n"
     "Leo las alertas de Bancolombia de tu correo, saco los movimientos y los "
@@ -476,6 +496,8 @@ def manejar_update(cx, u):
         cmd_resumen(cx, chat)
     elif texto.startswith('/sinconfirmar'):
         cmd_sinconfirmar(cx, chat)
+    elif texto.startswith('/version'):
+        telegram.enviar(chat, _version_texto())
     elif texto.startswith('/presupuestos'):
         import presupuestos
         telegram.enviar(chat, "<b>Presupuestos del mes</b>\n\n"

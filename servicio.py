@@ -222,6 +222,8 @@ def main(argv=None):
 
     limpiar_cola(cx)
 
+    log('inicio', f"commit={config.get('GIT_SHA', 'desconocido')[:12]} "
+                  f"construida={config.get('BUILD_FECHA', 'desconocida')[:19]}")
     log('inicio', f"base={db.ruta()}")
     log('inicio', f"intervalo={INTERVALO_MIN}min  resumen={HORA_RESUMEN or 'no'}  "
                   f"conciliar={HORA_CONCILIAR or 'no'}  "
