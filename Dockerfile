@@ -12,8 +12,15 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends tzdata ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# El paquete `finanzas` (src/) se INSTALA, no se copia y se reza. Copiar solo
+# lo que define el paquete antes del resto del codigo aprovecha la cache de
+# capas: si no cambian las dependencias, esta capa no se reconstruye.
+#
+# Esto no estaba y el contenedor arrancaba con ModuleNotFoundError: finanzas.
+# Lo detecto la comprobacion de arranque del CI, antes de llegar al servidor.
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+RUN pip install --no-cache-dir .
 
 # El commit con el que se construyo, para que /version lo pueda reportar. Asi
 # se sabe de una si el contenedor esta corriendo codigo viejo.
@@ -21,6 +28,8 @@ ARG GIT_SHA=desconocido
 ARG BUILD_FECHA=desconocida
 ENV GIT_SHA=$GIT_SHA BUILD_FECHA=$BUILD_FECHA
 
+# Los modulos planos (todavia sin migrar) van aparte y se encuentran por
+# PYTHONPATH. A medida que se muevan a src/ esta linea se puede quitar.
 COPY . /app/automatizacion/
 ENV PYTHONPATH=/app/automatizacion
 
