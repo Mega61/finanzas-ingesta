@@ -68,5 +68,5 @@ jobs:
       - name: Comprobar que la imagen arranca
         run: |
           docker run --rm -e FINANZAS_DATOS=/datos \
-            ghcr.io/${{ github.repository }}:latest \
+            ${{ steps.img.outputs.ref }}:latest \
             python -c "import sys; sys.path.insert(0,'/app/automatizacion'); import config, db, clasificador, publicador, conciliador, bot, telegram, demonio, servicio; print('todos los modulos importan')"
