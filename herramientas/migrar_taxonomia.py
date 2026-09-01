@@ -18,7 +18,8 @@ import os
 import sys
 from datetime import timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# la raiz del repo: estos scripts viven un nivel abajo
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import firefly
 

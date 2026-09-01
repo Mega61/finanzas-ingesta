@@ -16,6 +16,7 @@ Convenciones:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -63,6 +64,22 @@ class Repositorio(Protocol):
     def pendientes_por_publicar(self, limite: int = 200) -> list[sqlite3.Row]: ...
     def pendientes_por_preguntar(self, limite: int = 50) -> list[sqlite3.Row]: ...
     def actualizar_pendiente(self, pendiente_id: int, **campos: Any) -> None: ...
+
+
+def _a_json(valor: Any) -> str | None:
+    """La bitacora es el unico rastro de lo que se le mando a Firefly, asi que
+    tiene que quedar como JSON de verdad y no como repr de Python: con
+    str({'a': 1}) queda {'a': 1}, con comillas simples, que json.loads no lee.
+    Cuando algo no es serializable se cae a str antes que perder la anotacion,
+    que es justo la que se necesita en el camino del error."""
+    if valor is None:
+        return None
+    if isinstance(valor, str):
+        return valor[:4000]
+    try:
+        return json.dumps(valor, ensure_ascii=False, default=str)[:4000]
+    except (TypeError, ValueError):
+        return str(valor)[:4000]
 
 
 class Almacen:
@@ -588,8 +605,8 @@ class Almacen:
                 pendiente_id,
                 accion,
                 firefly_id,
-                str(payload)[:4000] if payload else None,
-                str(respuesta)[:4000] if respuesta else None,
+                _a_json(payload),
+                _a_json(respuesta),
                 1 if ok else 0,
             ),
         )

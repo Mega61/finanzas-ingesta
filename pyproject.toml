@@ -75,7 +75,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # los CLI y las herramientas si imprimen, es su trabajo
 "src/finanzas/cli.py" = ["T20"]
-"herramientas/*" = ["T20"]
+# Las herramientas de un solo uso: son CLI de diagnostico, imprimen, y
+# hacen os.path porque corren fuera del contenedor.
+"herramientas/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
 # Las pruebas de fechas construyen datetime naive A PROPOSITO, para
 # verificar que a_instante los convierta a aware.
 "tests/*" = ["T20", "ARG"]
@@ -117,4 +119,13 @@ exclude_lines = [
     "pragma: sin cobertura",
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
+    # Los Protocol son contratos: los cuerpos son `...`, no hay nada que cubrir.
+    '^\s*\.\.\.$',
 ]
+
+# El umbral esta en 90 y hoy va en 93. No es un numero decorativo: de los ocho
+# bugs que llegaron a produccion, siete estaban en modulos sin una sola prueba.
+# Si baja de 90, el CI falla; subirlo es bienvenido, aflojarlo se discute.
+fail_under = 90
+show_missing = true
+skip_covered = true
