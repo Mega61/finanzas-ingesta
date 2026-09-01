@@ -13,12 +13,27 @@ import os
 import re
 import sys
 
-RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(RAIZ, 'automatizacion'))
+# El paquete es la carpeta que contiene a pruebas/. Se calcula asi y no
+# contando niveles hacia arriba, porque segun el contexto esa carpeta es la raiz
+# del repo (en CI) o una subcarpeta de la carpeta de trabajo (en desarrollo).
+AQUI = os.path.dirname(os.path.abspath(__file__))
+PAQUETE = os.path.dirname(AQUI)
+sys.path.insert(0, PAQUETE)
 
 from parsers import bancolombia_alertas as B  # noqa: E402
 
-ARCHIVO = os.path.join(RAIZ, 'Mensajes de Bancolombia', '*.eml')
+# El archivo de correos no esta en el repo. Se busca en los sitios donde puede
+# estar; si no aparece, la prueba de cobertura se salta y corren las unitarias.
+CANDIDATOS = [
+    os.path.join(os.path.dirname(PAQUETE), 'Mensajes de Bancolombia'),
+    os.path.join(PAQUETE, 'Mensajes de Bancolombia'),
+    os.environ.get('ARCHIVO_CORREOS', ''),
+]
+ARCHIVO = ''
+for _c in CANDIDATOS:
+    if _c and os.path.isdir(_c):
+        ARCHIVO = os.path.join(_c, '*.eml')
+        break
 
 
 def test_parse_monto():
@@ -76,9 +91,10 @@ def test_signo():
 
 
 def test_archivo_completo():
-    files = sorted(glob.glob(ARCHIVO))
+    files = sorted(glob.glob(ARCHIVO)) if ARCHIVO else []
     if not files:
-        print(f"  (sin archivo en {ARCHIVO}, me salto la prueba de cobertura)")
+        print("  (no encontre el archivo de correos: me salto la prueba de")
+        print("   cobertura y corro solo las unitarias. Es lo normal en CI.)")
         return
     ok, desc, fail = [], [], []
     for f in files:
