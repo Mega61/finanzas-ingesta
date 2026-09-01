@@ -68,10 +68,21 @@ services:
       TELEGRAM_CHAT_ID_JUAN: ${TELEGRAM_CHAT_ID_JUAN:-}
       TELEGRAM_CHAT_ID_NOVIA: ${TELEGRAM_CHAT_ID_NOVIA:-}
 
+      # Gemini: entiende el texto libre y responde las preguntas del asesor.
+      # Sin la key el bot sigue andando, solo con emparejamiento por palabras.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODELO: ${GEMINI_MODELO:-gemini-3.7-flash}
+
       # El mapeo 4 digitos -> cuenta de Firefly, en una sola linea.
       PRODUCTOS_CSV: ${PRODUCTOS_CSV:-}
       # La clave de los PDF de extracto (el documento de identidad).
       EXTRACTO_CLAVE: ${EXTRACTO_CLAVE:-}
+
+      # Publicar sin preguntar solo cuando el comercio coincide exacto con algo
+      # que el usuario confirmo. Con 'no' vuelve al umbral de confianza.
+      CLASIFICADOR_ESTRICTO: ${CLASIFICADOR_ESTRICTO:-si}
+      # Cuantos dias trae la PRIMERA bajada de correo.
+      INGESTA_DIAS_INICIAL: ${INGESTA_DIAS_INICIAL:-30}
 
       INGESTA_INTERVALO_MIN: ${INGESTA_INTERVALO_MIN:-15}
       RESUMEN_HORA: ${RESUMEN_HORA:-21:00}
