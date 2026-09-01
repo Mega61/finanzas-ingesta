@@ -100,9 +100,11 @@ def test_archivo_completo():
         try:
             ev = B.parse_eml(f)
         except B.Descartado as d:
-            desc.append(d.motivo); continue
+            desc.append(d.motivo)
+            continue
         except Exception as e:
-            fail.append((f, f'EXCEPCION {type(e).__name__}: {e}')); continue
+            fail.append((f, f'EXCEPCION {type(e).__name__}: {e}'))
+            continue
         if ev is None:
             _, plano = B.cuerpo_texto(f)
             fail.append((f, B._normalizar(plano)[:180]))
@@ -128,7 +130,7 @@ def test_archivo_completo():
 
     if fail:
         print(f"\n  !!! {len(fail)} correos sin reconocer:")
-        for f, t in fail[:15]:
+        for _, t in fail[:15]:
             print(f"    * {re.sub(r'\\[https?://[^]]+\\]', '', t)[:160]}")
         raise AssertionError(f"{len(fail)} correos sin reconocer de {tot}")
     print(f"\n  COBERTURA: {(len(ok)+len(desc))/tot*100:.1f}%  ({tot} correos, 0 sin clasificar)")

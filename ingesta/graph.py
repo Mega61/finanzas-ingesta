@@ -21,6 +21,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
+import db
 
 GRAPH = 'https://graph.microsoft.com/v1.0'
 CACHE = os.path.join(config.DATOS, '.cache_graph.json')
@@ -176,7 +177,6 @@ def cuerpo_plano(msg):
 
 def bajar(cx, buzon_id, desde=None, tope=None, interactivo=False):
     """Baja lo nuevo a correos_crudos. Devuelve (nuevos, repetidos)."""
-    import db
 
     tok = token(interactivo=interactivo)
     nuevos = repetidos = 0

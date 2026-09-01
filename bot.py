@@ -15,14 +15,26 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import contextlib
+
+import asesor
 import clasificador
 import config
 import db
 import firefly
+import ia
+import interprete
+import presupuestos
 import publicador
 import telegram
 
+from finanzas.adaptadores.almacen import Almacen
 from finanzas.dominio import dinero as _dinero
+
+
+def _a(cx):
+    """El almacen para esta conexion. Todo el SQL vive alla."""
+    return Almacen(cx)
 
 # Cuantas categorias ofrecer como botones antes de pedir texto libre.
 MAX_BOTONES = 8
@@ -70,11 +82,7 @@ def sugerir_categorias(cx, usuario_id, p, todas):
         sug.append(p['categoria'])
 
     # las mas usadas en esa direccion
-    filas = cx.execute("""SELECT categoria, count(*) n FROM reglas
-                          WHERE categoria IS NOT NULL AND categoria <> ''
-                            AND direccion = ?
-                          GROUP BY categoria ORDER BY n DESC""",
-                       (direccion,)).fetchall()
+    filas = _a(cx).categorias_usadas(direccion)
     for r in filas:
         if len(sug) >= MAX_BOTONES:
             break
@@ -122,7 +130,8 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
         for i, c in enumerate(sug):
             fila.append((c, f"c:{p['id']}:{i}"))
             if len(fila) == 2:
-                botones.append(fila); fila = []
+                botones.append(fila)
+                fila = []
         if fila:
             botones.append(fila)
         botones.append([('✏️ Otra categoria', f"t:{p['id']}:0")])
@@ -158,10 +167,11 @@ def _preguntar_fantasma(cx, p, chat):
         msg = telegram.enviar(chat, texto, botones)
         db.marcar_preguntado(cx, p['id'])
         _guardar_mensaje(cx, chat, msg['message_id'], p['id'])
-        return True
     except telegram.TelegramError as ex:
         print(f"  no pude preguntar fantasma #{p['id']}: {ex}")
         return False
+    else:
+        return True
 
 
 def _preguntar_monto(cx, p, chat):
@@ -177,39 +187,32 @@ def _preguntar_monto(cx, p, chat):
         msg = telegram.enviar(chat, texto, botones)
         db.marcar_preguntado(cx, p['id'])
         _guardar_mensaje(cx, chat, msg['message_id'], p['id'])
-        return True
     except telegram.TelegramError as ex:
         print(f"  no pude preguntar monto #{p['id']}: {ex}")
         return False
+    else:
+        return True
 
 
 def _asegurar_tabla_sug(cx):
-    cx.execute("""CREATE TABLE IF NOT EXISTS sugerencias (
-                    pendiente_id INTEGER PRIMARY KEY
-                        REFERENCES pendientes(id) ON DELETE CASCADE,
-                    opciones     TEXT NOT NULL)""")
+    """Ya no hace nada: las tablas de conversacion estan en esquema.sql.
+    Se conserva porque servicio.py la llama al arrancar."""
+    return None
 
 
 def _guardar_sugerencias(cx, pendiente_id, sug):
-    _asegurar_tabla_sug(cx)
-    cx.execute("INSERT OR REPLACE INTO sugerencias (pendiente_id, opciones) "
-               "VALUES (?, ?)", (pendiente_id, '\n'.join(sug)))
+    _a(cx).guardar_sugerencias(pendiente_id, sug)
 
 
 def _leer_sugerencias(cx, pendiente_id):
-    _asegurar_tabla_sug(cx)
-    r = cx.execute('SELECT opciones FROM sugerencias WHERE pendiente_id = ?',
-                   (pendiente_id,)).fetchone()
-    return r['opciones'].split('\n') if r else []
+    return _a(cx).sugerencias(pendiente_id)
 
 
 # ------------------------------------------------------------------ resolver
 
 def _presupuestos_de(cx, pendiente_id):
     """Los presupuestos entre los que hay que elegir para este movimiento."""
-    import presupuestos
-    p = cx.execute('SELECT * FROM pendientes WHERE id = ?',
-                   (pendiente_id,)).fetchone()
+    p = _a(cx).pendiente(pendiente_id)
     pr = _leer_propuesta(cx, pendiente_id)
     cat = (pr['categoria'] if pr else None) or (p['categoria'] if p else None)
     mapa = presupuestos.mapa_categoria()
@@ -228,7 +231,8 @@ def _preguntar_presupuesto(cx, pendiente_id, chat, pr):
     for i, n in enumerate(nombres):
         fila.append((n, f"b:{pendiente_id}:{i}"))
         if len(fila) == 2:
-            botones.append(fila); fila = []
+            botones.append(fila)
+            fila = []
     if fila:
         botones.append(fila)
     telegram.enviar(chat,
@@ -240,8 +244,7 @@ def _preguntar_presupuesto(cx, pendiente_id, chat, pr):
 def aplicar_respuesta(cx, pendiente_id, categoria=None, descartar=False,
                       presupuesto=None, comercio=None):
     """Guarda la respuesta, crea la regla, y publica en Firefly."""
-    p = cx.execute('SELECT * FROM pendientes WHERE id = ?',
-                   (pendiente_id,)).fetchone()
+    p = _a(cx).pendiente(pendiente_id)
     if p is None:
         return None, 'ese movimiento ya no existe'
 
@@ -266,12 +269,10 @@ def aplicar_respuesta(cx, pendiente_id, categoria=None, descartar=False,
     db.pendiente_actualizar(cx, pendiente_id, **campos)
     cx.commit()
 
-    p = cx.execute('SELECT * FROM pendientes WHERE id = ?',
-                   (pendiente_id,)).fetchone()
+    p = _a(cx).pendiente(pendiente_id)
     aviso = ''
     if p['presupuesto']:
         try:
-            import presupuestos
             r = presupuestos.revienta(p['presupuesto'], p['valor'])
             if r:
                 aviso = ("\n\n⚠️ Esto revienta "
@@ -295,8 +296,6 @@ def _version_texto():
     una imagen vieja, que es facil que pase y dificil de ver de otra forma."""
     sha = config.get('GIT_SHA', 'desconocido')
     fecha = config.get('BUILD_FECHA', 'desconocida')
-    import ia
-    import interprete
     ia_txt = ('Gemini ' + ia.MODELO) if ia.disponible() else 'sin API key'
     lineas = [
         '<b>Versión</b>',
@@ -334,8 +333,7 @@ def cmd_resumen(cx, chat):
         lineas.append(f"{etq}: <b>{f['n']}</b>")
         if f['pregunta'] != 'nada':
             total_preg += f['n']
-    sc = cx.execute("""SELECT count(*) n, sum(valor) t FROM pendientes
-                       WHERE estado = 'publicado' AND visto_en IS NULL""").fetchone()
+    sc = _a(cx).total_sin_confirmar()
     if sc and sc['n']:
         lineas += ['', f"En Firefly sin confirmar: <b>{sc['n']}</b> "
                        f"({_plata(sc['t'] or 0)})"]
@@ -345,9 +343,7 @@ def cmd_resumen(cx, chat):
 
 
 def cmd_sinconfirmar(cx, chat):
-    filas = cx.execute("""SELECT * FROM pendientes
-                          WHERE estado = 'publicado' AND visto_en IS NULL
-                          ORDER BY fecha DESC LIMIT 20""").fetchall()
+    filas = _a(cx).sin_confirmar(20)
     if not filas:
         telegram.enviar(chat, "No hay nada sin confirmar. ✅")
         return
@@ -355,9 +351,9 @@ def cmd_sinconfirmar(cx, chat):
     for p in filas:
         lineas.append(f"{p['fecha']} {_plata(p['valor'], p['moneda'])} "
                       f"— {(p['contraparte'] or '')[:28]}")
-    sosp = cx.execute('SELECT count(*) n FROM v_sospechosos').fetchone()
-    if sosp and sosp['n']:
-        lineas += ['', f"⚠️ {sosp['n']} llevan más de 45 días sin aparecer en "
+    n_sosp = _a(cx).contar_sospechosos()
+    if n_sosp:
+        lineas += ['', f"⚠️ {n_sosp} llevan más de 45 días sin aparecer en "
                        f"ningún extracto. Pueden ser preautorizaciones que nunca "
                        f"se cobraron."]
     telegram.enviar(chat, '\n'.join(lineas))
@@ -396,7 +392,7 @@ def manejar_update(cx, u):
                 telegram.editar(chat, mid, f"🚫 Descartado\n{describir(p)}")
         elif accion == 'd':
             # borrar el fantasma de Firefly
-            p = cx.execute('SELECT * FROM pendientes WHERE id = ?', (pid,)).fetchone()
+            p = _a(cx).pendiente(pid)
             if p is None:
                 telegram.responder_callback(cq['id'], 'ya no existe')
                 return
@@ -416,7 +412,7 @@ def manejar_update(cx, u):
                 telegram.enviar(chat, f"No pude borrarlo: {str(ex)[:200]}")
         elif accion == 'k':
             # dejarlo como esta: es real, o el monto se queda
-            p = cx.execute('SELECT * FROM pendientes WHERE id = ?', (pid,)).fetchone()
+            p = _a(cx).pendiente(pid)
             db.pendiente_actualizar(cx, pid, estado='confirmado', pregunta=None,
                                     decidido_por='usuario')
             cx.commit()
@@ -457,12 +453,17 @@ def manejar_update(cx, u):
                 telegram.editar(chat, mid, f"✅ <b>{elegido}</b>\n{describir(p)}\n"
                                            f"<i>{detalle}</i>")
         elif accion == 't':
-            cx.execute("INSERT OR REPLACE INTO sugerencias (pendiente_id, opciones) "
-                       "VALUES (?, ?)", (pid, '__ESPERANDO_TEXTO__'))
-            cx.commit()
+            # Antes esto guardaba un marcador '__ESPERANDO_TEXTO__' en las
+            # sugerencias, que nadie leia y que pisaba las opciones reales: si
+            # despues tocabas un boton, el indice ya no apuntaba a nada.
+            # Lo que de verdad hace falta es atar ESTE mensaje al movimiento,
+            # para que la respuesta libre se aplique al correcto.
             telegram.responder_callback(cq['id'], 'escribe la categoría')
-            telegram.enviar(chat, f"Escribe la categoría para el movimiento "
-                                  f"#{pid}, respondiendo a este mensaje:")
+            eco = telegram.enviar(chat, f"Escribe la categoría para el "
+                                        f"movimiento #{pid}, respondiendo a "
+                                        f"este mensaje:")
+            if eco and eco.get('message_id'):
+                _guardar_mensaje(cx, chat, eco['message_id'], pid)
         return
 
     msg = u.get('message')
@@ -473,12 +474,7 @@ def manejar_update(cx, u):
 
     if texto.startswith('/start'):
         # vincula el chat con el usuario si todavia no lo esta
-        u1 = cx.execute('SELECT id FROM usuarios WHERE telegram_chat_id IS NULL '
-                        'ORDER BY id LIMIT 1').fetchone()
-        if u1:
-            cx.execute('UPDATE usuarios SET telegram_chat_id = ? WHERE id = ?',
-                       (str(chat), u1['id']))
-            cx.commit()
+        _a(cx).vincular_chat(chat)
         telegram.enviar(chat, AYUDA)
     elif texto.startswith('/ayuda'):
         telegram.enviar(chat, AYUDA)
@@ -500,7 +496,6 @@ def manejar_update(cx, u):
     elif texto.startswith('/version'):
         telegram.enviar(chat, _version_texto())
     elif texto.startswith('/presupuestos'):
-        import presupuestos
         telegram.enviar(chat, "<b>Presupuestos del mes</b>\n\n"
                               + presupuestos.formatear())
     elif texto:
@@ -516,38 +511,20 @@ MAX_HISTORIAL = 10
 
 
 def _asegurar_tabla_preguntas(cx):
-    """Que mensaje de Telegram corresponde a que movimiento."""
-    cx.execute("""CREATE TABLE IF NOT EXISTS preguntas_enviadas (
-                    chat_id      TEXT NOT NULL,
-                    mensaje_id   INTEGER NOT NULL,
-                    pendiente_id INTEGER NOT NULL
-                        REFERENCES pendientes(id) ON DELETE CASCADE,
-                    PRIMARY KEY (chat_id, mensaje_id))""")
+    """Ya no hace nada: la tabla esta en esquema.sql."""
+    return None
 
 
 def _guardar_mensaje(cx, chat, mensaje_id, pendiente_id):
-    _asegurar_tabla_preguntas(cx)
-    cx.execute("""INSERT OR REPLACE INTO preguntas_enviadas
-                  (chat_id, mensaje_id, pendiente_id) VALUES (?, ?, ?)""",
-               (str(chat), int(mensaje_id), int(pendiente_id)))
-    cx.commit()
+    _a(cx).guardar_mensaje(chat, mensaje_id, pendiente_id)
 
 
 def _pendiente_de_mensaje(cx, chat, mensaje_id):
-    _asegurar_tabla_preguntas(cx)
-    r = cx.execute("""SELECT pendiente_id FROM preguntas_enviadas
-                      WHERE chat_id = ? AND mensaje_id = ?""",
-                   (str(chat), int(mensaje_id))).fetchone()
-    return r['pendiente_id'] if r else None
+    return _a(cx).pendiente_de_mensaje(chat, mensaje_id)
 
 
 def abiertas_del_chat(cx, chat):
-    return cx.execute(
-        """SELECT p.* FROM pendientes p JOIN usuarios u ON u.id = p.usuario_id
-           WHERE p.pregunta IS NOT NULL
-             AND p.estado IN ('nuevo', 'publicado', 'error')
-             AND u.telegram_chat_id = ?
-           ORDER BY p.preguntado_en DESC, p.id DESC""", (str(chat),)).fetchall()
+    return _a(cx).pendientes_abiertos_de_chat(chat)
 
 
 def _texto_libre(cx, chat, texto, respondiendo_a=None):
@@ -593,10 +570,8 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
 
 def _responder_con_texto(cx, chat, pendiente_id, texto):
     """Interpreta 'fue la comida de la gata en tierragro' y propone."""
-    import interprete
 
-    p = cx.execute('SELECT * FROM pendientes WHERE id = ?',
-                   (pendiente_id,)).fetchone()
+    p = _a(cx).pendiente(pendiente_id)
     if p is None:
         telegram.enviar(chat, "Ese movimiento ya no existe.")
         return
@@ -634,30 +609,15 @@ def _responder_con_texto(cx, chat, pendiente_id, texto):
 
 
 def _guardar_propuesta(cx, pendiente_id, d):
-    cx.execute("""CREATE TABLE IF NOT EXISTS propuestas (
-                    pendiente_id INTEGER PRIMARY KEY
-                        REFERENCES pendientes(id) ON DELETE CASCADE,
-                    categoria TEXT, presupuesto TEXT, comercio TEXT,
-                    pedir_presupuesto INTEGER DEFAULT 0)""")
-    cx.execute("""INSERT OR REPLACE INTO propuestas
-                  (pendiente_id, categoria, presupuesto, comercio, pedir_presupuesto)
-                  VALUES (?, ?, ?, ?, ?)""",
-               (pendiente_id, d['categoria'], d['presupuesto'], d['comercio'],
-                1 if d['pedir_presupuesto'] else 0))
-    cx.commit()
+    _a(cx).guardar_propuesta(pendiente_id, d['categoria'], d['presupuesto'],
+                             d['comercio'], d['pedir_presupuesto'])
 
 
 def _leer_propuesta(cx, pendiente_id):
-    try:
-        return cx.execute('SELECT * FROM propuestas WHERE pendiente_id = ?',
-                          (pendiente_id,)).fetchone()
-    except Exception:
-        return None
+    return _a(cx).propuesta(pendiente_id)
 
 
 def _consultar_asesor(cx, chat, texto):
-    import asesor
-    import ia
 
     if not ia.disponible():
         telegram.enviar(chat, "Para hablar conmigo necesito una GEMINI_API_KEY. "
@@ -678,10 +638,8 @@ def _consultar_asesor(cx, chat, texto):
 
 def escuchar(cx, una_vuelta=False):
     print(f"bot @{telegram.yo().get('username')} escuchando...")
-    try:
+    with contextlib.suppress(telegram.TelegramError):
         telegram.poner_comandos()
-    except telegram.TelegramError:
-        pass
     while True:
         try:
             for u in telegram.updates(espera=30):

@@ -18,6 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import contextlib
+
 import firefly
 
 from finanzas.dominio import dinero as _dinero
@@ -89,10 +91,8 @@ def recolectar():
             c = (s.get('category_name') or '').strip()
             if tipo == 'withdrawal' and c:
                 uso[c] += 1
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     monto[c] += abs(float(s.get('amount') or 0))
-                except (TypeError, ValueError):
-                    pass
                 b = (s.get('budget_name') or '').strip()
                 if b:
                     presup[c][b] += 1
@@ -120,7 +120,6 @@ def recolectar():
 
 def clasificar_tag(tg, d):
     """Por que existe este tag, y si aporta algo."""
-    t = _norm(tg)
     if tg in TAGS_UTILES_EXACTOS or any(tg.startswith(p) for p in TAGS_UTILES_PREFIJOS):
         return 'util', 'no lo carga ningun otro campo'
     # ¿duplica la cuenta de origen? (tarjeta)

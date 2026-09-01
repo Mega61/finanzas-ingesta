@@ -47,7 +47,7 @@ def refresh_token_de_graph():
         rt = json.loads(rt)
     if not rt:
         return None
-    return list(rt.values())[0].get('secret')
+    return next(iter(rt.values())).get('secret')
 
 
 def productos_en_una_linea():
@@ -149,8 +149,8 @@ def main():
 
     print(f"escrito: {SALIDA}")
     print(f"  {len(pares)} variables, todas de una sola linea\n")
-    for k, v in pares:
-        v = str(v)
+    for k, bruto in pares:
+        v = str(bruto)
         muestra = f"[{len(v)} chars]" if any(s in k for s in SECRETO) else v[:52]
         print(f"    {k:24} = {muestra}")
     if faltan:

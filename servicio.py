@@ -24,15 +24,20 @@ import sys
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import contextlib
+
 import bot
+import conciliador
 import config
 import db
 import demonio
 import telegram
+
+from finanzas.dominio import fechas
 
 # Cada cuanto se revisa el correo.
 INTERVALO_MIN = int(config.get('INGESTA_INTERVALO_MIN', '15'))
@@ -48,7 +53,7 @@ _parar = threading.Event()
 
 
 def log(donde, msg):
-    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    ts = fechas.ahora().strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{ts}] {donde:9} {msg}", flush=True)
 
 
@@ -57,10 +62,8 @@ def _avisar(texto):
     chat = config.get('TELEGRAM_CHAT_ID_JUAN')
     if not chat:
         return
-    try:
+    with contextlib.suppress(Exception):
         telegram.enviar(chat, texto)
-    except Exception:
-        pass
 
 
 # --------------------------------------------------------------- hilo ingesta
@@ -99,7 +102,7 @@ def hilo_ingesta(uid):
                     _avisar(f"⚠️ La ingesta lleva 3 fallos seguidos:\n"
                             f"<code>{type(ex).__name__}: {str(ex)[:300]}</code>")
 
-            ahora = datetime.now()
+            ahora = fechas.ahora()
             if proximo_resumen and ahora >= proximo_resumen:
                 try:
                     chat = config.get('TELEGRAM_CHAT_ID_JUAN')
@@ -112,7 +115,6 @@ def hilo_ingesta(uid):
 
             if proxima_concil and ahora >= proxima_concil:
                 try:
-                    import conciliador
                     log('conciliar', 'cruzando extractos...')
                     conciliador.correr(cx, dry_run=not EN_SERIO)
                 except Exception as ex:
@@ -134,21 +136,13 @@ def limpiar_cola(cx):
     nacer, pero las filas que ya quedaron mal hay que arreglarlas.
     """
     marca = demonio.marca_de_agua()
-    viejos = cx.execute(
-        """UPDATE pendientes SET estado = 'descartado', pregunta = NULL,
-           decidido_por = 'anterior_a_la_marca_de_agua'
-           WHERE estado IN ('nuevo', 'error') AND fecha IS NOT NULL
-             AND fecha < ?""", (marca,)).rowcount
-    sinfecha = cx.execute(
-        """UPDATE pendientes SET estado = 'descartado', pregunta = NULL,
-           decidido_por = 'sin_fecha'
-           WHERE estado IN ('nuevo', 'error') AND fecha IS NULL""").rowcount
-    cx.commit()
+    alm = db.almacen(cx)
+    viejos = alm.descartar_anteriores_a(marca)
+    sinfecha = alm.descartar_sin_fecha()
     if viejos or sinfecha:
         log('limpieza', f"saque de la cola {viejos} anteriores a {marca} "
                         f"y {sinfecha} sin fecha")
-    abiertas = cx.execute(
-        'SELECT count(*) FROM v_por_preguntar').fetchone()[0]
+    abiertas = alm.contar_por_preguntar()
     log('inicio', f"preguntas abiertas: {abiertas}")
 
 
@@ -160,7 +154,7 @@ def _proxima_hora(hhmm):
         h, m = [int(x) for x in str(hhmm).split(':')[:2]]
     except (ValueError, IndexError):
         return None
-    ahora = datetime.now()
+    ahora = fechas.ahora()
     objetivo = ahora.replace(hour=h, minute=m, second=0, microsecond=0)
     if objetivo <= ahora:
         objetivo += timedelta(days=1)
@@ -174,10 +168,8 @@ def hilo_bot():
     try:
         bot._asegurar_tabla_sug(cx)
         bot._asegurar_tabla_preguntas(cx)
-        try:
+        with contextlib.suppress(Exception):
             telegram.poner_comandos()
-        except Exception:
-            pass
         log('bot', f"escuchando como @{telegram.yo().get('username')}")
         while not _parar.is_set():
             try:
@@ -207,7 +199,8 @@ def main(argv=None):
                     help='publicar de verdad, sin importar el .env')
     a = ap.parse_args(argv)
 
-    global EN_SERIO
+    # La bandera es de proceso: la leen el publicador y el bot.
+    global EN_SERIO  # noqa: PLW0603
     if a.en_serio:
         EN_SERIO = True
 
@@ -215,7 +208,7 @@ def main(argv=None):
     cx = db.conectar()
     uid, _ = demonio.paso_asegurar_usuario(cx)
 
-    n = cx.execute('SELECT count(*) FROM reglas').fetchone()[0]
+    n = db.almacen(cx).contar_reglas()
     if n == 0:
         log('inicio', 'sembrando reglas desde Firefly (primera vez)...')
         demonio.paso_sembrar(cx, uid)
@@ -240,10 +233,8 @@ def main(argv=None):
         log('inicio', 'apagando...')
         _parar.set()
     for s in (signal.SIGTERM, signal.SIGINT):
-        try:
+        with contextlib.suppress(ValueError, AttributeError):
             signal.signal(s, apagar)
-        except (ValueError, AttributeError):
-            pass
 
     hilos = [
         threading.Thread(target=hilo_ingesta, args=(uid,), name='ingesta',

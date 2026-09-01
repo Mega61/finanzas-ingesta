@@ -81,6 +81,23 @@ ignore = [
 "tests/*" = ["T20", "ARG"]
 "tests/unidad/test_fechas.py" = ["T20", "ARG", "DTZ001"]
 
+# Los modulos planos de la raiz todavia no se han movido a src/. Se revisan con
+# las mismas reglas menos estas cuatro, que son deuda conocida y mecanica:
+#
+#   T20     son CLI: imprimen porque es su interfaz
+#   PLC0415 quedan tres imports diferidos a proposito (msal, pdfplumber) y los
+#           de los bloques __main__
+#   PTH     os.path -> pathlib: ~90 cambios mecanicos, sin efecto en el
+#           comportamiento. Se hacen al mover cada modulo a src/
+#   ARG001  parametros que se conservan para no romper firmas de llamadas
+#
+# La lista esta aqui, y no en un `# noqa` por linea, para que se vea cuanto
+# falta. Todo lo demas SI falla el CI.
+"*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
+"parsers/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
+"ingesta/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
+"pruebas/*.py" = ["T20", "PLC0415", "PTH", "ARG001", "ARG002"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["finanzas"]
 

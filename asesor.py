@@ -13,11 +13,15 @@ le falta, no estimarlo.
 """
 import os
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import contextlib
+
+import clasificador
 import firefly
+import ia
 import presupuestos
 
 from finanzas.dominio import dinero as _dinero
@@ -57,7 +61,7 @@ def saldos():
 
 def gasto_del_mes(cuando=None):
     """Gasto de este mes por categoria, y el total."""
-    hoy = cuando or date.today()
+    hoy = cuando or _fechas.hoy()
     ini, fin = hoy.replace(day=1), _fin_de_mes(hoy)
     porcat = {}
     total = 0.0
@@ -82,7 +86,6 @@ def gasto_del_mes(cuando=None):
 
 def cortes_de_tarjeta():
     """Cuando corta cada tarjeta, para saber a que extracto va una compra."""
-    import clasificador
     salida = []
     for p in clasificador.productos():
         if p['clase'] != 'tarjeta' or p['hasta']:
@@ -97,7 +100,7 @@ def obligaciones_fijas(meses=3):
     Se saca de lo que efectivamente se pago los ultimos meses, no de una lista
     escrita a mano que se desactualiza.
     """
-    hoy = date.today()
+    hoy = _fechas.hoy()
     desde = (hoy.replace(day=1) - timedelta(days=31 * meses)).replace(day=1)
     porcat = {}
     for t in firefly.get_all(f'/api/v1/transactions?start={desde}&end={hoy}'):
@@ -110,10 +113,8 @@ def obligaciones_fijas(meses=3):
                 continue
             mes = (s.get('date') or '')[:7]
             porcat.setdefault(c, {})
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 porcat[c][mes] = porcat[c].get(mes, 0.0) + abs(float(s.get('amount') or 0))
-            except (TypeError, ValueError):
-                pass
     salida = []
     for c, meses_d in porcat.items():
         if not meses_d:
@@ -128,7 +129,7 @@ def armar_contexto():
     """Todo lo que el asesor necesita saber, en un dict."""
     act, deu = saldos()
     return {
-        'hoy': str(date.today()),
+        'hoy': str(_fechas.hoy()),
         'presupuestos': presupuestos.estado(),
         'gasto_mes': gasto_del_mes(),
         'activos': act,
@@ -207,7 +208,6 @@ def preguntar(pregunta, historial=None, ctx_texto=None):
 
     Devuelve el texto de la respuesta, o levanta ia.SinIA.
     """
-    import ia
 
     ctx_texto = ctx_texto if ctx_texto is not None else contexto_en_texto()
     contenidos = []

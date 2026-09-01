@@ -30,8 +30,8 @@ def _leer(ruta):
     if not os.path.exists(ruta):
         return d
     with open(ruta, encoding='utf-8') as fh:
-        for linea in fh:
-            linea = linea.strip()
+        for cruda in fh:
+            linea = cruda.strip()
             if not linea or linea.startswith('#') or '=' not in linea:
                 continue
             k, v = linea.split('=', 1)

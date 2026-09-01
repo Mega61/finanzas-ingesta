@@ -15,9 +15,10 @@ Tres cosas:
 """
 import os
 import sys
-from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import contextlib
 
 import firefly
 
@@ -51,7 +52,7 @@ def estado(cuando=None):
     Devuelve [{'nombre','limite','gastado','queda','pct'}]. `limite` es None si
     no hay tope puesto para el periodo: ahi no se puede hablar de reventar.
     """
-    hoy = cuando or date.today()
+    hoy = cuando or _fechas.hoy()
     ini, fin = hoy.replace(day=1), _fin_de_mes(hoy)
     ruta = f"/api/v1/budgets?start={ini}&end={fin}"
 
@@ -60,10 +61,8 @@ def estado(cuando=None):
         for L in firefly.get_all(f"/api/v1/budget-limits?start={ini}&end={fin}"):
             a = L['attributes']
             bid = str(a.get('budget_id'))
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 limites[bid] = limites.get(bid, 0.0) + abs(float(a.get('amount') or 0))
-            except (TypeError, ValueError):
-                pass
     except firefly.ApiError:
         pass
 
@@ -74,10 +73,8 @@ def estado(cuando=None):
             continue
         gastado = 0.0
         for s in (a.get('spent') or []):
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 gastado += abs(float(s.get('sum') or 0))
-            except (TypeError, ValueError):
-                pass
         lim = limites.get(str(b['id']))
         salida.append({
             'id': b['id'],

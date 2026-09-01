@@ -15,10 +15,12 @@ Tres redes de seguridad, porque aqui es donde se puede hacer dano de verdad:
    cuenta con el mismo monto y fecha cercana antes de crear.
 """
 import hashlib
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 
 import db
 import firefly
+
+from finanzas.dominio import fechas
 
 ETIQUETA = 'sin-confirmar'
 ETIQUETA_ORIGEN = 'ingesta-automatica'
@@ -36,14 +38,8 @@ def external_id(message_id, indice=0):
 
 
 def _a_fecha(v):
-    if isinstance(v, date):
-        return v
-    for f in ('%Y-%m-%d', '%Y-%m-%dT%H:%M:%S'):
-        try:
-            return datetime.strptime(str(v)[:19], f).date()
-        except (ValueError, TypeError):
-            pass
-    return None
+    """Una fecha, venga como sea. La logica esta en el dominio."""
+    return fechas.a_fecha(v)
 
 
 # ------------------------------------------------------- indice anti-duplicado
@@ -186,13 +182,14 @@ def publicar_uno(cx, p, idx=None, dry_run=True):
         db.bitacora(cx, 'crear', usuario_id=p['usuario_id'], pendiente_id=p['id'],
                     firefly_id=fid, payload=payload, ok=True)
         cx.commit()
-        return 'creado', f"firefly_id={fid}"
     except firefly.ApiError as ex:
         db.pendiente_actualizar(cx, p['id'], estado='error')
         db.bitacora(cx, 'crear', usuario_id=p['usuario_id'], pendiente_id=p['id'],
                     payload=payload, respuesta=str(ex), ok=False)
         cx.commit()
         return 'error', str(ex)[:200]
+    else:
+        return 'creado', f"firefly_id={fid}"
 
 
 def publicar_pendientes(cx, desde=None, dry_run=True, limite=500):

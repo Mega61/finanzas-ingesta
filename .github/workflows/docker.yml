@@ -38,11 +38,16 @@ jobs:
           # que toda variable que el codigo lee llegue al contenedor
           python pruebas/test_config.py
 
-      - name: Lint del dominio
+      - name: Lint
         run: |
-          # El codigo viejo todavia tiene deuda; el dominio nuevo se mantiene
-          # limpio desde el dia uno.
-          python -m ruff check src tests
+          # Ya cubre TODO el codigo, no solo src/. La deuda que queda esta
+          # declarada como per-file-ignores en pyproject.toml, a la vista, y
+          # cualquier cosa fuera de esa lista falla el CI.
+          #
+          # Extenderlo aqui encontro de una un `fechas` sin importar en
+          # asesor.py y presupuestos.py: /asesor se caia al llamarlo, y ningun
+          # import ni prueba lo veia porque estaba dentro de una funcion.
+          python -m ruff check src tests *.py parsers ingesta pruebas
           python -m ruff format --check src tests
 
       - uses: docker/setup-buildx-action@v3
@@ -85,4 +90,4 @@ jobs:
         run: |
           docker run --rm -e FINANZAS_DATOS=/datos \
             ${{ steps.img.outputs.ref }}:latest \
-            python -c "import sys; sys.path.insert(0,'/app/automatizacion'); import finanzas.dominio.conciliacion, finanzas.dominio.dinero, finanzas.dominio.fechas, finanzas.dominio.texto; import config, db, firefly, clasificador, publicador, conciliador, bot, telegram, ia, interprete, asesor, presupuestos, taxonomia, demonio, servicio; print('paquete + modulos planos: todo importa')"
+            python -c "import sys; sys.path.insert(0,'/app/automatizacion'); import finanzas.dominio.conciliacion, finanzas.dominio.dinero, finanzas.dominio.fechas, finanzas.dominio.texto; from finanzas.adaptadores.almacen import Almacen; import config, db, firefly, clasificador, publicador, conciliador, bot, telegram, ia, interprete, asesor, presupuestos, taxonomia, demonio, servicio; print('paquete + modulos planos: todo importa')"

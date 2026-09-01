@@ -9,11 +9,14 @@ nada en Firefly ni manda correos. Lo unico que escribe es el token de Graph en
 automatizacion/.cache_graph.json, y un mensaje de prueba de Telegram si le
 pasas el chat_id.
 """
+import contextlib
 import json
 import os
 import sys
 import urllib.error
 import urllib.request
+
+import firefly as F
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
@@ -66,15 +69,15 @@ def probar_firefly():
         aviso("sin configurar (FIREFLY_URL / FIREFLY_TOKEN)")
         return False
     try:
-        import firefly as F
         ok(F.whoami())
         cuentas = F.accounts_index()
         activos = [n for n, d in cuentas.items() if d['type'] in ('asset', 'liabilities')]
         ok(f"{len(cuentas)} cuentas visibles, {len(activos)} entre asset y liabilities")
-        return True
     except Exception as ex:
         mal(f"{type(ex).__name__}: {ex}")
         return False
+    else:
+        return True
 
 
 # ----------------------------------------------------------------------- Graph
@@ -94,7 +97,8 @@ def probar_graph():
     autoridad = f"https://login.microsoftonline.com/{E.get('GRAPH_AUTHORITY', 'consumers')}"
     cache = msal.SerializableTokenCache()
     if os.path.exists(CACHE_GRAPH):
-        cache.deserialize(open(CACHE_GRAPH, encoding='utf-8').read())
+        with open(CACHE_GRAPH, encoding='utf-8') as fh:
+            cache.deserialize(fh.read())
 
     app = msal.PublicClientApplication(cid, authority=autoridad, token_cache=cache)
     scopes = ['Mail.Read']
@@ -145,11 +149,12 @@ def probar_graph():
         if not msgs:
             aviso("no encontro alertas. Revisa que este buzon sea el que recibe los correos"
                   " del banco, o que no esten en una carpeta excluida de la busqueda.")
-        return True
     except urllib.error.HTTPError as ex:
         mal(f"no pude leer correo: HTTP {ex.code} {ex.read().decode('utf-8', 'replace')[:200]}")
         nota("si dice 'insufficient privileges', falta el permiso Mail.Read en Entra")
         return False
+    else:
+        return True
 
 
 # ------------------------------------------------------------------ Gmail IMAP
@@ -179,16 +184,14 @@ def probar_gmail():
     ok(f"login correcto como {usuario}")
     try:
         M.select('INBOX', readonly=True)
-        typ, datos = M.search(None, '(ALL)')
+        _typ, datos = M.search(None, '(ALL)')
         total = len(datos[0].split()) if datos and datos[0] else 0
         ok(f"INBOX accesible, {total} mensajes")
     except Exception as ex:
         mal(f"no pude leer INBOX: {ex}")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             M.logout()
-        except Exception:
-            pass
     return True
 
 

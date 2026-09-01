@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import firefly
 
 from finanzas.dominio import dinero as _dinero
+from finanzas.dominio import fechas
 
 
 def _plata(v):
@@ -101,8 +102,7 @@ def buscar_duplicados():
     vistos = collections.defaultdict(list)
     ext = collections.defaultdict(list)
     ceros, futuras, mismo_lado = [], [], []
-    from datetime import date
-    hoy = str(date.today())
+    hoy = str(fechas.hoy())
 
     for t in firefly.get_all('/api/v1/transactions'):
         for s in t['attributes']['transactions']:
@@ -126,17 +126,17 @@ def buscar_duplicados():
     dups = {k: v for k, v in vistos.items() if len(v) > 1}
     if not dups:
         print("  ninguna")
-    for (f, v, si, di), items in sorted(dups.items(), key=lambda x: -x[0][1])[:20]:
+    for (f, v, _si, _di), items in sorted(dups.items(), key=lambda x: -x[0][1])[:20]:
         print(f"  {f}  {_plata(v):>16}  x{len(items)}  ids={[i for i, _ in items]}")
         for _, d in items[:3]:
             print(f"        «{d}»")
 
     print("\n3. external_id REPETIDO")
     rep = {k: v for k, v in ext.items() if len(v) > 1}
-    print(f"  {'ninguno' if not rep else rep}")
+    print(f"  {rep if rep else 'ninguno'}")
 
     print("\n4. TRANSFERENCIAS CON LA MISMA CUENTA A LOS DOS LADOS")
-    print(f"  {'ninguna' if not mismo_lado else mismo_lado}")
+    print(f"  {mismo_lado if mismo_lado else 'ninguna'}")
 
     print("\n5. MONTO CERO O FECHA FUTURA")
     print(f"  monto cero: {len(ceros)}" + (f"  {ceros[:5]}" if ceros else ""))

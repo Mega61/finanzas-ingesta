@@ -16,11 +16,13 @@ rompe los reportes que ya existen.
 import argparse
 import os
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import firefly
+
+from finanzas.dominio import fechas
 
 # Cuanto hacia atras se toca. Mas viejo que esto se deja quieto.
 DIAS = 31
@@ -117,7 +119,7 @@ def planear(desde):
             if cat in A_ETIQUETA:
                 etq, nueva = A_ETIQUETA[cat]
                 if etq not in tags:
-                    tags = tags + [etq]
+                    tags = [*tags, etq]
                     cambios['tags'] = tags
                 nueva = nueva or categoria_por_comercio(comercio)
                 if nueva:
@@ -154,7 +156,7 @@ def main():
     ap.add_argument('--dias', type=int, default=DIAS)
     a = ap.parse_args()
 
-    desde = (date.today() - timedelta(days=a.dias)).isoformat()
+    desde = (fechas.hoy() - timedelta(days=a.dias)).isoformat()
     print(f"ventana: desde {desde} (ultimos {a.dias} dias)")
     print("nada mas viejo se toca\n")
 

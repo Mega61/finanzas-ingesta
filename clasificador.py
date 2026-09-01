@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Decide a que cuenta, categoria y presupuesto va cada movimiento.
 
 Dos trabajos distintos:
@@ -13,13 +12,15 @@ Dos trabajos distintos:
 import csv
 import os
 import re
-import unicodedata
-from datetime import date, datetime
 
+import config as _cfg
 import db
+import firefly
+import taxonomia
 
-from finanzas.dominio import texto as _texto
+from finanzas.adaptadores.almacen import Almacen
 from finanzas.dominio import fechas as _fechas
+from finanzas.dominio import texto as _texto
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 PRODUCTOS = os.path.join(AQUI, 'productos.csv')
@@ -67,7 +68,6 @@ def _ruta_productos():
       2. el volumen de datos (por si se monto ahi)
       3. al lado del codigo (que es como funciona en desarrollo)
     """
-    import config as _cfg
 
     inline = _cfg.get('PRODUCTOS_CSV')
     if inline and ',' in inline:
@@ -99,7 +99,8 @@ def _ruta_productos():
 
 
 def productos():
-    global _PROD
+    # Cache de modulo: la lista se lee del disco una vez por proceso.
+    global _PROD  # noqa: PLW0603
     if _PROD is None:
         _PROD = []
         ruta = _ruta_productos()
@@ -184,7 +185,6 @@ def sembrar_desde_firefly(cx, usuario_id):
     Se lee de la API, no de un CSV local, para que funcione igual dentro del
     contenedor.
     """
-    import firefly
 
     porclave = {}
 
@@ -236,7 +236,6 @@ def sembrar_desde_firefly(cx, usuario_id):
     def top(d):
         return max(d, key=d.get) if d else None
 
-    import taxonomia
     n = 0
     for clave, d in porclave.items():
         cat, pres = top(d['cat']), top(d['pres'])
@@ -297,9 +296,7 @@ class Indice:
     """
 
     def __init__(self, cx, usuario_id):
-        filas = cx.execute(
-            """SELECT * FROM reglas WHERE (usuario_id = ? OR usuario_id IS NULL)
-               AND es_regex = 0 AND patron <> ''""", (usuario_id,)).fetchall()
+        filas = Almacen(cx).reglas(usuario_id)
 
         self.exacto = {}
         for r in filas:
@@ -434,7 +431,6 @@ def clasificar(cx, usuario_id, evento, indice=None):
     clave = normalizar(evento.get('contraparte') or evento.get('descripcion'))
     regla, conf = idx.buscar(clave)
     if regla is not None:
-        import taxonomia
         # Una regla vieja puede apuntar a una categoria que ya se retiro por ser
         # un atributo ('Viaticos') o que se fusiono. Se resuelve aqui para que
         # el historico no siga reinyectando la taxonomia vieja.
@@ -462,7 +458,6 @@ def clasificar(cx, usuario_id, evento, indice=None):
 # respuesta del propio usuario, no de una heuristica. Al principio pregunta
 # harto, pero cada comercio se pregunta UNA vez y despues baja mucho.
 def _estricto():
-    import config as _cfg
     v = str(_cfg.get('CLASIFICADOR_ESTRICTO', 'si')).lower()
     return v in ('1', 'si', 'sí', 'yes', 'true')
 

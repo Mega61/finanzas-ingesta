@@ -16,18 +16,25 @@ import argparse
 import os
 import sys
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 # Funciona corriendo `python demonio.py` desde la carpeta, y tambien
 # `python -m automatizacion.demonio` desde arriba. En el contenedor esto ya
 # viene por PYTHONPATH, pero no estorba.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import email as _email
+from email import policy
+
 import clasificador
+import conciliador
 import config
 import db
 import publicador
+from ingesta import graph
 from parsers import bancolombia_alertas as alertas
+
+from finanzas.dominio import fechas
 
 
 def marca_de_agua():
@@ -35,23 +42,23 @@ def marca_de_agua():
     v = config.get('INGESTA_DESDE')
     if v:
         return str(v)[:10]
-    return str(date.today())
+    return str(fechas.hoy())
 
 
 # --------------------------------------------------------------------- pasos
 
 def paso_estado(cx):
-    u = cx.execute('SELECT id, nombre, telegram_chat_id FROM usuarios').fetchall()
+    alm = db.almacen(cx)
+    u = alm.usuarios()
     print(f"base            : {db.ruta()}")
     print(f"marca de agua   : {marca_de_agua()}  (no se publica nada anterior)")
     print(f"usuarios        : {len(u)}")
     for x in u:
         print(f"   #{x['id']} {x['nombre']}  telegram={x['telegram_chat_id'] or 'sin vincular'}")
     for tabla in ('buzones', 'correos_crudos', 'pendientes', 'reglas', 'bitacora'):
-        n = cx.execute(f'SELECT count(*) FROM {tabla}').fetchone()[0]
+        n = alm.contar_por_tabla(tabla)
         print(f"{tabla:16}: {n}")
-    sin = cx.execute('SELECT count(*) FROM correos_crudos WHERE procesado_en IS NULL'
-                     ).fetchone()[0]
+    sin = alm.contar_correos_sin_procesar()
     print(f"{'sin procesar':16}: {sin}")
     filas = db.resumen(cx)
     if filas:
@@ -59,7 +66,7 @@ def paso_estado(cx):
         for f in filas:
             print(f"   {f['estado']:12} pregunta={f['pregunta']:10} n={f['n']:5} "
                   f"total={f['total'] or 0:>14,.0f}")
-    ori = cx.execute('SELECT origen, count(*) n FROM reglas GROUP BY origen').fetchall()
+    ori = alm.reglas_por_origen()
     if ori:
         print("\nreglas por origen: " + ', '.join(f"{r['origen']}={r['n']}" for r in ori))
 
@@ -81,15 +88,13 @@ def paso_asegurar_usuario(cx):
 def paso_sembrar(cx, uid):
     n, splits = clasificador.sembrar_desde_firefly(cx, uid)
     print(f"  {splits} movimientos leidos de Firefly -> {n} reglas")
-    ori = cx.execute('SELECT origen, count(*) n FROM reglas GROUP BY origen').fetchall()
+    ori = db.almacen(cx).reglas_por_origen()
     print("  por origen: " + ', '.join(f"{r['origen']}={r['n']}" for r in ori))
     return n
 
 
 def paso_bajar(cx, tope=None, interactivo=False, dias=None):
-    from ingesta import graph
-    buzones = cx.execute("SELECT * FROM buzones WHERE proveedor = 'graph' AND activo = 1"
-                         ).fetchall()
+    buzones = db.almacen(cx).buzones('graph')
     if not buzones:
         print("  no hay buzones de Graph configurados")
         return 0
@@ -102,7 +107,9 @@ def paso_bajar(cx, tope=None, interactivo=False, dias=None):
         atras = dias or int(config.get('INGESTA_DIAS_INICIAL', '30'))
         if b['ultimo_sync'] and not dias:
             atras = 2   # ya sincronizo antes: solo lo reciente, con holgura
-        desde = (datetime.utcnow() - timedelta(days=atras)).strftime(
+        # Graph filtra en UTC. utcnow() esta deprecado en 3.12 y devuelve un
+        # naive que solo por convencion se lee como UTC.
+        desde = (datetime.now(UTC) - timedelta(days=atras)).strftime(
             '%Y-%m-%dT%H:%M:%SZ')
         try:
             nuevos, rep = graph.bajar(cx, b['id'], desde=desde, tope=tope,
@@ -127,16 +134,13 @@ def paso_importar(cx, uid, carpeta=None):
     conciliacion, y para que el parser se pueda re-correr sobre todo el
     historico sin volver al buzon.
     """
-    import email as _email
     import glob
-    from email import policy
 
     carpeta = carpeta or os.path.join(config.RAIZ, 'Mensajes de Bancolombia')
     if not os.path.isdir(carpeta):
         print(f"  no existe {carpeta}")
         return 0
-    b = cx.execute("SELECT id FROM buzones WHERE usuario_id = ? ORDER BY id LIMIT 1",
-                   (uid,)).fetchone()
+    b = db.almacen(cx).primer_buzon(uid)
     if not b:
         print("  no hay buzon; corre primero cualquier otra accion")
         return 0
@@ -252,8 +256,7 @@ def paso_reclasificar(cx, uid):
     Sirve cuando el clasificador mejora: lo ya publicado no se toca, pero lo
     que sigue abierto se reevalua con las reglas nuevas.
     """
-    filas = cx.execute("""SELECT * FROM pendientes
-                          WHERE estado IN ('nuevo', 'error')""").fetchall()
+    filas = db.almacen(cx).pendientes_por_estado('nuevo', 'error')
     if not filas:
         print("  nada por reclasificar")
         return 0
@@ -331,12 +334,11 @@ def main(argv=None):
         elif a.accion == 'reclasificar':
             paso_reclasificar(cx, uid)
         elif a.accion == 'conciliar':
-            import conciliador
             conciliador.correr(cx, carpeta=a.carpeta, dry_run=not a.en_serio)
         elif a.accion == 'publicar':
             paso_publicar(cx, en_serio=a.en_serio, desde=a.desde)
         elif a.accion == 'ciclo':
-            n = cx.execute('SELECT count(*) FROM reglas').fetchone()[0]
+            n = db.almacen(cx).contar_reglas()
             if n == 0:
                 print("sembrando reglas (primera vez)...")
                 paso_sembrar(cx, uid)

@@ -17,15 +17,18 @@ el mas cercano. Es el metodo que ya funciono en la reconciliacion manual.
 """
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import clasificador
 import config
 import db
 import firefly
 from parsers import extracto_tarjeta
 from publicador import ETIQUETA
+
+from finanzas.dominio import fechas
 
 # Se prueba en este orden y gana el primer match mas cercano.
 TOLERANCIAS = (0, 1, 2, 3, 5, 8, 20, 45)
@@ -37,14 +40,8 @@ GRACIA_FANTASMA = 45
 
 
 def _f(v):
-    if isinstance(v, date):
-        return v
-    for fmt in ('%Y-%m-%d', '%Y-%m-%dT%H:%M:%S'):
-        try:
-            return datetime.strptime(str(v)[:19], fmt).date()
-        except (ValueError, TypeError):
-            pass
-    return None
+    """Una fecha, venga como sea. La logica esta en el dominio."""
+    return fechas.a_fecha(v)
 
 
 # ------------------------------------------------------------ emparejamiento
@@ -176,7 +173,6 @@ def emparejar(pendientes, movimientos, tasa_respaldo=None):
 def _parecido(p, m):
     """¿La descripcion del extracto y la contraparte de la alerta hablan del
     mismo comercio? Basta con que compartan una palabra de 4+ letras."""
-    import clasificador
     a = set(clasificador.normalizar(p['contraparte'] or p['descripcion']).split())
     b = set(clasificador.normalizar(m.descripcion).split())
     return any(len(t) >= 4 for t in (a & b))
@@ -198,11 +194,8 @@ def tasa_global_implicita(cx, extractos):
                if (m.moneda or 'COP').upper() == 'USD' and m.valor]
         if not usd:
             continue
-        pend = cx.execute("""SELECT * FROM pendientes
-                             WHERE instrumento = ? AND moneda = 'COP'
-                               AND fecha BETWEEN ? AND ?""",
-                          (ext.instrumento, str(ext.desde),
-                           str(ext.hasta))).fetchall()
+        pend = db.almacen(cx).pendientes_del_instrumento(
+            ext.instrumento, str(ext.desde), str(ext.hasta), moneda='COP')
         for p in pend:
             fp = _f(p['fecha'])
             vp = abs(float(p['valor']))
@@ -227,12 +220,8 @@ def conciliar_extracto(cx, ext, dry_run=True, tasa_respaldo=None):
     if not ext.desde or not ext.hasta:
         return {'sin_periodo': 1}
 
-    pend = cx.execute("""SELECT * FROM pendientes
-                         WHERE estado = 'publicado'
-                           AND instrumento = ?
-                           AND fecha BETWEEN ? AND ?
-                         ORDER BY fecha""",
-                      (ext.instrumento, str(ext.desde), str(ext.hasta))).fetchall()
+    pend = db.almacen(cx).pendientes_del_instrumento(
+        ext.instrumento, str(ext.desde), str(ext.hasta), estado='publicado')
     if not pend:
         return {}
 
@@ -262,7 +251,7 @@ def conciliar_extracto(cx, ext, dry_run=True, tasa_respaldo=None):
                 cx.commit()
 
     # fantasmas: el extracto cubre la fecha y no lo trajo
-    limite = date.today() - timedelta(days=GRACIA_FANTASMA)
+    limite = fechas.hoy() - timedelta(days=GRACIA_FANTASMA)
     for p in sin:
         fp = _f(p['fecha'])
         if fp and fp > limite:

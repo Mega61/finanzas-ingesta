@@ -171,6 +171,45 @@ CREATE TABLE IF NOT EXISTS bitacora (
 );
 
 
+-- ------------------------------------------------ estado de la conversacion
+-- Estas tres tablas las creaba bot.py a mano, en tiempo de ejecucion, con
+-- CREATE TABLE IF NOT EXISTS dentro de una funcion. Eso es fragil: el esquema
+-- dejaba de ser la fuente de verdad y no habia forma de saber que existian sin
+-- leer el codigo del bot.
+
+-- Las opciones que se ofrecieron en los botones de una pregunta. Hacen falta
+-- porque el callback de Telegram solo aguanta 64 bytes: viaja el INDICE de la
+-- opcion, no su texto, y hay que poder resolverlo despues.
+CREATE TABLE IF NOT EXISTS sugerencias (
+  pendiente_id INTEGER PRIMARY KEY REFERENCES pendientes(id) ON DELETE CASCADE,
+  opciones     TEXT NOT NULL
+);
+
+-- Lo que se entendio de una respuesta en texto libre, esperando que el usuario
+-- la confirme. No se aplica sola: una interpretacion equivocada aplicada en
+-- silencio es peor que un mensaje mas.
+CREATE TABLE IF NOT EXISTS propuestas (
+  pendiente_id      INTEGER PRIMARY KEY REFERENCES pendientes(id) ON DELETE CASCADE,
+  categoria         TEXT,
+  presupuesto       TEXT,
+  comercio          TEXT,
+  pedir_presupuesto INTEGER NOT NULL DEFAULT 0
+);
+
+-- Que mensaje de Telegram corresponde a que movimiento. Sin esto, contestar
+-- por texto resolvia la pregunta MAS RECIENTE en vez de la que se estaba
+-- contestando: con seis abiertas, responder la tercera resolvia la sexta.
+CREATE TABLE IF NOT EXISTS preguntas_enviadas (
+  chat_id      TEXT    NOT NULL,
+  mensaje_id   INTEGER NOT NULL,
+  pendiente_id INTEGER NOT NULL REFERENCES pendientes(id) ON DELETE CASCADE,
+  PRIMARY KEY (chat_id, mensaje_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_preguntas_pendiente
+  ON preguntas_enviadas (pendiente_id);
+
+
 -- ------------------------------------------------------------------- vistas
 
 -- Lo que el bot tiene que preguntar ahora mismo. Incluye cosas ya publicadas

@@ -8,6 +8,7 @@ OJO: estas alertas NO son fuente de verdad para montos. Uber preautoriza el
 precio estimado y despues cobra la tarifa real. Ver 09_ALERTAS_Y_UBERS.md.
 Por eso todo evento que salga de aqui es provisional.
 """
+import contextlib
 import email
 import email.utils
 import re
@@ -227,10 +228,8 @@ def _f9(m, msg):
 def _f10(m, msg):
     # esta plantilla no trae fecha en el texto: se usa la del correo
     fecha = None
-    try:
+    with contextlib.suppress(Exception):
         fecha = email.utils.parsedate_to_datetime(msg['date']).date()
-    except Exception:
-        pass
     # la plata sale de la cuenta y abona la deuda de la tarjeta: es un traslado
     ev = Evento('pago_tarjeta', fecha, None, 'COP',
                 -parse_monto(m.group(1)), None, 'cuenta',
@@ -289,7 +288,7 @@ def parse_texto(texto, msg=None, asunto=None):
     motivo = motivo_ignorar(_normalizar(f"{asunto or ''} {texto}"))
     if motivo:
         raise Descartado(motivo)
-    for nombre, rx, fn in _P:
+    for _nombre, rx, fn in _P:
         m = rx.search(t)
         if m:
             ev = fn(m, msg if msg is not None else {})

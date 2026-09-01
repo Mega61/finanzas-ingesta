@@ -29,7 +29,7 @@ PERIODO = re.compile(r'Desde:\s*(\d{2}/\d{2}/\d{4})\s*Hasta:\s*(\d{2}/\d{2}/\d{4
 MESES = {'ene': 1, 'feb': 2, 'mar': 3, 'abr': 4, 'may': 5, 'jun': 6,
          'jul': 7, 'ago': 8, 'sep': 9, 'set': 9, 'oct': 10, 'nov': 11, 'dic': 12}
 PERIODO_ES = re.compile(
-    r'(\d{1,2})\s+([a-z]{3})\.?\s*[-–]\s*(\d{1,2})\s+([a-z]{3})\.?\s*(\d{4})', re.I)
+    r'(\d{1,2})\s+([a-z]{3})\.?\s*[-–]\s*(\d{1,2})\s+([a-z]{3})\.?\s*(\d{4})', re.I)  # noqa: RUF001
 
 
 def _periodo_es(txt):
@@ -92,7 +92,8 @@ def num_col(s):
 
 
 def _fecha(s):
-    return datetime.datetime.strptime(s, '%d/%m/%Y').date()
+    # El extracto trae dd/mm/aaaa, sin hora ni zona: solo interesa el dia.
+    return datetime.datetime.strptime(s, '%d/%m/%Y').date()  # noqa: DTZ007
 
 
 def parse_pdf(ruta, clave):

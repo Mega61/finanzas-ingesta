@@ -25,6 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import clasificador
 import db
+import firefly
+import ia
+import presupuestos
+import taxonomia
+
+from finanzas.adaptadores.almacen import Almacen
 
 # Formas coloquiales -> nombre de la categoria en Firefly. La clave es el
 # nombre normalizado de la categoria, para que resuelva contra la lista real.
@@ -171,9 +177,6 @@ def _senal_presupuesto(texto):
 
 def catalogo(cx, usuario_id):
     """Lo que existe en el Firefly del usuario, para restringir la respuesta."""
-    import firefly
-    import presupuestos
-    import taxonomia
     cats = sorted({c['attributes']['name']
                    for c in firefly.get_all('/api/v1/categories')})
     # ni la heuristica ni Gemini pueden proponer una categoria retirada
@@ -193,11 +196,7 @@ def similares(cx, usuario_id, pendiente, texto, limite=12):
     tk = _tokens(texto) | _tokens(pendiente['contraparte'] or '')
     if not tk:
         return []
-    filas = cx.execute(
-        """SELECT patron, categoria, presupuesto FROM reglas
-           WHERE categoria IS NOT NULL AND categoria <> ''
-             AND (usuario_id = ? OR usuario_id IS NULL)""",
-        (usuario_id,)).fetchall()
+    filas = Almacen(cx).reglas_con_categoria(usuario_id)
     puntuadas = []
     for r in filas:
         comunes = tk & _tokens(r['patron'])
@@ -287,7 +286,6 @@ def interpretar(cx, usuario_id, pendiente, texto, cat=None):
 
 def ia_disponible():
     try:
-        import ia
         return ia.disponible()
     except Exception:
         return False
@@ -295,7 +293,6 @@ def ia_disponible():
 
 def _con_gemini(cx, usuario_id, pendiente, texto, cat):
     try:
-        import ia
         if not ia.disponible():
             return None
         return ia.interpretar(
