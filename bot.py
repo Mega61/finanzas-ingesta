@@ -309,15 +309,27 @@ def _version_texto():
     return '\n'.join(lineas)
 
 
+# La descripcion de cada comando vive aqui, junto al nombre, y el texto de
+# ayuda se arma de esta tabla. Antes estaban separados y la ayuda solo
+# mencionaba tres de los siete: /presupuestos y /version existian sin que
+# nadie los supiera. Una prueba verifica que las dos listas coincidan.
+DESCRIPCIONES = (
+    ('/pendientes', 'lo que falta por clasificar'),
+    ('/resumen', 'cómo va la conciliación'),
+    ('/sinconfirmar', 'lo que está en Firefly sin confirmar'),
+    ('/presupuestos', 'cómo van los cinco presupuestos del mes'),
+    ('/version', 'qué código está corriendo'),
+    ('/ayuda', 'esto'),
+)
+
 AYUDA = (
     "<b>Qué hago</b>\n\n"
     "Leo las alertas de Bancolombia de tu correo, saco los movimientos y los "
     "meto a Firefly. Cuando no sé qué categoría poner, te pregunto acá.\n\n"
-    "Cada respuesta queda aprendida: un comercio se pregunta <b>una sola vez</b>.\n\n"
-    "<b>Comandos</b>\n"
-    "/pendientes — lo que falta por clasificar\n"
-    "/resumen — cómo va la conciliación\n"
-    "/sinconfirmar — lo que está en Firefly sin confirmar\n"
+    "Cada respuesta queda aprendida: un comercio se pregunta <b>una sola vez</b>."
+    "\n\nTambién me puedes escribir de corrido: «fue la comida de la gata en "
+    "Tierragro», o preguntarme si me alcanza para algo.\n\n"
+    "<b>Comandos</b>\n" + '\n'.join(f"{c} — {d}" for c, d in DESCRIPCIONES)
 )
 
 
@@ -361,109 +373,206 @@ def cmd_sinconfirmar(cx, chat):
 
 # --------------------------------------------------------------- el bucle
 
+class Toque:
+    """Un toque de boton, ya desarmado. `data` viene como 'accion:pid:idx'
+    porque callback_data solo aguanta 64 bytes: viaja el INDICE de la opcion,
+    no su texto."""
+
+    __slots__ = ('accion', 'chat', 'cq_id', 'cx', 'idx', 'mid', 'pid')
+
+    def __init__(self, cx, cq):
+        self.cx = cx
+        self.cq_id = cq['id']
+        self.chat = cq['message']['chat']['id']
+        self.mid = cq['message']['message_id']
+        self.accion, pid, idx = (cq.get('data') or '').split(':')
+        self.pid, self.idx = int(pid), int(idx)
+
+    def aviso(self, texto):
+        """El globito de confirmacion sobre el boton."""
+        telegram.responder_callback(self.cq_id, texto)
+
+    def reemplazar(self, texto):
+        """Cambia el mensaje de la pregunta por el resultado, para que el chat
+        no quede lleno de preguntas ya resueltas."""
+        telegram.editar(self.chat, self.mid, texto)
+
+    def resolver(self, etiqueta, **respuesta):
+        """El camino comun: aplicar la respuesta y reescribir el mensaje."""
+        p, detalle = aplicar_respuesta(self.cx, self.pid, **respuesta)
+        self.aviso(etiqueta)
+        if p is not None:
+            self.reemplazar(
+                f"✅ <b>{etiqueta}</b>\n{describir(p)}\n<i>{detalle}</i>")
+
+
+def _toque_categoria(t):
+    """Eligio una de las categorias sugeridas."""
+    sug = _leer_sugerencias(t.cx, t.pid)
+    cat = sug[t.idx] if t.idx < len(sug) else None
+    if not cat:
+        t.aviso('esa opción ya no está')
+        return
+    t.resolver(cat, categoria=cat)
+
+
+def _toque_descartar(t):
+    p, _ = aplicar_respuesta(t.cx, t.pid, descartar=True)
+    t.aviso('descartado')
+    if p is not None:
+        t.reemplazar(f"🚫 Descartado\n{describir(p)}")
+
+
+def _toque_borrar_fantasma(t):
+    """Confirmo que el movimiento nunca existio: se borra de Firefly."""
+    p = _a(t.cx).pendiente(t.pid)
+    if p is None:
+        t.aviso('ya no existe')
+        return
+    try:
+        if p['firefly_id']:
+            firefly.borrar(p['firefly_id'])
+        db.pendiente_actualizar(t.cx, t.pid, estado='fantasma', pregunta=None,
+                                decidido_por='usuario')
+        db.bitacora(t.cx, 'borrar', usuario_id=p['usuario_id'],
+                    pendiente_id=t.pid, firefly_id=p['firefly_id'],
+                    respuesta='fantasma confirmado por el usuario')
+        t.cx.commit()
+    except firefly.ApiError as ex:
+        t.aviso('no pude borrarlo')
+        telegram.enviar(t.chat, f"No pude borrarlo: {str(ex)[:200]}")
+    else:
+        t.aviso('borrado')
+        t.reemplazar(f"🗑 Borrado de Firefly\n{describir(p)}")
+
+
+def _toque_dejarlo(t):
+    """Es real, o el monto se queda como esta."""
+    p = _a(t.cx).pendiente(t.pid)
+    db.pendiente_actualizar(t.cx, t.pid, estado='confirmado', pregunta=None,
+                            decidido_por='usuario')
+    t.cx.commit()
+    t.aviso('listo, lo dejo')
+    if p is not None:
+        t.reemplazar(f"✅ Confirmado\n{describir(p)}")
+
+
+def _toque_aceptar_propuesta(t):
+    """Acepto lo que salio de interpretar su texto libre."""
+    pr = _leer_propuesta(t.cx, t.pid)
+    if pr is None:
+        t.aviso('esa propuesta ya no esta')
+        return
+    if pr['pedir_presupuesto']:
+        _preguntar_presupuesto(t.cx, t.pid, t.chat, pr)
+        t.aviso('falta el presupuesto')
+        return
+    t.resolver(pr['categoria'], categoria=pr['categoria'],
+               presupuesto=pr['presupuesto'], comercio=pr['comercio'])
+
+
+def _toque_presupuesto(t):
+    pr = _leer_propuesta(t.cx, t.pid)
+    nombres = _presupuestos_de(t.cx, t.pid)
+    elegido = nombres[t.idx] if t.idx < len(nombres) else None
+    if not elegido:
+        t.aviso('esa opcion ya no esta')
+        return
+    t.resolver(elegido, categoria=(pr['categoria'] if pr else None),
+               presupuesto=elegido, comercio=(pr['comercio'] if pr else None))
+
+
+def _toque_pedir_texto(t):
+    """Antes esto guardaba un marcador '__ESPERANDO_TEXTO__' en las sugerencias,
+    que nadie leia y que ademas pisaba las opciones reales: si despues tocabas
+    un boton, el indice ya no apuntaba a nada. Lo que de verdad hace falta es
+    atar ESTE mensaje al movimiento, para que la respuesta libre caiga en el
+    correcto."""
+    t.aviso('escribe la categoría')
+    eco = telegram.enviar(t.chat, f"Escribe la categoría para el movimiento "
+                                  f"#{t.pid}, respondiendo a este mensaje:")
+    if eco and eco.get('message_id'):
+        _guardar_mensaje(t.cx, t.chat, eco['message_id'], t.pid)
+
+
+# La letra que viaja en callback_data. Es de un caracter porque el limite son
+# 64 bytes contando el id del pendiente y el indice de la opcion.
+TOQUES = {
+    'c': _toque_categoria,
+    'x': _toque_descartar,
+    'd': _toque_borrar_fantasma,
+    'k': _toque_dejarlo,
+    'a': _toque_aceptar_propuesta,
+    'b': _toque_presupuesto,
+    't': _toque_pedir_texto,
+}
+
+
+def _cmd_start(cx, chat, _texto):
+    _a(cx).vincular_chat(chat)
+    telegram.enviar(chat, AYUDA)
+
+
+def _cmd_ayuda(_cx, chat, _texto):
+    telegram.enviar(chat, AYUDA)
+
+
+def _cmd_pendientes(cx, chat, _texto):
+    """A proposito usa la lista completa: si el usuario lo pide, se le muestra
+    aunque ya se le hubiera preguntado hoy."""
+    abiertos = db.pendientes_abiertos(cx, limite=MAX_PREGUNTAS)
+    if not abiertos:
+        telegram.enviar(chat, "No tengo nada por preguntarte. ✅")
+        return
+    for p in abiertos:
+        db.pendiente_actualizar(cx, p['id'], preguntado_en=None)
+    cx.commit()
+    preguntar_pendientes(cx)
+
+
+def _cmd_resumen(cx, chat, _texto):
+    cmd_resumen(cx, chat)
+
+
+def _cmd_sinconfirmar(cx, chat, _texto):
+    cmd_sinconfirmar(cx, chat)
+
+
+def _cmd_version(_cx, chat, _texto):
+    telegram.enviar(chat, _version_texto())
+
+
+def _cmd_presupuestos(_cx, chat, _texto):
+    telegram.enviar(chat, "<b>Presupuestos del mes</b>\n\n"
+                          + presupuestos.formatear())
+
+
+COMANDOS = {
+    '/start': _cmd_start,
+    '/ayuda': _cmd_ayuda,
+    '/pendientes': _cmd_pendientes,
+    '/resumen': _cmd_resumen,
+    '/sinconfirmar': _cmd_sinconfirmar,
+    '/version': _cmd_version,
+    '/presupuestos': _cmd_presupuestos,
+}
+
+
 def manejar_update(cx, u):
+    """Reparte un update de Telegram. Solo enruta: la logica vive en los
+    manejadores, que se pueden probar uno por uno."""
     if 'callback_query' in u:
         cq = u['callback_query']
-        dato = cq.get('data') or ''
-        chat = cq['message']['chat']['id']
-        mid = cq['message']['message_id']
         try:
-            accion, pid, idx = dato.split(':')
-            pid, idx = int(pid), int(idx)
-        except ValueError:
+            toque = Toque(cx, cq)
+        except (ValueError, KeyError):
             telegram.responder_callback(cq['id'], 'no entendí ese botón')
             return
-
-        if accion == 'c':
-            sug = _leer_sugerencias(cx, pid)
-            cat = sug[idx] if idx < len(sug) else None
-            if not cat:
-                telegram.responder_callback(cq['id'], 'esa opción ya no está')
-                return
-            p, detalle = aplicar_respuesta(cx, pid, categoria=cat)
-            telegram.responder_callback(cq['id'], f'listo: {cat}')
-            if p is not None:
-                telegram.editar(chat, mid,
-                                f"✅ <b>{cat}</b>\n{describir(p)}\n<i>{detalle}</i>")
-        elif accion == 'x':
-            p, detalle = aplicar_respuesta(cx, pid, descartar=True)
-            telegram.responder_callback(cq['id'], 'descartado')
-            if p is not None:
-                telegram.editar(chat, mid, f"🚫 Descartado\n{describir(p)}")
-        elif accion == 'd':
-            # borrar el fantasma de Firefly
-            p = _a(cx).pendiente(pid)
-            if p is None:
-                telegram.responder_callback(cq['id'], 'ya no existe')
-                return
-            try:
-                if p['firefly_id']:
-                    firefly.borrar(p['firefly_id'])
-                db.pendiente_actualizar(cx, pid, estado='fantasma', pregunta=None,
-                                        decidido_por='usuario')
-                db.bitacora(cx, 'borrar', usuario_id=p['usuario_id'],
-                            pendiente_id=pid, firefly_id=p['firefly_id'],
-                            respuesta='fantasma confirmado por el usuario')
-                cx.commit()
-                telegram.responder_callback(cq['id'], 'borrado')
-                telegram.editar(chat, mid, f"🗑 Borrado de Firefly\n{describir(p)}")
-            except firefly.ApiError as ex:
-                telegram.responder_callback(cq['id'], 'no pude borrarlo')
-                telegram.enviar(chat, f"No pude borrarlo: {str(ex)[:200]}")
-        elif accion == 'k':
-            # dejarlo como esta: es real, o el monto se queda
-            p = _a(cx).pendiente(pid)
-            db.pendiente_actualizar(cx, pid, estado='confirmado', pregunta=None,
-                                    decidido_por='usuario')
-            cx.commit()
-            telegram.responder_callback(cq['id'], 'listo, lo dejo')
-            if p is not None:
-                telegram.editar(chat, mid, f"✅ Confirmado\n{describir(p)}")
-        elif accion == 'a':
-            # aceptar la propuesta que salio de interpretar el texto libre
-            pr = _leer_propuesta(cx, pid)
-            if pr is None:
-                telegram.responder_callback(cq['id'], 'esa propuesta ya no esta')
-                return
-            if pr['pedir_presupuesto']:
-                _preguntar_presupuesto(cx, pid, chat, pr)
-                telegram.responder_callback(cq['id'], 'falta el presupuesto')
-                return
-            p, detalle = aplicar_respuesta(cx, pid, categoria=pr['categoria'],
-                                           presupuesto=pr['presupuesto'],
-                                           comercio=pr['comercio'])
-            telegram.responder_callback(cq['id'], 'listo')
-            if p is not None:
-                telegram.editar(chat, mid,
-                                f"✅ <b>{pr['categoria']}</b>\n{describir(p)}\n"
-                                f"<i>{detalle}</i>")
-        elif accion == 'b':
-            # eleccion de presupuesto
-            pr = _leer_propuesta(cx, pid)
-            nombres = _presupuestos_de(cx, pid)
-            elegido = nombres[idx] if idx < len(nombres) else None
-            if not elegido:
-                telegram.responder_callback(cq['id'], 'esa opcion ya no esta')
-                return
-            p, detalle = aplicar_respuesta(
-                cx, pid, categoria=(pr['categoria'] if pr else None),
-                presupuesto=elegido, comercio=(pr['comercio'] if pr else None))
-            telegram.responder_callback(cq['id'], elegido)
-            if p is not None:
-                telegram.editar(chat, mid, f"✅ <b>{elegido}</b>\n{describir(p)}\n"
-                                           f"<i>{detalle}</i>")
-        elif accion == 't':
-            # Antes esto guardaba un marcador '__ESPERANDO_TEXTO__' en las
-            # sugerencias, que nadie leia y que pisaba las opciones reales: si
-            # despues tocabas un boton, el indice ya no apuntaba a nada.
-            # Lo que de verdad hace falta es atar ESTE mensaje al movimiento,
-            # para que la respuesta libre se aplique al correcto.
-            telegram.responder_callback(cq['id'], 'escribe la categoría')
-            eco = telegram.enviar(chat, f"Escribe la categoría para el "
-                                        f"movimiento #{pid}, respondiendo a "
-                                        f"este mensaje:")
-            if eco and eco.get('message_id'):
-                _guardar_mensaje(cx, chat, eco['message_id'], pid)
+        manejador = TOQUES.get(toque.accion)
+        if manejador is None:
+            toque.aviso('no entendí ese botón')
+            return
+        manejador(toque)
         return
 
     msg = u.get('message')
@@ -471,36 +580,21 @@ def manejar_update(cx, u):
         return
     chat = msg['chat']['id']
     texto = (msg.get('text') or '').strip()
+    if not texto:
+        return
 
-    if texto.startswith('/start'):
-        # vincula el chat con el usuario si todavia no lo esta
-        _a(cx).vincular_chat(chat)
-        telegram.enviar(chat, AYUDA)
-    elif texto.startswith('/ayuda'):
-        telegram.enviar(chat, AYUDA)
-    elif texto.startswith('/pendientes'):
-        # a proposito usa la lista completa: si el usuario lo pide, se le
-        # muestra aunque ya se le hubiera preguntado hoy
-        abiertos = db.pendientes_abiertos(cx, limite=MAX_PREGUNTAS)
-        if not abiertos:
-            telegram.enviar(chat, "No tengo nada por preguntarte. ✅")
-        else:
-            for p in abiertos:
-                db.pendiente_actualizar(cx, p['id'], preguntado_en=None)
-            cx.commit()
-            preguntar_pendientes(cx)
-    elif texto.startswith('/resumen'):
-        cmd_resumen(cx, chat)
-    elif texto.startswith('/sinconfirmar'):
-        cmd_sinconfirmar(cx, chat)
-    elif texto.startswith('/version'):
-        telegram.enviar(chat, _version_texto())
-    elif texto.startswith('/presupuestos'):
-        telegram.enviar(chat, "<b>Presupuestos del mes</b>\n\n"
-                              + presupuestos.formatear())
-    elif texto:
-        rp = (msg.get('reply_to_message') or {}).get('message_id')
-        _texto_libre(cx, chat, texto, respondiendo_a=rp)
+    if texto.startswith('/'):
+        # Telegram manda /comando@nombre_del_bot en los grupos.
+        nombre = texto.split()[0].split('@')[0]
+        manejador = COMANDOS.get(nombre)
+        if manejador is None:
+            telegram.enviar(chat, f"No conozco {nombre}.\n\n{AYUDA}")
+            return
+        manejador(cx, chat, texto)
+        return
+
+    rp = (msg.get('reply_to_message') or {}).get('message_id')
+    _texto_libre(cx, chat, texto, respondiendo_a=rp)
 
 
 # Historial de conversacion por chat, en memoria. Se pierde al reiniciar y esta
