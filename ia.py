@@ -15,8 +15,9 @@ Dos ideas hacen que esto sea confiable y no una adivinanza:
    propios nombres resuelve la mayoria de las frases sin gastar una peticion.
    Gemini entra solo cuando eso no alcanza.
 
-Modelo por defecto: gemini-3.1-flash-lite. Barato ($0.25/$1.50 por millon) y
-con free tier de 1.500 peticiones al dia, que sobra para este volumen.
+Modelo por defecto: gemini-3.7-flash ($0.75/$3.75 por millon con el precio de
+intro hasta el 31-dic-2026). Razona bastante mejor que los flash-lite, que
+importa para el asesor. Con este volumen el costo queda bajo un dolar al mes.
 `gemini-2.5-flash-lite` es mas barato pero se retira el 16-oct-2026.
 
 Sin GEMINI_API_KEY todo sigue funcionando: se usa solo la heuristica.
@@ -33,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config  # noqa: E402
 
 BASE = 'https://generativelanguage.googleapis.com/v1beta'
-MODELO = config.get('GEMINI_MODELO', 'gemini-3.1-flash-lite')
+MODELO = config.get('GEMINI_MODELO', 'gemini-3.7-flash')
 TIMEOUT = int(config.get('GEMINI_TIMEOUT', '30'))
 
 
