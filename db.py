@@ -199,18 +199,19 @@ def regla_buscar(cx, usuario_id, comercio_normalizado):
 
 def regla_guardar(cx, usuario_id, patron, cuenta_firefly=None, categoria=None,
                   presupuesto=None, etiquetas=None, origen='usuario',
-                  direccion=None):
+                  direccion=None, aciertos=None):
     cx.execute("""INSERT INTO reglas (usuario_id, patron, cuenta_firefly, categoria,
-                     presupuesto, etiquetas, origen, direccion)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     presupuesto, etiquetas, origen, direccion, aciertos)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0))
                   ON CONFLICT (usuario_id, patron) DO UPDATE SET
                      cuenta_firefly = COALESCE(excluded.cuenta_firefly, cuenta_firefly),
                      categoria      = COALESCE(excluded.categoria, categoria),
                      presupuesto    = COALESCE(excluded.presupuesto, presupuesto),
                      etiquetas      = COALESCE(excluded.etiquetas, etiquetas),
-                     direccion      = COALESCE(excluded.direccion, direccion)""",
+                     direccion      = COALESCE(excluded.direccion, direccion),
+                     aciertos       = MAX(reglas.aciertos, excluded.aciertos)""",
                (usuario_id, patron, cuenta_firefly, categoria, presupuesto,
-                etiquetas, origen, direccion))
+                etiquetas, origen, direccion, aciertos))
     cx.commit()
 
 

@@ -1,0 +1,213 @@
+# -*- coding: utf-8 -*-
+"""Interpreta texto libre con Gemini, cuando el emparejamiento por palabras no
+alcanza.
+
+El caso que hay que resolver: contestas "fue la comida de la gata en tierragro"
+y el sistema tiene que sacar categoria, comercio y presupuesto.
+
+Dos ideas hacen que esto sea confiable y no una adivinanza:
+
+1. **La respuesta va restringida por enum.** El esquema JSON solo admite TUS
+   categorias, TUS presupuestos activos y TUS cuentas de gasto. El modelo no
+   puede inventarse una categoria que no existe en tu Firefly.
+
+2. **Primero se intenta gratis.** El emparejamiento por palabras contra tus
+   propios nombres resuelve la mayoria de las frases sin gastar una peticion.
+   Gemini entra solo cuando eso no alcanza.
+
+Modelo por defecto: gemini-3.1-flash-lite. Barato ($0.25/$1.50 por millon) y
+con free tier de 1.500 peticiones al dia, que sobra para este volumen.
+`gemini-2.5-flash-lite` es mas barato pero se retira el 16-oct-2026.
+
+Sin GEMINI_API_KEY todo sigue funcionando: se usa solo la heuristica.
+"""
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import config  # noqa: E402
+
+BASE = 'https://generativelanguage.googleapis.com/v1beta'
+MODELO = config.get('GEMINI_MODELO', 'gemini-3.1-flash-lite')
+TIMEOUT = int(config.get('GEMINI_TIMEOUT', '30'))
+
+
+class SinIA(Exception):
+    """No hay API key, o la llamada no sirvio."""
+
+
+def disponible():
+    return bool(config.get('GEMINI_API_KEY'))
+
+
+def _llamar(payload):
+    key = config.get('GEMINI_API_KEY')
+    if not key:
+        raise SinIA('falta GEMINI_API_KEY')
+    url = f"{BASE}/models/{MODELO}:generateContent"
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode('utf-8'), method='POST')
+    req.add_header('Content-Type', 'application/json')
+    req.add_header('x-goog-api-key', key)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as ex:
+        cuerpo = ex.read().decode('utf-8', 'replace')
+        raise SinIA(f"Gemini HTTP {ex.code}: {cuerpo[:300]}") from None
+    except urllib.error.URLError as ex:
+        raise SinIA(f"no pude llegar a Gemini: {ex.reason}") from None
+
+
+def modelos():
+    """Los modelos que admite esta API key. Sirve para verificar el setup."""
+    key = config.get('GEMINI_API_KEY')
+    if not key:
+        raise SinIA('falta GEMINI_API_KEY')
+    req = urllib.request.Request(f"{BASE}/models")
+    req.add_header('x-goog-api-key', key)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            datos = json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as ex:
+        raise SinIA(f"HTTP {ex.code}: {ex.read().decode('utf-8','replace')[:200]}") from None
+    return [m['name'].split('/')[-1] for m in datos.get('models', [])
+            if 'generateContent' in (m.get('supportedGenerationMethods') or [])]
+
+
+# ------------------------------------------------------------------ el prompt
+
+INSTRUCCIONES = """Eres el clasificador de un sistema de finanzas personales que
+usa Firefly III. El usuario responde en espanol coloquial colombiano sobre un
+movimiento bancario, y tu trabajo es traducir esa respuesta a los valores que
+existen en SU Firefly.
+
+Reglas:
+- Elige SOLO valores de las listas dadas. No inventes categorias ni comercios.
+- La descripcion del banco suele venir truncada o con el nombre de una pasarela
+  de pago pegado. 'MERCADO PAGO*TIERRAG' es la pasarela Mercado Pago cobrando
+  para el comercio 'TIERRAG', que probablemente sea 'Tierragro'.
+- Si el usuario menciona un comercio que se parece a uno de la lista, usa el de
+  la lista.
+- Si el usuario dice para quien o para que era, eso decide la categoria.
+  'comida de la gata' o 'granos de la michi' es la categoria del gato.
+- El presupuesto es un bloque grande de gasto, no el concepto. Si el usuario da
+  senales de que fue un gasto necesario, va al presupuesto esencial; si suena a
+  gusto o capricho, al de antojos.
+- confianza: 0.9 o mas solo si el usuario fue explicito. Si estas
+  interpretando o adivinando, ponla por debajo de 0.7.
+- razon: una frase corta, en espanol, explicando por que. El usuario la va a
+  leer para confirmar o corregir.
+"""
+
+
+def _esquema(categorias, presupuestos, comercios):
+    def enum(vals):
+        # se recorta porque el esquema viaja en cada peticion
+        return {'type': 'string', 'enum': list(vals)[:250]}
+
+    props = {
+        'categoria': enum(categorias),
+        'confianza': {'type': 'number'},
+        'razon': {'type': 'string'},
+    }
+    req = ['categoria', 'confianza', 'razon']
+    if presupuestos:
+        props['presupuesto'] = enum(presupuestos)
+    if comercios:
+        props['comercio'] = enum(comercios)
+    return {
+        'type': 'object',
+        'properties': props,
+        'required': req,
+        'propertyOrdering': ['categoria', 'presupuesto', 'comercio',
+                             'confianza', 'razon'],
+    }
+
+
+def interpretar(texto, movimiento, categorias, presupuestos, comercios,
+                similares=None):
+    """texto: lo que escribio el usuario.
+    movimiento: dict con fecha, valor, moneda, contraparte, descripcion.
+    similares: lista de (descripcion, categoria, presupuesto) de compras
+               parecidas del historico, para que el modelo tenga con que anclar.
+
+    Devuelve dict con categoria, presupuesto, comercio, confianza, razon.
+    """
+    m = movimiento
+    partes = [
+        "MOVIMIENTO DEL BANCO",
+        f"  fecha: {m.get('fecha')}",
+        f"  monto: {m.get('valor')} {m.get('moneda') or 'COP'}",
+        f"  lo que dice el banco: {m.get('contraparte') or m.get('descripcion')}",
+        f"  cuenta: {m.get('cuenta_firefly') or '?'}",
+        "",
+        f"LO QUE RESPONDIO EL USUARIO: {texto}",
+    ]
+    if similares:
+        partes += ["", "COMPRAS PARECIDAS YA CLASIFICADAS (para anclar):"]
+        for d, c, p in similares[:12]:
+            partes.append(f"  '{d}' -> categoria '{c}'"
+                          + (f", presupuesto '{p}'" if p else ""))
+    partes += ["", "CATEGORIAS DISPONIBLES: " + ', '.join(sorted(categorias))]
+    if presupuestos:
+        partes.append("PRESUPUESTOS ACTIVOS: " + ', '.join(sorted(presupuestos)))
+    if comercios:
+        partes.append("COMERCIOS CONOCIDOS: " + ', '.join(sorted(comercios)[:250]))
+
+    payload = {
+        'systemInstruction': {'parts': [{'text': INSTRUCCIONES}]},
+        'contents': [{'role': 'user', 'parts': [{'text': '\n'.join(partes)}]}],
+        'generationConfig': {
+            'responseMimeType': 'application/json',
+            'responseSchema': _esquema(categorias, presupuestos, comercios),
+            'temperature': 0,
+            'maxOutputTokens': 400,
+        },
+    }
+    r = _llamar(payload)
+    try:
+        crudo = r['candidates'][0]['content']['parts'][0]['text']
+    except (KeyError, IndexError):
+        raise SinIA(f"respuesta inesperada de Gemini: {str(r)[:300]}") from None
+    try:
+        d = json.loads(crudo)
+    except json.JSONDecodeError:
+        # por si viniera envuelto en ```json
+        mm = re.search(r'\{.*\}', crudo, re.S)
+        if not mm:
+            raise SinIA(f"no devolvio JSON: {crudo[:200]}") from None
+        d = json.loads(mm.group(0))
+
+    d.setdefault('confianza', 0.5)
+    d.setdefault('razon', '')
+    # el enum ya lo garantiza, pero por si el modelo se sale del esquema
+    if d.get('categoria') and d['categoria'] not in categorias:
+        d['categoria'] = None
+    if d.get('presupuesto') and d['presupuesto'] not in presupuestos:
+        d['presupuesto'] = None
+    return d
+
+
+if __name__ == '__main__':
+    if not disponible():
+        sys.exit("falta GEMINI_API_KEY en el .env.\n"
+                 "Se saca gratis en https://aistudio.google.com/apikey")
+    print(f"modelo configurado: {MODELO}\n")
+    try:
+        ms = modelos()
+    except SinIA as ex:
+        sys.exit(f"no pude listar modelos: {ex}")
+    lite = [m for m in ms if 'lite' in m]
+    print(f"{len(ms)} modelos disponibles con tu key. Los flash-lite:")
+    for m in sorted(lite):
+        marca = '  <-- configurado' if m == MODELO else ''
+        print(f"  {m}{marca}")
+    if MODELO not in ms:
+        print(f"\nOJO: '{MODELO}' no aparece en tu lista. Cambia GEMINI_MODELO "
+              f"a uno de los de arriba.")

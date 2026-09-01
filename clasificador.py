@@ -265,12 +265,19 @@ def sembrar_desde_firefly(cx, usuario_id):
         cat, pres = top(d['cat']), top(d['pres'])
         if not cat and not d['cp']:
             continue
+        # Cuantas veces clasificaste ESTO con ESTA categoria, a mano, en
+        # Firefly. Un comercio que pusiste 3 veces igual ya lo confirmaste tu:
+        # solo que lo confirmaste en Firefly y no en el bot. Sin esto, el modo
+        # estricto preguntaba 840 movimientos el primer dia.
+        veces = d['cat'].get(cat, 0) if cat else 0
+        unanime = cat and len(d['cat']) == 1
         db.regla_guardar(cx, usuario_id, clave,
                          cuenta_firefly=top(d['cp']),
                          categoria=cat,
                          presupuesto=pres,
                          origen=d['origen'],
-                         direccion=top(d['dir']))
+                         direccion=top(d['dir']),
+                         aciertos=(veces if unanime else 0))
         n += 1
     return n, n_splits
 
@@ -452,9 +459,33 @@ def clasificar(cx, usuario_id, evento, indice=None):
         r['confianza'] = 0.3
         r['decidido_por'] = 'sin_regla'
 
-    if r['confianza'] < UMBRAL or not r['categoria']:
-        r['pregunta'] = 'categoria'
+    r['pregunta'] = None if _es_seguro(regla, conf, clave) else 'categoria'
     return r
+
+
+# Modo estricto: solo se publica sin preguntar cuando la certeza viene de una
+# respuesta del propio usuario, no de una heuristica. Al principio pregunta
+# harto, pero cada comercio se pregunta UNA vez y despues baja mucho.
+def _estricto():
+    import config as _cfg
+    v = str(_cfg.get('CLASIFICADOR_ESTRICTO', 'si')).lower()
+    return v in ('1', 'si', 'sí', 'yes', 'true')
+
+
+def _es_seguro(regla, conf, clave):
+    """¿Se puede publicar esto sin preguntar?"""
+    if regla is None or not regla['categoria']:
+        return False
+    if not _estricto():
+        return conf >= UMBRAL
+    # el patron tiene que coincidir EXACTO, no por subcadena ni por palabras
+    if regla['patron'] != clave:
+        return False
+    # y la regla tiene que venir de una respuesta suya, o de una del historico
+    # que ya se haya usado varias veces sin que la corrigiera
+    if regla['origen'] in ('usuario', 'manual'):
+        return True
+    return (regla['aciertos'] or 0) >= 3
 
 
 if __name__ == '__main__':
