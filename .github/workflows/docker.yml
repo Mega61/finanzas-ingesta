@@ -40,11 +40,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ghcr exige el nombre en minusculas y el usuario de GitHub puede tener
+      # mayusculas, asi que se normaliza una vez y se reutiliza.
+      - name: Nombre de la imagen
+        id: img
+        run: echo "ref=ghcr.io/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
+
       - name: Metadatos
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.img.outputs.ref }}
           tags: |
             type=raw,value=latest
             type=sha,format=short
