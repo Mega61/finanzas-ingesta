@@ -348,9 +348,7 @@ class Almacen:
     def pendientes_abiertos(self, limite: int = 50) -> list[sqlite3.Row]:
         """Todos los que tienen pregunta abierta, aunque se hayan preguntado
         hace un rato. Es la lista que se muestra cuando el USUARIO la pide."""
-        return self.cx.execute(
-            'SELECT * FROM v_abiertos LIMIT ?', (limite,)
-        ).fetchall()
+        return self.cx.execute('SELECT * FROM v_abiertos LIMIT ?', (limite,)).fetchall()
 
     def contar_por_preguntar(self) -> int:
         return self.cx.execute('SELECT count(*) FROM v_por_preguntar').fetchone()[0]
@@ -728,9 +726,7 @@ class Almacen:
         self.cx.commit()
         return cur.rowcount
 
-    def guardar_texto_en_espera(
-        self, chat_id: str, txt: str, plan: Any = None
-    ) -> None:
+    def guardar_texto_en_espera(self, chat_id: str, txt: str, plan: Any = None) -> None:
         """El texto libre que el bot resolvio por su cuenta, para que siga vivo
         si el usuario toca «era otro».
 

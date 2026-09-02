@@ -10,6 +10,7 @@ cuando la categoria es de cola larga.
 Las propuestas son sugerencias con criterio explicito, no ordenes. La idea es
 que el usuario apruebe o corrija cada una antes de tocar el libro.
 """
+
 import argparse
 import collections
 
@@ -52,9 +53,20 @@ FUSIONES = {
 
 # Categorias que NO son gasto de consumo: son mecanica contable. Se dejan
 # aparte para que no ensucien los reportes de gasto.
-CONTABLES = {'Abono', 'Ajuste de cuentas', 'Reconciliacion', 'Reconciliación',
-             'Transferencia', 'Avance', 'Inversion', 'Inversión', 'Prestamos',
-             'Perdida', 'Merma', 'Emergencia'}
+CONTABLES = {
+    'Abono',
+    'Ajuste de cuentas',
+    'Reconciliacion',
+    'Reconciliación',
+    'Transferencia',
+    'Avance',
+    'Inversion',
+    'Inversión',
+    'Prestamos',
+    'Perdida',
+    'Merma',
+    'Emergencia',
+}
 
 # Los tags que SI aportan algo que ningun otro campo carga.
 TAGS_UTILES_PREFIJOS = ('viaje-', 'recon-', 'proyecto-', 'reembolso')
@@ -63,15 +75,23 @@ TAGS_UTILES_EXACTOS = {'reembolsable', 'sin-confirmar', 'ingesta-automatica'}
 
 def _norm(s):
     import unicodedata
-    return ''.join(c for c in unicodedata.normalize('NFD', s or '')
-                   if unicodedata.category(c) != 'Mn').upper()
+
+    return ''.join(
+        c
+        for c in unicodedata.normalize('NFD', s or '')
+        if unicodedata.category(c) != 'Mn'
+    ).upper()
 
 
 def recolectar():
-    cats_existentes = {c['attributes']['name']
-                       for c in firefly.get_all('/api/v1/categories')}
-    activos = {b['attributes']['name'] for b in firefly.get_all('/api/v1/budgets')
-               if b['attributes'].get('active')}
+    cats_existentes = {
+        c['attributes']['name'] for c in firefly.get_all('/api/v1/categories')
+    }
+    activos = {
+        b['attributes']['name']
+        for b in firefly.get_all('/api/v1/budgets')
+        if b['attributes'].get('active')
+    }
 
     uso = collections.Counter()
     monto = collections.Counter()
@@ -97,7 +117,7 @@ def recolectar():
                     primera[c] = fecha
                 if c not in ultima or fecha > ultima[c]:
                     ultima[c] = fecha
-            for tg in (s.get('tags') or []):
+            for tg in s.get('tags') or []:
                 tags[tg] += 1
                 if c:
                     tag_cats[tg][c] += 1
@@ -109,9 +129,16 @@ def recolectar():
                         tag_cuentas[tg][s[lado]] += 1
 
     return {
-        'existentes': cats_existentes, 'activos': activos, 'uso': uso,
-        'monto': monto, 'presup': presup, 'primera': primera, 'ultima': ultima,
-        'tags': tags, 'tag_cats': tag_cats, 'tag_cuentas': tag_cuentas,
+        'existentes': cats_existentes,
+        'activos': activos,
+        'uso': uso,
+        'monto': monto,
+        'presup': presup,
+        'primera': primera,
+        'ultima': ultima,
+        'tags': tags,
+        'tag_cats': tag_cats,
+        'tag_cuentas': tag_cuentas,
     }
 
 
@@ -123,12 +150,12 @@ def clasificar_tag(tg, d):
     cuentas = d['tag_cuentas'].get(tg) or {}
     for cta in cuentas:
         if _norm(tg) in _norm(cta) or _norm(cta) in _norm(tg):
-            return 'duplica_cuenta', f"ya esta en la cuenta «{cta}»"
+            return 'duplica_cuenta', f'ya esta en la cuenta «{cta}»'
     # ¿duplica la categoria?
     cats = d['tag_cats'].get(tg) or {}
     for c in cats:
         if _norm(tg) == _norm(c):
-            return 'duplica_categoria', f"ya esta en la categoria «{c}»"
+            return 'duplica_categoria', f'ya esta en la categoria «{c}»'
     # ¿esta describiendo QUE fue la compra? Eso es trabajo de la categoria.
     # Si el tag aparece casi siempre con la misma categoria, no aporta nada:
     # es una subdivision de esa categoria.
@@ -136,10 +163,11 @@ def clasificar_tag(tg, d):
         total = sum(cats.values())
         top = max(cats, key=cats.get)
         if total >= 4 and cats[top] / total >= 0.7:
-            return 'subcategoria', (f"casi siempre cae en «{top}»: es una "
-                                    f"subdivision de esa categoria")
+            return 'subcategoria', (
+                f'casi siempre cae en «{top}»: es una subdivision de esa categoria'
+            )
     if d['tags'][tg] <= 2:
-        return 'residual', f"usado solo {d['tags'][tg]} vez/veces"
+        return 'residual', f'usado solo {d["tags"][tg]} vez/veces'
     return 'revisar', 'no es obvio, decidilo tu'
 
 
@@ -154,21 +182,33 @@ def informe(d):
             accion, por_que = 'dejar', 'no es gasto de consumo, es mecanica contable'
         elif destino:
             accion = 'fusionar'
-            por_que = f"se solapa con «{destino}»"
+            por_que = f'se solapa con «{destino}»'
             if n >= COLA_LARGA * 3:
-                accion, por_que = 'revisar', (f"propondria fusionar en «{destino}», "
-                                              f"pero tiene {n} usos: decidilo tu")
+                accion, por_que = (
+                    'revisar',
+                    (
+                        f'propondria fusionar en «{destino}», '
+                        f'pero tiene {n} usos: decidilo tu'
+                    ),
+                )
         elif n < COLA_LARGA:
-            accion, por_que = 'revisar', f"solo {n} usos y no le veo padre claro"
+            accion, por_que = 'revisar', f'solo {n} usos y no le veo padre claro'
         else:
             accion, por_que = 'dejar', 'se usa de verdad'
         reparto = d['presup'].get(c) or {}
-        filas.append({
-            'categoria': c, 'usos': n, 'monto': d['monto'].get(c, 0.0),
-            'desde': d['primera'].get(c, ''), 'hasta': d['ultima'].get(c, ''),
-            'presupuestos': {k: v for k, v in reparto.items() if k in d['activos']},
-            'accion': accion, 'destino': destino, 'por_que': por_que,
-        })
+        filas.append(
+            {
+                'categoria': c,
+                'usos': n,
+                'monto': d['monto'].get(c, 0.0),
+                'desde': d['primera'].get(c, ''),
+                'hasta': d['ultima'].get(c, ''),
+                'presupuestos': {k: v for k, v in reparto.items() if k in d['activos']},
+                'accion': accion,
+                'destino': destino,
+                'por_que': por_que,
+            }
+        )
     filas.sort(key=lambda f: (-f['usos'], f['categoria']))
 
     tfilas = []
@@ -194,38 +234,44 @@ def main():
         print(json.dumps(inf, ensure_ascii=False, indent=1))
         return 0
 
-    print("=" * 78)
-    print("CATEGORIAS")
-    print("=" * 78)
+    print('=' * 78)
+    print('CATEGORIAS')
+    print('=' * 78)
     for grupo in ('borrar', 'fusionar', 'revisar', 'dejar'):
         gs = [f for f in inf['categorias'] if f['accion'] == grupo]
         if not gs:
             continue
-        print(f"\n--- {grupo.upper()} ({len(gs)}) ---")
+        print(f'\n--- {grupo.upper()} ({len(gs)}) ---')
         for f in gs:
-            dest = f" -> {f['destino']}" if f['destino'] else ''
-            print(f"  {f['usos']:4}  {_plata(f['monto']):>16}  {f['categoria']}{dest}")
+            dest = f' -> {f["destino"]}' if f['destino'] else ''
+            print(f'  {f["usos"]:4}  {_plata(f["monto"]):>16}  {f["categoria"]}{dest}')
             if grupo != 'dejar':
-                print(f"        {f['por_que']}")
+                print(f'        {f["por_que"]}')
 
-    print("\n" + "=" * 78)
-    print("ETIQUETAS")
-    print("=" * 78)
+    print('\n' + '=' * 78)
+    print('ETIQUETAS')
+    print('=' * 78)
     por_clase = collections.defaultdict(list)
     for t in inf['tags']:
         por_clase[t['clase']].append(t)
-    orden = ['util', 'duplica_cuenta', 'duplica_categoria', 'subcategoria',
-             'revisar', 'residual']
+    orden = [
+        'util',
+        'duplica_cuenta',
+        'duplica_categoria',
+        'subcategoria',
+        'revisar',
+        'residual',
+    ]
     for cl in orden:
         ts = por_clase.get(cl) or []
         if not ts:
             continue
         total = sum(t['usos'] for t in ts)
-        print(f"\n--- {cl} ({len(ts)} etiquetas, {total} usos) ---")
+        print(f'\n--- {cl} ({len(ts)} etiquetas, {total} usos) ---')
         for t in ts[:18]:
-            print(f"  {t['usos']:4}  {t['tag']:28} {t['por_que']}")
+            print(f'  {t["usos"]:4}  {t["tag"]:28} {t["por_que"]}')
         if len(ts) > 18:
-            print(f"  ... y {len(ts)-18} mas")
+            print(f'  ... y {len(ts) - 18} mas')
     return 0
 
 

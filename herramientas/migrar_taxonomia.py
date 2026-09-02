@@ -13,6 +13,7 @@ Solo toca el ultimo mes a proposito. Reescribir anos de historia no vale la
 pena: lo que importa es que de aqui en adelante quede bien, y mover el pasado
 rompe los reportes que ya existen.
 """
+
 import argparse
 import sys
 from datetime import timedelta
@@ -42,14 +43,23 @@ A_ETIQUETA = {
 # Cuando no se puede deducir la categoria nueva, se intenta por el comercio.
 # Es un mapa corto y explicito: lo que no cae aqui se pregunta.
 POR_COMERCIO = {
-    'UBER': 'Transporte Aplicación', 'DIDI': 'Transporte Aplicación',
+    'UBER': 'Transporte Aplicación',
+    'DIDI': 'Transporte Aplicación',
     'TAXI': 'Transporte Aplicación',
-    'EXITO': 'Mercado', 'D1': 'Mercado', 'ARA': 'Mercado', 'CARULLA': 'Mercado',
-    'FARMATODO': 'Cuidado personal', 'DROGUERIA': 'Salud',
+    'EXITO': 'Mercado',
+    'D1': 'Mercado',
+    'ARA': 'Mercado',
+    'CARULLA': 'Mercado',
+    'FARMATODO': 'Cuidado personal',
+    'DROGUERIA': 'Salud',
     'RAPPI': 'Domicilio',
-    'AVIANCA': 'Viajes', 'LATAM': 'Viajes', 'HOTEL': 'Viajes',
-    'STARBUCKS': 'Mecato', 'JUAN VALDEZ': 'Mecato',
-    'AMAZON': 'Compras Tecnología', 'STEAM': 'Juegos',
+    'AVIANCA': 'Viajes',
+    'LATAM': 'Viajes',
+    'HOTEL': 'Viajes',
+    'STARBUCKS': 'Mecato',
+    'JUAN VALDEZ': 'Mecato',
+    'AMAZON': 'Compras Tecnología',
+    'STEAM': 'Juegos',
 }
 
 # Fusiones simples: categoria -> categoria. Sin cambio semantico, solo juntar
@@ -75,8 +85,15 @@ FUSIONES = {
 # Categorias que se quedan tal cual, aunque tengan poco uso. El usuario las
 # confirmo: Juegos son juegos de Steam, Suplementos es una compra recurrente
 # que no es mecato ni salud.
-INTOCABLES = {'Juegos', 'Suplementos', 'Tatuaje', 'GBS Infra', 'Salud',
-              'Declaración de Renta', 'Viajes'}
+INTOCABLES = {
+    'Juegos',
+    'Suplementos',
+    'Tatuaje',
+    'GBS Infra',
+    'Salud',
+    'Declaración de Renta',
+    'Viajes',
+}
 
 # Presupuesto por defecto de categorias que el usuario definio a mano.
 PRESUPUESTO_FIJO = {
@@ -86,8 +103,12 @@ PRESUPUESTO_FIJO = {
 
 def _norm(s):
     import unicodedata
-    return ''.join(c for c in unicodedata.normalize('NFD', s or '')
-                   if unicodedata.category(c) != 'Mn').upper()
+
+    return ''.join(
+        c
+        for c in unicodedata.normalize('NFD', s or '')
+        if unicodedata.category(c) != 'Mn'
+    ).upper()
 
 
 def categoria_por_comercio(comercio):
@@ -121,29 +142,37 @@ def planear(desde):
                 nueva = nueva or categoria_por_comercio(comercio)
                 if nueva:
                     cambios['category_name'] = nueva
-                    notas.append(f"categoria {cat} -> etiqueta «{etq}» + «{nueva}»")
+                    notas.append(f'categoria {cat} -> etiqueta «{etq}» + «{nueva}»')
                 else:
                     # no se puede adivinar: se pone la etiqueta y se deja la
                     # categoria, para preguntarla despues
-                    notas.append(f"etiqueta «{etq}» puesta, pero la categoria "
-                                 f"real hay que preguntarla (comercio: {comercio})")
+                    notas.append(
+                        f'etiqueta «{etq}» puesta, pero la categoria '
+                        f'real hay que preguntarla (comercio: {comercio})'
+                    )
             elif cat in FUSIONES:
                 cambios['category_name'] = FUSIONES[cat]
-                notas.append(f"fusion {cat} -> {FUSIONES[cat]}")
+                notas.append(f'fusion {cat} -> {FUSIONES[cat]}')
 
             destino_cat = cambios.get('category_name', cat)
             fijo = PRESUPUESTO_FIJO.get(destino_cat)
             if fijo and (s.get('budget_name') or '').strip() != fijo:
                 cambios['budget_name'] = fijo
-                notas.append(f"presupuesto -> {fijo}")
+                notas.append(f'presupuesto -> {fijo}')
 
             if cambios:
-                plan.append({
-                    'id': t['id'], 'fecha': s['date'][:10],
-                    'monto': abs(float(s.get('amount') or 0)),
-                    'desc': s.get('description') or '', 'comercio': comercio,
-                    'cat_vieja': cat, 'cambios': cambios, 'notas': notas,
-                })
+                plan.append(
+                    {
+                        'id': t['id'],
+                        'fecha': s['date'][:10],
+                        'monto': abs(float(s.get('amount') or 0)),
+                        'desc': s.get('description') or '',
+                        'comercio': comercio,
+                        'cat_vieja': cat,
+                        'cambios': cambios,
+                        'notas': notas,
+                    }
+                )
     return plan
 
 
@@ -154,30 +183,40 @@ def main():
     a = ap.parse_args()
 
     desde = (fechas.hoy() - timedelta(days=a.dias)).isoformat()
-    print(f"ventana: desde {desde} (ultimos {a.dias} dias)")
-    print("nada mas viejo se toca\n")
+    print(f'ventana: desde {desde} (ultimos {a.dias} dias)')
+    print('nada mas viejo se toca\n')
 
     plan = planear(desde)
     if not plan:
-        print("no hay nada que cambiar en esa ventana")
+        print('no hay nada que cambiar en esa ventana')
         return 0
 
-    sin_resolver = [p for p in plan if 'category_name' not in p['cambios']
-                    and p['cat_vieja'] in A_ETIQUETA]
-    print(f"{len(plan)} transacciones a tocar"
-          + ("" if a.en_serio else "   [SECO, no escribe]") + "\n")
+    sin_resolver = [
+        p
+        for p in plan
+        if 'category_name' not in p['cambios'] and p['cat_vieja'] in A_ETIQUETA
+    ]
+    print(
+        f'{len(plan)} transacciones a tocar'
+        + ('' if a.en_serio else '   [SECO, no escribe]')
+        + '\n'
+    )
     for p in plan:
-        print(f"  id={p['id']:5} {p['fecha']} ${p['monto']:>11,.0f}  "
-              f"{p['desc'][:30]:32} [{p['comercio'][:18]}]")
+        print(
+            f'  id={p["id"]:5} {p["fecha"]} ${p["monto"]:>11,.0f}  '
+            f'{p["desc"][:30]:32} [{p["comercio"][:18]}]'
+        )
         for n in p['notas']:
-            print(f"        {n}")
+            print(f'        {n}')
 
     if sin_resolver:
-        print(f"\n{len(sin_resolver)} quedan con la etiqueta puesta pero sin "
-              f"categoria real resuelta. El bot las va a preguntar.")
+        print(
+            f'\n{len(sin_resolver)} quedan con la etiqueta puesta pero sin '
+            f'categoria real resuelta. El bot las va a preguntar.'
+        )
 
     if not a.en_serio:
-        print("\ncorre con --en-serio para aplicarlo")
+        print('\ncorre con --en-serio para aplicarlo')
         return 0
 
     ok = mal = 0
@@ -186,9 +225,9 @@ def main():
             firefly.actualizar_split(p['id'], **p['cambios'])
             ok += 1
         except firefly.ApiError as ex:
-            print(f"  MAL id={p['id']}: {str(ex)[:160]}")
+            print(f'  MAL id={p["id"]}: {str(ex)[:160]}')
             mal += 1
-    print(f"\naplicado: {ok} ok, {mal} con error")
+    print(f'\naplicado: {ok} ok, {mal} con error')
     return 0 if not mal else 1
 
 

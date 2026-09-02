@@ -57,7 +57,12 @@ class TestElEsquemaDeOrdenes:
 
     def test_con_productos_si_los_incluye(self):
         e = ia._esquema_orden(
-            MOVS, CATS, PRES, productos=['7'], grupos=['Mercado'], cats_producto=['Fruta']
+            MOVS,
+            CATS,
+            PRES,
+            productos=['7'],
+            grupos=['Mercado'],
+            cats_producto=['Fruta'],
         )
         assert 'producto_id' in e['properties']
         assert 'producto_id' in e['propertyOrdering']
@@ -82,7 +87,9 @@ class TestElEsquemaDeOrdenes:
 
     def test_el_comercio_queda_libre(self):
         """Si fuera un enum el usuario no podria nombrar una tienda nueva."""
-        assert 'enum' not in ia._esquema_orden(MOVS, CATS, PRES)['properties']['comercio']
+        assert (
+            'enum' not in ia._esquema_orden(MOVS, CATS, PRES)['properties']['comercio']
+        )
 
     def test_la_lista_de_movimientos_se_recorta(self):
         """El esquema viaja en cada peticion; 500 ids la inflan sin necesidad."""

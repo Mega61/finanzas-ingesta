@@ -1034,7 +1034,9 @@ def _ficha(m):
     saber que faltaba.
     """
     lineas = [f'<b>{_plata(m["valor"], m["moneda"])}</b>  {m["fecha"]}']
-    lineas.append(f'{_escapar(m["origen"])} → <b>{_escapar(m["destino"] or m["descripcion"])}</b>')
+    lineas.append(
+        f'{_escapar(m["origen"])} → <b>{_escapar(m["destino"] or m["descripcion"])}</b>'
+    )
     lineas.append(f'categoría: <b>{m["categoria"] or "—"}</b>')
     lineas.append(f'presupuesto: <b>{m["presupuesto"] or "—"}</b>')
     propias = [
@@ -1587,7 +1589,9 @@ def _toque_producto_volver(t):
 
 
 def _texto_producto_simple(p):
-    return f'🛒 <b>¿Qué es esto?</b>\n\n<b>{_escapar(p["descripcion"] or p["codigo"])}</b>'
+    return (
+        f'🛒 <b>¿Qué es esto?</b>\n\n<b>{_escapar(p["descripcion"] or p["codigo"])}</b>'
+    )
 
 
 def _toque_producto_saltar(t):
@@ -2611,9 +2615,7 @@ def _aplicar_a_la_ultima(cx, chat, abiertas, texto):
     botones = []
     fila = []
     for p in abiertas[:6]:
-        etiqueta = (
-            f'{_plata(p["valor"], p["moneda"])} {(p["contraparte"] or "")[:14]}'
-        )
+        etiqueta = f'{_plata(p["valor"], p["moneda"])} {(p["contraparte"] or "")[:14]}'
         fila.append((etiqueta, f'm:{p["id"]}:0'))
         if len(fila) == 2:
             botones.append(fila)

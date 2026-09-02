@@ -229,7 +229,7 @@ class TestYaNoSeRinde:
         de mas por nada."""
         alm, _tg, _ids, _, _ = entorno
         alm.cx.execute(
-            "UPDATE pendientes SET pregunta = NULL"
+            'UPDATE pendientes SET pregunta = NULL'
             " WHERE contraparte != 'BOLD CO ONLINE RTFE'"
         )
         alm.cx.commit()

@@ -38,8 +38,17 @@ def base(_args):
     cx = db.conectar()
     alm = db.almacen(cx)
     print(f'base: {db.ruta()}')
-    for t in ('usuarios', 'buzones', 'correos_crudos', 'pendientes', 'reglas',
-              'bitacora', 'sugerencias', 'propuestas', 'preguntas_enviadas'):
+    for t in (
+        'usuarios',
+        'buzones',
+        'correos_crudos',
+        'pendientes',
+        'reglas',
+        'bitacora',
+        'sugerencias',
+        'propuestas',
+        'preguntas_enviadas',
+    ):
         print(f'  {t:20} {alm.contar_por_tabla(t):6}')
     cx.close()
 
@@ -47,8 +56,10 @@ def base(_args):
 def modelos(_args):
     """Que modelos admite tu API key de Gemini, y si el configurado esta."""
     if not ia.disponible():
-        sys.exit('falta GEMINI_API_KEY en el .env.\n'
-                 'Se saca gratis en https://aistudio.google.com/apikey')
+        sys.exit(
+            'falta GEMINI_API_KEY en el .env.\n'
+            'Se saca gratis en https://aistudio.google.com/apikey'
+        )
     print(f'modelo configurado: {ia.MODELO}\n')
     try:
         ms = ia.modelos()
@@ -56,10 +67,12 @@ def modelos(_args):
         sys.exit(f'no pude listar modelos: {ex}')
     print(f'{len(ms)} modelos disponibles con tu key. Los flash:')
     for m in sorted(x for x in ms if 'flash' in x):
-        print(f"  {m}{'  <-- configurado' if m == ia.MODELO else ''}")
+        print(f'  {m}{"  <-- configurado" if m == ia.MODELO else ""}')
     if ia.MODELO not in ms:
-        print(f"\nOJO: '{ia.MODELO}' no aparece en tu lista. Cambia "
-              f'GEMINI_MODELO a uno de los de arriba.')
+        print(
+            f"\nOJO: '{ia.MODELO}' no aparece en tu lista. Cambia "
+            f'GEMINI_MODELO a uno de los de arriba.'
+        )
 
 
 def correo(_args):
@@ -70,7 +83,7 @@ def correo(_args):
     print('token ok. ultimos 5 correos del banco:\n')
     for m in graph.mensajes(tok, tope=5):
         frase = re.sub(r'\s+', ' ', graph.cuerpo_plano(m))[:150]
-        print(f"  {m['receivedDateTime'][:16]}  {m.get('subject', '')[:34]}")
+        print(f'  {m["receivedDateTime"][:16]}  {m.get("subject", "")[:34]}')
         print(f'      {frase}\n')
 
 
@@ -84,15 +97,26 @@ def tarjetas(_args):
     for pr in clasificador.productos():
         f = str(pr['desde'] or '2026-01-01')
         got = clasificador.cuenta_de_instrumento(pr['instrumento'], f)
-        print(f"  {'ok ' if got == pr['cuenta'] else 'MAL'} "
-              f"*{pr['instrumento']} {f} -> {got}")
+        print(
+            f'  {"ok " if got == pr["cuenta"] else "MAL"} '
+            f'*{pr["instrumento"]} {f} -> {got}'
+        )
     sin = clasificador.cuenta_de_instrumento('0000', '2026-01-01')
-    print(f"  {'ok ' if sin is None else 'MAL'} *0000 -> None   "
-          f'(plastico desconocido: se pregunta)')
+    print(
+        f'  {"ok " if sin is None else "MAL"} *0000 -> None   '
+        f'(plastico desconocido: se pregunta)'
+    )
     print('\nnormalizacion de comercios')
-    for t in ['UBER RIDES*DL', 'DLO*Didi', 'PAYU*CINEMARK', 'CYCLE GEAR N169',
-              'UBER BV USD-USD COLO', 'GOOGLE *Workspace_go',
-              'MERCADO PAGO*TIERRAG', 'DROGUERIA ALEMANA 47']:
+    for t in [
+        'UBER RIDES*DL',
+        'DLO*Didi',
+        'PAYU*CINEMARK',
+        'CYCLE GEAR N169',
+        'UBER BV USD-USD COLO',
+        'GOOGLE *Workspace_go',
+        'MERCADO PAGO*TIERRAG',
+        'DROGUERIA ALEMANA 47',
+    ]:
         print(f'  {t:26} -> {clasificador.normalizar(t)}')
 
 
@@ -100,17 +124,16 @@ def budgets(_args):
     """Como van los presupuestos, y que categorias no deciden solas."""
     print('=== presupuestos activos, este mes ===')
     for b in presupuestos.estado():
-        lim = f"{b['limite']:,.0f}" if b['limite'] else 'sin tope'
-        pct = f"{b['pct']:.0f}%" if b['pct'] is not None else '-'
-        print(f"  {b['nombre']:24} gastado={b['gastado']:>14,.0f} "
-              f'de {lim:>14}  {pct}')
+        lim = f'{b["limite"]:,.0f}' if b['limite'] else 'sin tope'
+        pct = f'{b["pct"]:.0f}%' if b['pct'] is not None else '-'
+        print(f'  {b["nombre"]:24} gastado={b["gastado"]:>14,.0f} de {lim:>14}  {pct}')
     print('\n=== categoria -> presupuesto ===')
     mapa = presupuestos.mapa_categoria()
     dudosas = [c for c, d in mapa.items() if not d['seguro']]
     print(f'  {len(mapa) - len(dudosas)} categorias deciden solas')
     print(f'  {len(dudosas)} hay que preguntarlas:')
     for c in sorted(dudosas):
-        print(f"    {c:28} {mapa[c]['reparto']}")
+        print(f'    {c:28} {mapa[c]["reparto"]}')
 
 
 def interpretar(_args):
@@ -123,28 +146,47 @@ def interpretar(_args):
     db.inicializar()
     cx = db.conectar()
     cat = interprete.catalogo(cx, 1)
-    print(f"catalogo: {len(cat['categorias'])} categorias, "
-          f"{len(cat['presupuestos'])} presupuestos, "
-          f"{len(cat['comercios'])} comercios")
-    print('IA: ' + ('Gemini disponible' if interprete.ia_disponible()
-                    else 'sin API key, solo heuristica') + '\n')
-    mov = {'fecha': '2026-09-01', 'valor': -151495.0, 'moneda': 'COP',
-           'contraparte': 'MERCADO PAGO*TIERRAG',
-           'descripcion': 'MERCADO PAGO*TIERRAG',
-           'cuenta_firefly': 'MASTERCARD BLACK'}
-    for f in ('fue la comida de la gata en tierragro',
-              'le compre granos a la michina',
-              'mercado del mes',
-              'almorzamos afuera, fue un antojo',
-              'gasolina de la moto',
-              'esto fue el gym'):
+    print(
+        f'catalogo: {len(cat["categorias"])} categorias, '
+        f'{len(cat["presupuestos"])} presupuestos, '
+        f'{len(cat["comercios"])} comercios'
+    )
+    print(
+        'IA: '
+        + (
+            'Gemini disponible'
+            if interprete.ia_disponible()
+            else 'sin API key, solo heuristica'
+        )
+        + '\n'
+    )
+    mov = {
+        'fecha': '2026-09-01',
+        'valor': -151495.0,
+        'moneda': 'COP',
+        'contraparte': 'MERCADO PAGO*TIERRAG',
+        'descripcion': 'MERCADO PAGO*TIERRAG',
+        'cuenta_firefly': 'MASTERCARD BLACK',
+    }
+    for f in (
+        'fue la comida de la gata en tierragro',
+        'le compre granos a la michina',
+        'mercado del mes',
+        'almorzamos afuera, fue un antojo',
+        'gasolina de la moto',
+        'esto fue el gym',
+    ):
         d = interprete.interpretar(cx, 1, mov, f, cat=cat)
         print(f'  {f!r}')
-        print(f"     -> categoria={d['categoria']!r} "
-              f"presupuesto={d['presupuesto']!r} comercio={d['comercio']!r}")
-        print(f"        conf={d['confianza']:.2f} fuente={d['fuente']} "
-              f"pedir_presupuesto={d['pedir_presupuesto']}")
-        print(f"        razon: {d['razon']}")
+        print(
+            f'     -> categoria={d["categoria"]!r} '
+            f'presupuesto={d["presupuesto"]!r} comercio={d["comercio"]!r}'
+        )
+        print(
+            f'        conf={d["confianza"]:.2f} fuente={d["fuente"]} '
+            f'pedir_presupuesto={d["pedir_presupuesto"]}'
+        )
+        print(f'        razon: {d["razon"]}')
     cx.close()
 
 
@@ -179,19 +221,23 @@ def extractos(args):
     clave = config.get('EXTRACTO_CLAVE') or config.get('CLAVE')
     if not clave:
         sys.exit('falta EXTRACTO_CLAVE (la cedula) en el .env')
-    carpeta = (args[0] if args
-               else config.ruta_personal('Extractos Bancolombia', '_pdf'))
+    carpeta = args[0] if args else config.ruta_personal('Extractos Bancolombia', '_pdf')
     exts = extracto_tarjeta.parse_carpeta(carpeta, clave)
     ok = [e for e in exts if not e.error]
-    print(f'{len(exts)} extractos, {len(ok)} abiertos, '
-          f'{sum(len(e.movimientos) for e in ok)} movimientos\n')
+    print(
+        f'{len(exts)} extractos, {len(ok)} abiertos, '
+        f'{sum(len(e.movimientos) for e in ok)} movimientos\n'
+    )
     for e in sorted(ok, key=lambda x: x.periodo_archivo)[-6:]:
         print(f'  {e.archivo}')
-        print(f'    {e.marca} *{e.instrumento}  periodo {e.desde} -> {e.hasta}'
-              f'  {len(e.movimientos)} movs')
+        print(
+            f'    {e.marca} *{e.instrumento}  periodo {e.desde} -> {e.hasta}'
+            f'  {len(e.movimientos)} movs'
+        )
         for mv in e.movimientos[:3]:
-            print(f'      {mv.fecha} {mv.moneda} {mv.valor:>13,.2f} '
-                  f'{mv.descripcion[:40]}')
+            print(
+                f'      {mv.fecha} {mv.moneda} {mv.valor:>13,.2f} {mv.descripcion[:40]}'
+            )
     malos = [e for e in exts if e.error]
     if malos:
         print(f'\n{len(malos)} con error:')
@@ -216,8 +262,10 @@ def pasarelas(args):
     print(f'{len(malas)} reglas cuyo patron es solo una pasarela:')
     print()
     for r in malas:
-        print(f"  {r['patron']!r:16} -> {r['categoria']!r:24} "
-              f"origen={r['origen']} aciertos={r['aciertos']}")
+        print(
+            f'  {r["patron"]!r:16} -> {r["categoria"]!r:24} '
+            f'origen={r["origen"]} aciertos={r["aciertos"]}'
+        )
     if '--en-serio' not in args:
         print()
         print('SECO: no borre nada. Corre con --en-serio para borrarlas.')
@@ -225,7 +273,7 @@ def pasarelas(args):
         return
     for r in malas:
         alm.borrar_regla(r['id'])
-        print(f"  borrada {r['patron']!r}")
+        print(f'  borrada {r["patron"]!r}')
     cx.close()
 
 
@@ -238,8 +286,7 @@ def sin_presupuesto(args):
     """
     mapa = presupuestos.mapa_categoria()
     desde = args[0] if args and args[0][:2] == '20' else '2026-06-01'
-    ruta = (f'/api/v1/transactions?type=withdrawal'
-            f'&start={desde}&end={fechas.hoy()}')
+    ruta = f'/api/v1/transactions?type=withdrawal&start={desde}&end={fechas.hoy()}'
 
     claros, dudosos = [], []
     for t in firefly.get_all(ruta):
@@ -248,8 +295,14 @@ def sin_presupuesto(args):
                 continue
             cat = (s.get('category_name') or '').strip()
             seguro = presupuestos.presupuesto_seguro(cat, mapa)
-            fila = (t['id'], s['date'][:10], float(s['amount']), cat,
-                    s.get('destination_name') or s.get('description'), seguro)
+            fila = (
+                t['id'],
+                s['date'][:10],
+                float(s['amount']),
+                cat,
+                s.get('destination_name') or s.get('description'),
+                seguro,
+            )
             (claros if seguro else dudosos).append(fila)
 
     print(f'desde {desde}: {len(claros) + len(dudosos)} gastos sin presupuesto')
@@ -257,8 +310,9 @@ def sin_presupuesto(args):
     if claros:
         print(f'{len(claros)} con presupuesto claro segun tu historico:')
         for tid, f, monto, cat, quien, seg in sorted(claros, key=lambda x: x[1]):
-            print(f'  #{tid:5} {f} {monto:>12,.0f} {cat:22} '
-                  f'{str(quien)[:20]:20} -> {seg}')
+            print(
+                f'  #{tid:5} {f} {monto:>12,.0f} {cat:22} {str(quien)[:20]:20} -> {seg}'
+            )
     if dudosos:
         print()
         print(f'{len(dudosos)} donde el historico esta repartido; NO se tocan:')
@@ -307,8 +361,10 @@ def main(argv=None):
         return 0
     fn = DIAGNOSTICOS.get(argv[0])
     if fn is None:
-        print(f'No conozco «{argv[0]}». Opciones: '
-              f"{', '.join(DIAGNOSTICOS)}", file=sys.stderr)
+        print(
+            f'No conozco «{argv[0]}». Opciones: {", ".join(DIAGNOSTICOS)}',
+            file=sys.stderr,
+        )
         return 2
     fn(argv[1:])
     return 0

@@ -11,6 +11,7 @@ convierte en varias variables basura. Por eso `productos.csv` se serializa con
 ';' entre filas, y al final hay una comprobacion que falla si algo quedo con
 salto de linea.
 """
+
 import io
 import json
 import os
@@ -54,9 +55,7 @@ def productos_en_una_linea():
         return None
     with open(ruta, encoding='utf-8') as fh:
         filas = [
-            ln.strip()
-            for ln in fh
-            if ln.strip() and not ln.lstrip().startswith('#')
+            ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith('#')
         ]
     return ';'.join(filas)
 
@@ -147,73 +146,78 @@ def main():
     # LA COMPROBACION QUE IMPORTA
     malas = [k for k, v in pares if '\n' in str(v) or '\r' in str(v)]
     if malas:
-        sys.exit(f"ERROR: estas variables tienen salto de linea y romperian "
-                 f"el bloque de Portainer: {', '.join(malas)}")
+        sys.exit(
+            f'ERROR: estas variables tienen salto de linea y romperian '
+            f'el bloque de Portainer: {", ".join(malas)}'
+        )
 
-    faltan = [k for k in ('FIREFLY_TOKEN', 'TELEGRAM_TOKEN', 'PRODUCTOS_CSV')
-              if k not in dict(pares)]
+    faltan = [
+        k
+        for k in ('FIREFLY_TOKEN', 'TELEGRAM_TOKEN', 'PRODUCTOS_CSV')
+        if k not in dict(pares)
+    ]
 
     out = io.StringIO()
-    out.write("VARIABLES DE ENTORNO PARA EL STACK DE PORTAINER\n")
-    out.write("=" * 72 + "\n\n")
-    out.write("Este archivo TIENE TUS TOKENS. No lo subas a ningun repo.\n")
-    out.write("Vive fuera de automatizacion/, que es el repo publico.\n\n")
-    out.write("COMO PEGARLO\n")
+    out.write('VARIABLES DE ENTORNO PARA EL STACK DE PORTAINER\n')
+    out.write('=' * 72 + '\n\n')
+    out.write('Este archivo TIENE TUS TOKENS. No lo subas a ningun repo.\n')
+    out.write('Vive fuera de automatizacion/, que es el repo publico.\n\n')
+    out.write('COMO PEGARLO\n')
     out.write("  Portainer -> tu stack -> seccion 'Environment variables'\n")
     out.write("  -> boton 'Advanced mode' -> pega el bloque de abajo completo.\n")
-    out.write("  Cada linea es UNA variable. Ninguna ocupa dos lineas: eso ya\n")
-    out.write("  esta verificado por el generador.\n\n")
-    out.write("=" * 72 + "\n")
-    out.write("PEGAR DESDE LA LINEA SIGUIENTE\n")
-    out.write("=" * 72 + "\n")
+    out.write('  Cada linea es UNA variable. Ninguna ocupa dos lineas: eso ya\n')
+    out.write('  esta verificado por el generador.\n\n')
+    out.write('=' * 72 + '\n')
+    out.write('PEGAR DESDE LA LINEA SIGUIENTE\n')
+    out.write('=' * 72 + '\n')
     for k, v in pares:
-        out.write(f"{k}={v}\n")
-    out.write("=" * 72 + "\n")
-    out.write("FIN DEL BLOQUE\n")
-    out.write("=" * 72 + "\n\n")
+        out.write(f'{k}={v}\n')
+    out.write('=' * 72 + '\n')
+    out.write('FIN DEL BLOQUE\n')
+    out.write('=' * 72 + '\n\n')
 
-    out.write("QUE CONFIRMAR ANTES DE DESPLEGAR\n\n")
-    out.write(f"  RED_FIREFLY={SOLO_DESPLIEGUE['RED_FIREFLY']()}\n")
-    out.write("    Es la red de Docker donde vive Firefly. Si el despliegue\n")
+    out.write('QUE CONFIRMAR ANTES DE DESPLEGAR\n\n')
+    out.write(f'  RED_FIREFLY={SOLO_DESPLIEGUE["RED_FIREFLY"]()}\n')
+    out.write('    Es la red de Docker donde vive Firefly. Si el despliegue\n')
     out.write("    falla con 'network not found', corre en el servidor:\n")
-    out.write("        docker network ls\n")
-    out.write("    y usa el nombre que aparezca.\n\n")
-    out.write(f"  FIREFLY_URL={SOLO_DESPLIEGUE['FIREFLY_URL']()}\n")
-    out.write("    Es el nombre del contenedor de Firefly mas el puerto interno.\n")
-    out.write("    Si no resuelve, se puede usar la URL publica.\n\n")
-    out.write("  Compose path  <-- LO QUE MAS SE OLVIDA\n")
-    out.write("    En Portainer tiene que decir exactamente:\n")
-    out.write("        despliegue/stack.portainer.yml\n")
-    out.write("    El compose se movio de la raiz a esa carpeta. Si queda en\n")
-    out.write("    blanco o apuntando al viejo, el stack no lo encuentra.\n\n")
-    out.write(f"  INGESTA_EN_SERIO={config.get('INGESTA_EN_SERIO', 'no')}\n")
+    out.write('        docker network ls\n')
+    out.write('    y usa el nombre que aparezca.\n\n')
+    out.write(f'  FIREFLY_URL={SOLO_DESPLIEGUE["FIREFLY_URL"]()}\n')
+    out.write('    Es el nombre del contenedor de Firefly mas el puerto interno.\n')
+    out.write('    Si no resuelve, se puede usar la URL publica.\n\n')
+    out.write('  Compose path  <-- LO QUE MAS SE OLVIDA\n')
+    out.write('    En Portainer tiene que decir exactamente:\n')
+    out.write('        despliegue/stack.portainer.yml\n')
+    out.write('    El compose se movio de la raiz a esa carpeta. Si queda en\n')
+    out.write('    blanco o apuntando al viejo, el stack no lo encuentra.\n\n')
+    out.write(f'  INGESTA_EN_SERIO={config.get("INGESTA_EN_SERIO", "no")}\n')
     out.write("    Si es la primera vez, ponlo en 'no', mira el log del\n")
-    out.write("    contenedor, confirma que los movimientos que ve son\n")
+    out.write('    contenedor, confirma que los movimientos que ve son\n')
     out.write("    correctos, y despues cambialo a 'si'.\n\n")
-    out.write("  PRODUCTOS_CSV\n")
+    out.write('  PRODUCTOS_CSV\n')
     out.write("    Va en una sola linea, con ';' entre filas. El servicio lo\n")
-    out.write("    desarma solo al arrancar.\n\n")
-    out.write("  GRAPH_REFRESH_TOKEN\n")
-    out.write("    Evita que el contenedor tenga que pedir el codigo de device\n")
-    out.write("    flow, que nadie veria. Solo se usa en el primer arranque:\n")
-    out.write("    despues rota solo dentro del volumen. Si algun dia deja de\n")
-    out.write("    servir, saca uno nuevo con:\n")
-    out.write("        python herramientas/diagnostico.py correo\n")
-    out.write("        python herramientas/generar_variables.py\n")
+    out.write('    desarma solo al arrancar.\n\n')
+    out.write('  GRAPH_REFRESH_TOKEN\n')
+    out.write('    Evita que el contenedor tenga que pedir el codigo de device\n')
+    out.write('    flow, que nadie veria. Solo se usa en el primer arranque:\n')
+    out.write('    despues rota solo dentro del volumen. Si algun dia deja de\n')
+    out.write('    servir, saca uno nuevo con:\n')
+    out.write('        python herramientas/diagnostico.py correo\n')
+    out.write('        python herramientas/generar_variables.py\n')
     if faltan:
-        out.write(f"\nOJO: faltan por configurar: {', '.join(faltan)}\n")
+        out.write(f'\nOJO: faltan por configurar: {", ".join(faltan)}\n')
 
     with open(SALIDA, 'w', encoding='utf-8', newline='\n') as fh:
         fh.write(out.getvalue())
 
-    print(f"escrito: {SALIDA}")
-    print(f"  {len(pares)} variables, todas de una sola linea\n")
+    print(f'escrito: {SALIDA}')
+    print(f'  {len(pares)} variables, todas de una sola linea\n')
     for k, bruto in pares:
         v = str(bruto)
-        muestra = f"[{len(v)} chars]" if any(s in k for s in SECRETO) else v[:52]
-        print(f"    {k:24} = {muestra}")
+        muestra = f'[{len(v)} chars]' if any(s in k for s in SECRETO) else v[:52]
+        print(f'    {k:24} = {muestra}')
     if faltan:
-        print(f"\n  OJO, faltan: {', '.join(faltan)}")
+        print(f'\n  OJO, faltan: {", ".join(faltan)}')
     return 0
 
 

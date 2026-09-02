@@ -70,16 +70,52 @@ PRODUCTOS = [
 ]
 
 CATEGORIAS = [
-    'Abono', 'Articulos Personales', 'Cafe', 'Comida de calle', 'Compras',
-    'Compras Casa', 'Compras Tecnologia', 'Cuidado personal', 'Domicilio',
-    'Facturas', 'GBS Infra', 'Gato', 'Gimnasio', 'Juegos', 'Mecato', 'Mercado',
-    'Moto', 'Regalos', 'Restaurante', 'Ropa', 'Salidas', 'Salud', 'Suplementos',
-    'Telefono', 'Transporte Aplicacion', 'Viajes',
+    'Abono',
+    'Articulos Personales',
+    'Cafe',
+    'Comida de calle',
+    'Compras',
+    'Compras Casa',
+    'Compras Tecnologia',
+    'Cuidado personal',
+    'Domicilio',
+    'Facturas',
+    'GBS Infra',
+    'Gato',
+    'Gimnasio',
+    'Juegos',
+    'Mecato',
+    'Mercado',
+    'Moto',
+    'Regalos',
+    'Restaurante',
+    'Ropa',
+    'Salidas',
+    'Salud',
+    'Suplementos',
+    'Telefono',
+    'Transporte Aplicacion',
+    'Viajes',
 ]
-PRESUPUESTOS = ['Esencial', 'Vivir', 'Antojos', 'Imprevistos Esenciales',
-                'Costos Financieros']
-ETIQUETAS = ['Didi', 'Alimentos', 'Cena', 'Uber', 'Almuerzo', 'No alimentos',
-             'parqueadero', 'Gasolina', 'Ropa', 'reembolsable']
+PRESUPUESTOS = [
+    'Esencial',
+    'Vivir',
+    'Antojos',
+    'Imprevistos Esenciales',
+    'Costos Financieros',
+]
+ETIQUETAS = [
+    'Didi',
+    'Alimentos',
+    'Cena',
+    'Uber',
+    'Almuerzo',
+    'No alimentos',
+    'parqueadero',
+    'Gasolina',
+    'Ropa',
+    'reembolsable',
+]
 
 
 class Registro:
@@ -141,11 +177,20 @@ def montar(reg, con_ia=True):
     # las preguntas abiertas
     for i, (ffid, nombre, valor, cat) in enumerate(ABIERTAS):
         pid, _ = alm.crear_pendiente(
-            correo_id=cid, usuario_id=uid, tipo='compra_tarjeta',
-            fecha='2026-09-02', valor=float(valor), moneda='COP',
-            contraparte=nombre, descripcion=nombre, categoria=cat,
-            cuenta_firefly='AMEX PLATINO', estado='publicado',
-            pregunta='categoria', external_id=f'bc-sim-{i}')
+            correo_id=cid,
+            usuario_id=uid,
+            tipo='compra_tarjeta',
+            fecha='2026-09-02',
+            valor=float(valor),
+            moneda='COP',
+            contraparte=nombre,
+            descripcion=nombre,
+            categoria=cat,
+            cuenta_firefly='AMEX PLATINO',
+            estado='publicado',
+            pregunta='categoria',
+            external_id=f'bc-sim-{i}',
+        )
         alm.actualizar_pendiente(pid, firefly_id=ffid)
         alm.marcar_preguntado(pid)
 
@@ -153,19 +198,28 @@ def montar(reg, con_ia=True):
         cx.execute(
             'INSERT INTO catalogo (nit, codigo, descripcion, grupo, categoria,'
             " tipo) VALUES (?, ?, ?, 'Sin clasificar', 'Sin clasificar',"
-            " 'Sin clasificar')", (nit, cod, desc))
+            " 'Sin clasificar')",
+            (nit, cod, desc),
+        )
     cx.commit()
 
     # ------------------------------------------------------------- Firefly
     tx = {}
     for i, monto, comercio, cat, pres, etqs in MOVIMIENTOS:
         tx[i] = {
-            'id': i, 'fecha': '2026-09-02', 'valor': float(monto), 'moneda': 'COP',
-            'descripcion': comercio, 'categoria': cat, 'presupuesto': pres,
+            'id': i,
+            'fecha': '2026-09-02',
+            'valor': float(monto),
+            'moneda': 'COP',
+            'descripcion': comercio,
+            'categoria': cat,
+            'presupuesto': pres,
             'origen': 'AMEX PLATINO' if monto < 0 else comercio,
             'destino': comercio if monto < 0 else 'Bancolombia',
-            'etiquetas': list(etqs), 'tipo': 'withdrawal' if monto < 0 else 'deposit',
-            'notas': '', 'partes': 1,
+            'etiquetas': list(etqs),
+            'tipo': 'withdrawal' if monto < 0 else 'deposit',
+            'notas': '',
+            'partes': 1,
         }
 
     def ultimos(limite=15, dias=35):
@@ -207,12 +261,16 @@ def montar(reg, con_ia=True):
     movimientos.borrar = borrar
     movimientos.confirmar = lambda t: True
     movimientos.editar_varios = lambda ids, **c: [
-        ({'id': str(i), 'movimiento': editar(i, **c)}
-         if str(i) in tx else {'id': str(i), 'error': 'no existe'})
+        (
+            {'id': str(i), 'movimiento': editar(i, **c)}
+            if str(i) in tx
+            else {'id': str(i), 'error': 'no existe'}
+        )
         for i in ids
     ]
     movimientos.buscar = lambda consulta=None, dias=35, limite=20, categoria=None: [
-        m for m in ultimos(999)
+        m
+        for m in ultimos(999)
         if not consulta
         or consulta.lower() in (m['destino'] or '').lower()
         or consulta.lower() in (m['categoria'] or '').lower()
@@ -225,15 +283,21 @@ def montar(reg, con_ia=True):
         'Gato': {'presupuesto': 'Esencial', 'seguro': True, 'reparto': {}},
     }
     presupuestos.estado = lambda cuando=None: [
-        {'nombre': b, 'limite': 1_000_000, 'gastado': 400_000, 'queda': 600_000,
-         'pct': 40.0} for b in PRESUPUESTOS
+        {
+            'nombre': b,
+            'limite': 1_000_000,
+            'gastado': 400_000,
+            'queda': 600_000,
+            'pct': 40.0,
+        }
+        for b in PRESUPUESTOS
     ]
     presupuestos.revienta = lambda *a, **k: None
+
     # Registra: `aplicar_respuesta` publica por aqui, no por `movimientos`, y
     # sin esto esas escrituras eran INVISIBLES en la salida.
     def split_falso(tx_id, **campos):
-        reg.escribio.append({'id': str(tx_id), 'cambios': dict(campos),
-                             'via': 'split'})
+        reg.escribio.append({'id': str(tx_id), 'cambios': dict(campos), 'via': 'split'})
         return True
 
     bot.firefly.actualizar_split = split_falso
@@ -242,10 +306,7 @@ def montar(reg, con_ia=True):
     bot.firefly.get_all = lambda ruta: (
         [{'attributes': {'name': c}} for c in CATEGORIAS]
         if '/categories' in ruta
-        else [
-            {'attributes': {'name': m[2]}}
-            for m in MOVIMIENTOS
-        ]
+        else [{'attributes': {'name': m[2]}} for m in MOVIMIENTOS]
         if '/accounts' in ruta
         else []
     )
@@ -257,14 +318,16 @@ def montar(reg, con_ia=True):
 
         def enviar(self, chat, texto, botones=None, modo='HTML'):
             TelegramFalso._id += 1
-            reg.dijo.append({
-                'texto': _sin_html(texto),
-                'crudo': texto,
-                'html_malo': _html_malo(texto),
-                'botones': [[t for t, _ in fila] for fila in (botones or [])],
-                'datos': [d for fila in (botones or []) for _, d in fila],
-                'mensaje_id': TelegramFalso._id,
-            })
+            reg.dijo.append(
+                {
+                    'texto': _sin_html(texto),
+                    'crudo': texto,
+                    'html_malo': _html_malo(texto),
+                    'botones': [[t for t, _ in fila] for fila in (botones or [])],
+                    'datos': [d for fila in (botones or []) for _, d in fila],
+                    'mensaje_id': TelegramFalso._id,
+                }
+            )
             return {'message_id': TelegramFalso._id}
 
         def editar(self, chat, message_id, texto, botones=None, modo='HTML'):
@@ -273,14 +336,16 @@ def montar(reg, con_ia=True):
             # cuarto argumento posicional -- donde va el modo -- y Telegram
             # contestaba «unsupported parse_mode». Sin registrarlos aqui, la
             # pantalla siguiente sale sin botones y no se nota.
-            reg.dijo.append({
-                'texto': _sin_html(texto),
-                'crudo': texto,
-                'html_malo': _html_malo(texto),
-                'botones': [[t for t, _ in fila] for fila in (botones or [])],
-                'datos': [d for fila in (botones or []) for _, d in fila],
-                'editado': message_id,
-            })
+            reg.dijo.append(
+                {
+                    'texto': _sin_html(texto),
+                    'crudo': texto,
+                    'html_malo': _html_malo(texto),
+                    'botones': [[t for t, _ in fila] for fila in (botones or [])],
+                    'datos': [d for fila in (botones or []) for _, d in fila],
+                    'editado': message_id,
+                }
+            )
             return {'message_id': message_id}
 
         def responder_callback(self, cq_id, texto=None, alerta=False):
@@ -291,13 +356,15 @@ def montar(reg, con_ia=True):
 
     bot.telegram = TelegramFalso()
     bot.config = types.SimpleNamespace(
-        get=lambda k, d=None: CHAT if 'CHAT_ID' in k else d)
+        get=lambda k, d=None: CHAT if 'CHAT_ID' in k else d
+    )
 
     # El asesor de verdad necesita saldos de Firefly; se simula su respuesta
     # para que se pueda ver A DONDE fue el mensaje sin depender de la red.
     def asesor_falso(cx_, chat, txt):
-        reg.dijo.append({'texto': f'[ASESOR] {txt}', 'botones': [], 'datos': [],
-                         'html_malo': None})
+        reg.dijo.append(
+            {'texto': f'[ASESOR] {txt}', 'botones': [], 'datos': [], 'html_malo': None}
+        )
         # El historial lo llena el asesor de verdad. Sin esto el plan del
         # modelo se probaba SIEMPRE sin historial de conversacion.
         hist = bot.HISTORIAL.setdefault(str(chat), [])
@@ -364,9 +431,18 @@ def correr(mensajes, con_ia=True, como_json=False):
         salida.append(paso)
 
     if como_json:
-        print(json.dumps({'pasos': salida, 'borrados': reg.borrados,
-                          'errores': reg.errores, 'avisos': reg.avisos},
-                         ensure_ascii=False, indent=1))
+        print(
+            json.dumps(
+                {
+                    'pasos': salida,
+                    'borrados': reg.borrados,
+                    'errores': reg.errores,
+                    'avisos': reg.avisos,
+                },
+                ensure_ascii=False,
+                indent=1,
+            )
+        )
         return salida
 
     for paso in salida:
@@ -401,10 +477,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         prog='python herramientas/simular_chat.py',
         description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     ap.add_argument('mensajes', nargs='*', help='lo que le escribes al bot')
-    ap.add_argument('--sin-ia', action='store_true',
-                    help='apaga Gemini para probar el respaldo por patrones')
+    ap.add_argument(
+        '--sin-ia',
+        action='store_true',
+        help='apaga Gemini para probar el respaldo por patrones',
+    )
     ap.add_argument('--guion', help='archivo con un mensaje por linea')
     ap.add_argument('--json', action='store_true', help='salida en JSON')
     a = ap.parse_args(argv)
@@ -412,7 +492,8 @@ def main(argv=None):
     mensajes = list(a.mensajes)
     if a.guion:
         mensajes += [
-            ln.strip() for ln in Path(a.guion).read_text(encoding='utf-8').splitlines()
+            ln.strip()
+            for ln in Path(a.guion).read_text(encoding='utf-8').splitlines()
             if ln.strip() and not ln.startswith('#')
         ]
     if not mensajes:

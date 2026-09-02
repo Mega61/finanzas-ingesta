@@ -568,9 +568,7 @@ class TestEdicionMasiva:
 
     def test_debajo_del_umbral_pasa_directo(self, entorno):
         alm, _tg, estado, _u, con_plan = entorno
-        con_plan(
-            {**PLAN_BASE, 'movimientos': ['1458', '1457'], 'categoria': 'Mercado'}
-        )
+        con_plan({**PLAN_BASE, 'movimientos': ['1458', '1457'], 'categoria': 'Mercado'})
         bot.manejar_update(alm.cx, _msg('las ultimas 2 a mercado'))
         assert {tid for tid, _ in estado['puts']} == {'1458', '1457'}
 

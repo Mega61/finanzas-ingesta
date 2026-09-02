@@ -497,9 +497,7 @@ class TestLaConfianzaTambienCuentaParaLosProductos:
             },
             confianza=0.6,
         )
-        dato = next(
-            d for fila in tg.botones for _, d in fila if d.startswith('fc:')
-        )
+        dato = next(d for fila in tg.botones for _, d in fila if d.startswith('fc:'))
         bot.manejar_update(alm.cx, _cb(dato))
         p = alm.catalogo_por_id(cat_id)
         assert (p['grupo'], p['categoria']) == ('Servicios', 'Domicilio')
