@@ -134,7 +134,7 @@ def _tokens(t):
 # --------------------------------------------------------------- heuristica
 
 
-def _buscar_categoria(texto, categorias):
+def buscar_categoria(texto, categorias):
     """Devuelve [(nivel, categoria, por_que)] ordenado de mas fuerte a mas debil.
 
     Los niveles importan mas que el orden de busqueda:
@@ -285,7 +285,7 @@ def interpretar(cx, usuario_id, pendiente, texto, cat=None):
     }
 
     # --- etapa 1: gratis
-    hallazgos = _buscar_categoria(texto, cat['categorias'])
+    hallazgos = buscar_categoria(texto, cat['categorias'])
     # se vetan las palabras de la categoria ganadora para buscar el comercio
     vetadas = _tokens(hallazgos[0][1]) if hallazgos else set()
     comercio = _buscar_comercio(texto, cat['comercios'], excluir=vetadas)

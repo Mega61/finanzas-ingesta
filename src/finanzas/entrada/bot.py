@@ -25,6 +25,7 @@ from finanzas.aplicacion import (
     publicador,
 )
 from finanzas.dominio import dinero as _dinero
+from finanzas.dominio import intencion
 
 
 def _a(cx):
@@ -304,7 +305,58 @@ def aplicar_respuesta(
         idx = publicador.IndiceFirefly(desde=str(p['fecha']), hasta=str(p['fecha']))
         accion, detalle = publicador.publicar_uno(cx, p, idx=idx, dry_run=False)
         return p, f'{categoria} · {accion} {detalle}{aviso}'
-    return p, f'{categoria} · guardado{aviso}'
+
+    # Ya estaba en Firefly. Antes esto solo actualizaba la base local y Firefly
+    # se quedaba con lo viejo: apretabas «Compras» y en Firefly seguia diciendo
+    # «Inversion», corregias el comercio y seguia diciendo «Bold». La respuesta
+    # se veia aplicada en el chat y no habia cambiado nada donde importa.
+    detalle = _corregir_en_firefly(cx, p, categoria, presupuesto, comercio)
+    return p, f'{categoria} · {detalle}{aviso}'
+
+
+def _corregir_en_firefly(cx, p, categoria, presupuesto, comercio):
+    """Empuja la correccion al movimiento que ya esta en Firefly."""
+    if not p['firefly_id']:
+        return 'guardado local (sin id de Firefly)'
+    campos = {}
+    if categoria:
+        campos['category_name'] = categoria
+    if presupuesto:
+        campos['budget_name'] = presupuesto
+    # El nombre del comercio es la cuenta de destino de un gasto y la de origen
+    # de un ingreso.
+    if comercio:
+        campos['destination_name' if float(p['valor']) < 0 else 'source_name'] = (
+            comercio
+        )
+    if not campos:
+        return 'guardado'
+    try:
+        firefly.actualizar_split(str(p['firefly_id']), **campos)
+    except firefly.ApiError as ex:
+        db.bitacora(
+            cx,
+            'corregir',
+            usuario_id=p['usuario_id'],
+            pendiente_id=p['id'],
+            firefly_id=p['firefly_id'],
+            payload=campos,
+            respuesta=str(ex),
+            ok=False,
+        )
+        cx.commit()
+        return f'⚠️ no pude actualizar Firefly: {str(ex)[:120]}'
+    db.bitacora(
+        cx,
+        'corregir',
+        usuario_id=p['usuario_id'],
+        pendiente_id=p['id'],
+        firefly_id=p['firefly_id'],
+        payload=campos,
+        ok=True,
+    )
+    cx.commit()
+    return 'corregido en Firefly (' + ', '.join(sorted(campos)) + ')'
 
 
 # ---------------------------------------------------------------- comandos
@@ -527,6 +579,21 @@ def _toque_presupuesto(t):
     )
 
 
+def _toque_mover(t):
+    """«Era otro»: aplica el texto libre que quedo en espera a ESTE movimiento.
+
+    El texto no viaja en el callback porque ahi solo caben 64 bytes; queda
+    guardado por chat y se recupera aqui.
+    """
+    txt = _texto_en_espera(t.cx, t.chat)
+    if not txt:
+        t.aviso('ya no tengo ese mensaje, escribelo de nuevo')
+        return
+    t.aviso('lo muevo')
+    t.reemplazar(f'Movido: «{txt[:60]}»')
+    _responder_con_texto(t.cx, t.chat, t.pid, txt)
+
+
 def _toque_pedir_texto(t):
     """Antes esto guardaba un marcador '__ESPERANDO_TEXTO__' en las sugerencias,
     que nadie leia y que ademas pisaba las opciones reales: si despues tocabas
@@ -553,6 +620,7 @@ TOQUES = {
     'a': _toque_aceptar_propuesta,
     'b': _toque_presupuesto,
     't': _toque_pedir_texto,
+    'm': _toque_mover,
 }
 
 
@@ -655,6 +723,14 @@ def _guardar_mensaje(cx, chat, mensaje_id, pendiente_id):
     _a(cx).guardar_mensaje(chat, mensaje_id, pendiente_id)
 
 
+def _guardar_texto_en_espera(cx, chat, txt):
+    _a(cx).guardar_texto_en_espera(chat, txt)
+
+
+def _texto_en_espera(cx, chat):
+    return _a(cx).texto_en_espera(chat)
+
+
 def _pendiente_de_mensaje(cx, chat, mensaje_id):
     return _a(cx).pendiente_de_mensaje(chat, mensaje_id)
 
@@ -664,15 +740,29 @@ def abiertas_del_chat(cx, chat):
 
 
 def _texto_libre(cx, chat, texto, respondiendo_a=None):
-    """Un mensaje escrito a mano puede ser dos cosas muy distintas: la respuesta
-    a una pregunta abierta, o una consulta al asesor.
+    """Un mensaje escrito a mano y que hay que resolver solo.
 
-    Y si es una respuesta, hay que saber A CUAL. Antes se tomaba la pregunta mas
-    reciente, asi que contestar la tercera de seis resolvia la sexta: la
-    respuesta se aplicaba al movimiento equivocado y el que creias contestado
-    seguia preguntandose. Ahora se usa el "responder a" de Telegram.
+    Antes esto tenia dos modos y los dos molestaban. Primero tomaba la pregunta
+    MAS RECIENTE, asi que contestar la tercera de seis resolvia la sexta y la
+    categoria caia en el movimiento equivocado. Se arreglo pasando a NO adivinar
+    —«responde al mensaje de la que quieras contestar»— y eso es igual de malo
+    por el otro lado: escribes «era Etre, venden cosas para la casa» y el bot te
+    dice que no sabe de que le hablas. Y el asesor solo se consultaba cuando NO
+    habia preguntas abiertas, o sea casi nunca.
+
+    Ahora se LEE el mensaje, en este orden:
+
+      1. Si respondiste a un mensaje concreto, es ese. No hay nada que pensar.
+      2. Si es una consulta («¿me alcanza para...?»), va al asesor, haya o no
+         preguntas abiertas.
+      3. Si hay una sola pregunta abierta, es esa.
+      4. Con varias, se puntua el texto contra cada una: el comercio que
+         nombras, la categoria que implica, el monto. Si una gana claro, se
+         resuelve y se dice CUAL.
+      5. Si ninguna gana, se aplica a la ultima que se te pregunto —que es lo
+         que un humano asumiria— diciendolo, y con botones para moverla de una.
     """
-    # 1. ¿es una respuesta a una pregunta concreta?
+    # 1. respondio a un mensaje concreto
     if respondiendo_a:
         pid = _pendiente_de_mensaje(cx, chat, respondiendo_a)
         if pid:
@@ -681,38 +771,104 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
 
     abiertas = abiertas_del_chat(cx, chat)
 
-    # 2. una sola pregunta abierta: no hay ambiguedad
+    # 2. una consulta va al asesor aunque haya cosas abiertas
+    if intencion.es_para_el_asesor(texto):
+        _consultar_asesor(cx, chat, texto)
+        return
+
+    if not abiertas:
+        _consultar_asesor(cx, chat, texto)
+        return
+
+    # 3. una sola: no hay ambiguedad que resolver
     if len(abiertas) == 1:
         _responder_con_texto(cx, chat, abiertas[0]['id'], texto)
         return
 
-    # 3. varias abiertas y no dijo a cual: NO se adivina. Adivinar aqui mete la
-    #    categoria en el movimiento equivocado, que es peor que preguntar.
-    if len(abiertas) > 1:
-        lineas = [
-            f'Tengo <b>{len(abiertas)}</b> preguntas abiertas y no sé a '
-            f'cuál me respondes.',
-            '',
-            'Responde <b>al mensaje</b> de la que quieras contestar '
-            '(mantén presionado → Responder), o usa los botones.',
-            '',
-            'Las abiertas:',
-        ]
-        for p in abiertas[:6]:
-            lineas.append(
-                f'· {p["fecha"]} {_plata(p["valor"], p["moneda"])} '
-                f'{(p["contraparte"] or "")[:24]}'
-            )
-        telegram.enviar(chat, '\n'.join(lineas))
+    # 4. varias: leer el mensaje. La categoria que implica el texto se calcula
+    #    UNA vez (es la misma para todos) y se pasa como senal mas.
+    implicada = _categoria_implicada(cx, abiertas[0], texto)
+    filas = [dict(m) for m in abiertas]
+    coincidencias = intencion.a_que_movimiento(texto, filas, implicada)
+    ganador = intencion.hay_un_ganador(coincidencias)
+
+    if ganador:
+        elegido = next(m for m in abiertas if m['id'] == ganador.id)
+        telegram.enviar(
+            chat,
+            f'Entiendo que hablas del de <b>{_plata(elegido["valor"], elegido["moneda"])}'
+            f'</b> en {(elegido["contraparte"] or "")[:28]}'
+            f'\n<i>({", ".join(ganador.razones)})</i>',
+        )
+        _responder_con_texto(cx, chat, ganador.id, texto)
         return
 
-    # 4. nada abierto: es para el asesor
-    _consultar_asesor(cx, chat, texto)
+    # 5. Nada en el texto senala a ninguna. Se aplica a la ultima preguntada,
+    #    que es la que estabas mirando, y se dice: una respuesta aplicada en
+    #    silencio al movimiento equivocado es lo unico inaceptable aqui.
+    _aplicar_a_la_ultima(cx, chat, abiertas, texto)
+
+
+def _categoria_implicada(cx, cualquiera, texto):
+    """Que categoria sugiere el texto, sin gastar una peticion de IA.
+
+    Se usa solo como senal para saber A CUAL movimiento apunta, asi que la
+    heuristica basta: si se equivoca, el peor caso es que no desempate.
+    """
+    try:
+        cat = interprete.catalogo(cx, cualquiera['usuario_id'])
+        hallazgos = interprete.buscar_categoria(texto, cat['categorias'])
+        return hallazgos[0][1] if hallazgos else None
+    except Exception:
+        return None
+
+
+def _aplicar_a_la_ultima(cx, chat, abiertas, texto):
+    """Ultimo recurso: la ultima que se pregunto, diciendolo y con botones."""
+    ultima = abiertas[0]
+    _guardar_texto_en_espera(cx, chat, texto)
+
+    lineas = [
+        f'Lo tomo como respuesta al de '
+        f'<b>{_plata(ultima["valor"], ultima["moneda"])}</b> en '
+        f'{(ultima["contraparte"] or "")[:28]}, que es el ultimo que te pregunte.',
+        '',
+        'Si era otro, tocalo:',
+    ]
+    botones = []
+    fila = []
+    for p in abiertas[1:6]:
+        etiqueta = f'{_plata(p["valor"], p["moneda"])} {(p["contraparte"] or "")[:14]}'
+        fila.append((etiqueta, f'm:{p["id"]}:0'))
+        if len(fila) == 2:
+            botones.append(fila)
+            fila = []
+    if fila:
+        botones.append(fila)
+
+    telegram.enviar(chat, '\n'.join(lineas), botones or None)
+    _responder_con_texto(cx, chat, ultima['id'], texto)
+
+
+# Arriba de este umbral el bot APLICA y ofrece deshacer. Por debajo, propone y
+# espera. El corte no es arbitrario: la heuristica da 0.85 cuando la senal es
+# inequivoca (una palabra que solo aparece en una categoria) y 0.72 cuando es
+# debil, y Gemini devuelve su propia confianza.
+UMBRAL_APLICAR = 0.8
 
 
 def _responder_con_texto(cx, chat, pendiente_id, texto):
-    """Interpreta 'fue la comida de la gata en tierragro' y propone."""
+    """Interpreta «fue la comida de la gata en tierragro» y resuelve.
 
+    Antes SIEMPRE pedia confirmacion antes de aplicar, con el argumento de que
+    una interpretacion equivocada aplicada en silencio es peor que un mensaje
+    mas. El argumento estaba a medias: lo malo no es aplicar, es aplicar EN
+    SILENCIO. Pedir permiso convertia cada respuesta en dos interacciones, para
+    la enorme mayoria de casos en que la interpretacion era correcta.
+
+    Ahora, cuando la confianza alcanza, aplica y muestra el boton para
+    corregir. Cuando no alcanza, propone como antes.
+    """
     p = _a(cx).pendiente(pendiente_id)
     if p is None:
         telegram.enviar(chat, 'Ese movimiento ya no existe.')
@@ -724,18 +880,44 @@ def _responder_con_texto(cx, chat, pendiente_id, texto):
         return
 
     if not d['categoria']:
+        _pedir_categoria_a_mano(cx, chat, p, texto)
+        return
+
+    # Falta el presupuesto y la categoria no lo decide sola: eso SI hay que
+    # preguntarlo, porque el presupuesto es la mitad de la decision.
+    if d['pedir_presupuesto']:
+        _guardar_propuesta(cx, pendiente_id, d)
+        _preguntar_presupuesto(cx, pendiente_id, chat, d)
+        return
+
+    if float(d['confianza'] or 0) >= UMBRAL_APLICAR:
+        _guardar_propuesta(cx, pendiente_id, d)
+        p2, detalle = aplicar_respuesta(
+            cx,
+            pendiente_id,
+            categoria=d['categoria'],
+            presupuesto=d['presupuesto'],
+            comercio=d['comercio'],
+        )
+        if p2 is None:
+            telegram.enviar(chat, detalle)
+            return
+        lineas = [f'✅ <b>{d["categoria"]}</b>', describir(p2)]
+        if d['comercio']:
+            lineas.append(f'comercio <b>{d["comercio"]}</b>')
+        lineas.append(f'<i>{d["razon"]}</i>')
+        lineas.append(f'<i>{detalle}</i>')
         telegram.enviar(
             chat,
-            'No entendí a qué categoría va. Usa los botones '
-            'del mensaje anterior, o dime el nombre exacto '
-            'de la categoría.',
+            '\n'.join(lineas),
+            [[('✏️ No, corrijo', f't:{pendiente_id}:0')]],
         )
         return
 
-    # se guarda la propuesta y se pide confirmacion: una interpretacion
-    # equivocada aplicada en silencio es peor que un mensaje mas
+    # Confianza baja: se propone y se espera. Aqui el mensaje extra si se gana
+    # el sueldo.
     _guardar_propuesta(cx, pendiente_id, d)
-    lineas = [describir(p), '', f'Entendí: <b>{d["categoria"]}</b>']
+    lineas = [describir(p), '', f'Creo que es <b>{d["categoria"]}</b>']
     if d['comercio']:
         lineas.append(f'comercio <b>{d["comercio"]}</b>')
     if d['presupuesto']:
@@ -743,18 +925,44 @@ def _responder_con_texto(cx, chat, pendiente_id, texto):
     lineas.append(f'\n<i>{d["razon"]}</i>')
     if d['fuente'] == 'gemini':
         lineas.append('<i>(interpretado con IA)</i>')
-
-    botones = [
+    telegram.enviar(
+        chat,
+        '\n'.join(lineas),
         [
-            ('✅ Correcto', f'a:{pendiente_id}:0'),
-            ('✏️ No, corrijo', f't:{pendiente_id}:0'),
-        ]
-    ]
-    if d['pedir_presupuesto']:
-        lineas.append(
-            '\n⚠️ Esa categoría cae en varios presupuestos. Confirma y te pregunto cuál.'
+            [
+                ('✅ Sí', f'a:{pendiente_id}:0'),
+                ('✏️ No, corrijo', f't:{pendiente_id}:0'),
+            ]
+        ],
+    )
+
+
+def _pedir_categoria_a_mano(cx, chat, p, texto):
+    """No se entendio nada del texto. En vez de dejar al usuario colgado, se le
+    vuelven a ofrecer las categorias con botones."""
+    sug = sugerir_categorias(cx, p['usuario_id'], p, todas=False)
+    if not sug:
+        telegram.enviar(
+            chat,
+            f'No entendí «{texto[:40]}» y no tengo categorías que sugerirte. '
+            f'Dime el nombre exacto de la categoría.',
         )
-    telegram.enviar(chat, '\n'.join(lineas), botones)
+        return
+    _guardar_sugerencias(cx, p['id'], sug)
+    botones, fila = [], []
+    for i, c in enumerate(sug):
+        fila.append((c, f'c:{p["id"]}:{i}'))
+        if len(fila) == 2:
+            botones.append(fila)
+            fila = []
+    if fila:
+        botones.append(fila)
+    telegram.enviar(
+        chat,
+        f'No supe qué categoría es «{texto[:40]}».\n{describir(p)}\n\n'
+        f'¿Alguna de estas?',
+        botones,
+    )
 
 
 def _guardar_propuesta(cx, pendiente_id, d):

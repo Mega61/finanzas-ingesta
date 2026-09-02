@@ -85,7 +85,7 @@ def _pendiente(alm, uid, cid, **extra):
         'tipo': 'compra_tarjeta',
         'fecha': '2026-09-01',
         'valor': -50000.0,
-        'comercio': 'TIERRAGRO',
+        'contraparte': 'TIERRAGRO',
         'external_id': f'bc-{extra.pop("eid", "a")}',
         'estado': 'publicado',
         'pregunta': 'categoria',
@@ -247,8 +247,8 @@ class TestPedirTexto:
         """El caso exacto del bug: dos movimientos preguntados, se contesta el
         primero, y la respuesta tiene que ir al primero."""
         bot, alm, _tg, uid, cid = entorno
-        a = _pendiente(alm, uid, cid, eid='a', comercio='TIERRAGRO')
-        b = _pendiente(alm, uid, cid, eid='b', comercio='ZONA FIT')
+        a = _pendiente(alm, uid, cid, eid='a', contraparte='TIERRAGRO')
+        b = _pendiente(alm, uid, cid, eid='b', contraparte='ZONA FIT')
         bot.manejar_update(alm.cx, _toque(f't:{a}:0'))
         bot.manejar_update(alm.cx, _toque(f't:{b}:0'))
         assert alm.pendiente_de_mensaje('555', 1001) == a

@@ -21,6 +21,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from finanzas.dominio import texto
+
 CAMPOS_PENDIENTE = (
     'correo_id',
     'usuario_id',
@@ -45,6 +47,17 @@ CAMPOS_PENDIENTE = (
     'estado',
     'pregunta',
     'external_id',
+)
+
+# Lo que se puede ACTUALIZAR de un pendiente: los campos de creacion mas los
+# que se llenan despues. Se valida contra esta lista porque el nombre de una
+# columna no se puede parametrizar en SQL, hay que interpolarlo.
+COLUMNAS_PENDIENTE = (
+    *CAMPOS_PENDIENTE,
+    'firefly_id',
+    'visto_en',
+    'valor_confirmado',
+    'preguntado_en',
 )
 
 # Los estados en los que un movimiento todavia esta abierto: no llego a Firefly
@@ -277,6 +290,17 @@ class Almacen:
             ).fetchone()
             if fila:
                 return fila['id'], False
+        # Un campo que no existe se DESCARTABA en silencio. Un nombre mal
+        # escrito no guardaba el dato y nada lo decia: aparecia semanas despues
+        # como una columna vacia sin explicacion.
+        desconocidos = sorted(set(campos) - set(CAMPOS_PENDIENTE))
+        if desconocidos:
+            raise ValueError(
+                f'crear_pendiente no conoce {desconocidos}. '
+                f'Los campos validos son {CAMPOS_PENDIENTE}. '
+                f'Los que se llenan despues (firefly_id, visto_en...) van por '
+                f'actualizar_pendiente.'
+            )
         usados = [c for c in CAMPOS_PENDIENTE if c in campos]
         marcas = ', '.join('?' for _ in usados)
         cur = self.cx.execute(
@@ -293,6 +317,12 @@ class Almacen:
     def actualizar_pendiente(self, pendiente_id: int, **campos: Any) -> None:
         if not campos:
             return
+        desconocidos = sorted(set(campos) - set(COLUMNAS_PENDIENTE))
+        if desconocidos:
+            raise ValueError(
+                f'actualizar_pendiente no conoce {desconocidos}. '
+                f'Validos: {COLUMNAS_PENDIENTE}'
+            )
         sets = ', '.join(f'{k} = ?' for k in campos)
         self.cx.execute(
             f"UPDATE pendientes SET {sets}, actualizado_en = datetime('now') "
@@ -465,7 +495,18 @@ class Almacen:
         origen: str = 'usuario',
         direccion: str | None = None,
         aciertos: int | None = None,
-    ) -> None:
+    ) -> bool:
+        """Guarda o actualiza una regla. Devuelve False si la rechazo.
+
+        Rechaza los patrones que son SOLO el nombre de una pasarela de pago. El
+        sembrador aprendio del historico la regla 'BOLD -> Inversion' con 9
+        aciertos, y desde ahi toda compra hecha por Bold —que puede ser
+        cualquier cosa— entraba como inversion con 0.88 de confianza, o sea sin
+        preguntar. El guardian va aqui y no en los llamadores porque son tres y
+        basta con que uno se olvide.
+        """
+        if texto.es_pasarela_pura(patron):
+            return False
         self.cx.execute(
             """INSERT INTO reglas (usuario_id, patron, cuenta_firefly, categoria,
                   presupuesto, etiquetas, origen, direccion, aciertos)
@@ -489,6 +530,21 @@ class Almacen:
                 aciertos,
             ),
         )
+        self.cx.commit()
+        return True
+
+    def reglas_de_pasarela(self) -> list[sqlite3.Row]:
+        """Las reglas ya guardadas cuyo patron es solo una pasarela. Existieron
+        antes del guardian y hay que borrarlas: mientras esten, siguen
+        clasificando mal todo lo que pase por esa pasarela."""
+        return [
+            r
+            for r in self.cx.execute('SELECT * FROM reglas').fetchall()
+            if texto.es_pasarela_pura(r['patron'])
+        ]
+
+    def borrar_regla(self, regla_id: int) -> None:
+        self.cx.execute('DELETE FROM reglas WHERE id = ?', (regla_id,))
         self.cx.commit()
 
     def borrar_reglas(self) -> int:
@@ -566,6 +622,30 @@ class Almacen:
         return self.cx.execute(
             'SELECT * FROM propuestas WHERE pendiente_id = ?', (pendiente_id,)
         ).fetchone()
+
+    def guardar_texto_en_espera(self, chat_id: str, txt: str) -> None:
+        """El texto libre que el bot resolvio por su cuenta, para que siga vivo
+        si el usuario toca «era otro»."""
+        self.cx.execute(
+            """INSERT INTO textos_en_espera (chat_id, texto)
+               VALUES (?, ?)
+               ON CONFLICT (chat_id) DO UPDATE SET
+                  texto = excluded.texto, creado_en = datetime('now')""",
+            (str(chat_id), txt),
+        )
+        self.cx.commit()
+
+    def texto_en_espera(self, chat_id: str) -> str | None:
+        r = self.cx.execute(
+            'SELECT texto FROM textos_en_espera WHERE chat_id = ?', (str(chat_id),)
+        ).fetchone()
+        return r['texto'] if r else None
+
+    def olvidar_texto_en_espera(self, chat_id: str) -> None:
+        self.cx.execute(
+            'DELETE FROM textos_en_espera WHERE chat_id = ?', (str(chat_id),)
+        )
+        self.cx.commit()
 
     def guardar_mensaje(self, chat_id: str, mensaje_id: int, pendiente_id: int) -> None:
         self.cx.execute(

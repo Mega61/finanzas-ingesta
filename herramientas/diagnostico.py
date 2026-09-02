@@ -197,6 +197,36 @@ def extractos(args):
             print(f'  {e.archivo}: {e.error}')
 
 
+def pasarelas(args):
+    """Reglas aprendidas cuyo patron es solo una pasarela de pago.
+
+    Con --en-serio las borra. Existen de antes del guardian y mientras esten,
+    siguen clasificando mal todo lo que pase por esa pasarela.
+    """
+    db.inicializar()
+    cx = db.conectar()
+    alm = db.almacen(cx)
+    malas = alm.reglas_de_pasarela()
+    if not malas:
+        print('ninguna regla envenenada. Bien.')
+        cx.close()
+        return
+    print(f'{len(malas)} reglas cuyo patron es solo una pasarela:')
+    print()
+    for r in malas:
+        print(f"  {r['patron']!r:16} -> {r['categoria']!r:24} "
+              f"origen={r['origen']} aciertos={r['aciertos']}")
+    if '--en-serio' not in args:
+        print()
+        print('SECO: no borre nada. Corre con --en-serio para borrarlas.')
+        cx.close()
+        return
+    for r in malas:
+        alm.borrar_regla(r['id'])
+        print(f"  borrada {r['patron']!r}")
+    cx.close()
+
+
 DIAGNOSTICOS = {
     'rutas': rutas,
     'base': base,
@@ -207,6 +237,7 @@ DIAGNOSTICOS = {
     'interprete': interpretar,
     'asesor': contexto,
     'extractos': extractos,
+    'pasarelas': pasarelas,
 }
 
 

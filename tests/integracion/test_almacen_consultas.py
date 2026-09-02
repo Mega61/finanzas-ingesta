@@ -369,3 +369,119 @@ class TestBitacora:
     def test_sin_payload_queda_nulo(self, alm):
         alm.anotar('inicio', ok=True)
         assert alm.cx.execute('SELECT payload FROM bitacora').fetchone()[0] is None
+
+
+class TestNoAprenderPasarelas:
+    """El sembrador aprendio 'BOLD -> Inversion' del historico de Firefly, con
+    9 aciertos. Desde ahi toda compra hecha por Bold entraba como inversion con
+    0.88 de confianza: sin preguntar. El guardian va en el almacen y no en los
+    llamadores porque son tres y basta con que uno se olvide.
+    """
+
+    def test_no_guarda_una_regla_con_el_nombre_de_una_pasarela(self, alm, usuario):
+        assert alm.guardar_regla(usuario, 'BOLD', categoria='Inversion') is False
+        assert alm.contar_reglas() == 0
+
+    @pytest.mark.parametrize('patron', ['BOLD', 'WOMPI', 'MERCADO PAGO', 'PAYU', 'DLO'])
+    def test_ninguna_pasarela_pura_pasa(self, alm, usuario, patron):
+        assert alm.guardar_regla(usuario, patron, categoria='X') is False
+
+    def test_un_comercio_de_verdad_si_pasa(self, alm, usuario):
+        assert alm.guardar_regla(usuario, 'ETRE', categoria='Hogar') is True
+        assert alm.reglas(usuario)[0]['categoria'] == 'Hogar'
+
+    def test_rappi_pasa_porque_tambien_es_comercio(self, alm, usuario):
+        """Pagar por Rappi normalmente ES un domicilio. Prohibirla de plano
+        habria roto una clasificacion que funcionaba."""
+        assert alm.guardar_regla(usuario, 'RAPPI', categoria='Domicilio') is True
+
+    def test_encuentra_las_que_ya_estaban_guardadas(self, alm, usuario):
+        """Las creadas antes del guardian siguen clasificando mal. Hay que
+        poder listarlas para borrarlas."""
+        alm.cx.execute(
+            'INSERT INTO reglas (usuario_id, patron, categoria, origen) '
+            "VALUES (?, 'BOLD', 'Inversion', 'comercio')",
+            (usuario,),
+        )
+        alm.guardar_regla(usuario, 'ETRE', categoria='Hogar')
+        alm.cx.commit()
+        malas = alm.reglas_de_pasarela()
+        assert [r['patron'] for r in malas] == ['BOLD']
+
+    def test_borrar_una_por_id(self, alm, usuario):
+        alm.cx.execute(
+            'INSERT INTO reglas (usuario_id, patron, categoria, origen) '
+            "VALUES (?, 'BOLD', 'Inversion', 'comercio')",
+            (usuario,),
+        )
+        alm.cx.commit()
+        alm.borrar_regla(alm.reglas_de_pasarela()[0]['id'])
+        assert alm.reglas_de_pasarela() == []
+
+
+class TestCamposEstrictos:
+    """Un campo que no existe se DESCARTABA en silencio. Un nombre mal escrito
+    no guardaba el dato y nada lo decia: aparecia semanas despues como una
+    columna vacia sin explicacion. Lo cazo de inmediato en dos pruebas propias
+    que pasaban `comercio=` —que no es una columna— y montaban un estado que
+    creian tener.
+    """
+
+    def test_crear_con_un_campo_inventado_falla(self, alm, usuario, correo):
+        with pytest.raises(ValueError, match='comercio'):
+            alm.crear_pendiente(
+                correo_id=correo,
+                usuario_id=usuario,
+                tipo='c',
+                fecha='2026-09-01',
+                valor=-1.0,
+                external_id='x',
+                comercio='TIERRAGRO',
+            )
+
+    def test_el_mensaje_dice_cuales_son_validos(self, alm, usuario, correo):
+        with pytest.raises(ValueError, match='contraparte'):
+            alm.crear_pendiente(
+                correo_id=correo,
+                usuario_id=usuario,
+                tipo='c',
+                fecha='2026-09-01',
+                valor=-1.0,
+                external_id='x',
+                comercioo='mal',
+            )
+
+    def test_firefly_id_no_va_al_crear_sino_al_actualizar(self, alm, usuario, correo):
+        """Se llena despues de publicar, no al nacer el movimiento."""
+        with pytest.raises(ValueError, match='firefly_id'):
+            alm.crear_pendiente(
+                correo_id=correo,
+                usuario_id=usuario,
+                tipo='c',
+                fecha='2026-09-01',
+                valor=-1.0,
+                external_id='x',
+                firefly_id='999',
+            )
+        pid, _ = alm.crear_pendiente(
+            correo_id=correo,
+            usuario_id=usuario,
+            tipo='c',
+            fecha='2026-09-01',
+            valor=-1.0,
+            external_id='y',
+        )
+        alm.actualizar_pendiente(pid, firefly_id='999')
+        assert alm.pendiente(pid)['firefly_id'] == '999'
+
+    def test_actualizar_con_un_campo_inventado_falla(self, alm, usuario, correo):
+        pid, _ = alm.crear_pendiente(
+            correo_id=correo,
+            usuario_id=usuario,
+            tipo='c',
+            fecha='2026-09-01',
+            valor=-1.0,
+            external_id='z',
+        )
+        with pytest.raises(ValueError, match='inventado'):
+            alm.actualizar_pendiente(pid, inventado='x')

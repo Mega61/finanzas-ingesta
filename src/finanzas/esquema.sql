@@ -210,6 +210,21 @@ CREATE INDEX IF NOT EXISTS ix_preguntas_pendiente
   ON preguntas_enviadas (pendiente_id);
 
 
+-- El ultimo texto libre de cada chat que el bot resolvio por su cuenta.
+--
+-- Cuando escribes algo que no senala a ningun movimiento en particular, el bot
+-- lo aplica al ultimo que te pregunto y te ofrece botones para moverlo a otro.
+-- El texto tiene que sobrevivir hasta que toques el boton, y no cabe en el
+-- callback: Telegram admite 64 bytes ahi.
+--
+-- Es uno por chat a proposito: solo importa el ultimo.
+CREATE TABLE IF NOT EXISTS textos_en_espera (
+  chat_id   TEXT PRIMARY KEY,
+  texto     TEXT NOT NULL,
+  creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+
 -- ------------------------------------------------------------------- vistas
 
 -- Lo que el bot tiene que preguntar ahora mismo. Incluye cosas ya publicadas

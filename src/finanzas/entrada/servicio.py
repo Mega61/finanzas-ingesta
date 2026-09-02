@@ -27,7 +27,7 @@ import time
 import traceback
 from datetime import timedelta
 
-from finanzas import config
+from finanzas import config, registro
 from finanzas.adaptadores import db, telegram
 from finanzas.aplicacion import conciliador
 from finanzas.dominio import fechas
@@ -51,9 +51,10 @@ EN_SERIO = str(config.get('INGESTA_EN_SERIO', 'no')).lower() in (
 _parar = threading.Event()
 
 
-def log(donde, msg):
-    ts = fechas.ahora().strftime('%Y-%m-%d %H:%M:%S')
-    print(f'[{ts}] {donde:9} {msg}', flush=True)
+# `registro.log` es el mismo que tenia este archivo, movido a un solo sitio:
+# antes servicio ponia marca de tiempo y el resto del codigo usaba print pelado,
+# asi que en los logs del contenedor la mitad de las lineas tenia hora.
+log = registro.log
 
 
 def _avisar(texto):
@@ -149,6 +150,20 @@ def limpiar_cola(cx):
             'limpieza',
             f'saque de la cola {viejos} anteriores a {marca} y {sinfecha} sin fecha',
         )
+
+    # Reglas cuyo patron es solo una pasarela de pago. El sembrador aprendio
+    # 'BOLD -> Inversion' del historico, con 9 aciertos, y desde ahi TODA compra
+    # por Bold entraba como inversion con 0.88 de confianza: sin preguntar. Ya
+    # no se pueden crear, pero las que quedaron hay que borrarlas, y se hace
+    # aqui para que se arregle solo al redesplegar.
+    for r in alm.reglas_de_pasarela():
+        alm.borrar_regla(r['id'])
+        log(
+            'limpieza',
+            f'borre la regla {r["patron"]!r} -> {r["categoria"]!r}: '
+            f'es una pasarela, no un comercio',
+        )
+
     abiertas = alm.contar_por_preguntar()
     log('inicio', f'preguntas abiertas: {abiertas}')
 

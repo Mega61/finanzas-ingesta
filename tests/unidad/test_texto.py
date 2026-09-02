@@ -102,3 +102,86 @@ class TestInvariantes:
         ]:
             una = texto.normalizar(entrada)
             assert texto.normalizar(una) == una, entrada
+
+
+class TestPasarelasSinAsterisco:
+    """El banco manda la pasarela de DOS formas y solo se manejaba una.
+
+    'MERCADO PAGO*TIERRAG' se limpiaba, pero 'BOLD CO ONLINE RTFE' no, porque
+    no traia asterisco. Consecuencia: el sembrador aprendio del historico la
+    regla 'BOLD -> Inversion' con 9 aciertos, y desde ahi TODA compra por Bold
+    —que puede ser cualquier cosa— entraba como inversion con 0.88 de
+    confianza, o sea sin preguntar.
+    """
+
+    def test_la_pasarela_se_quita_tambien_sin_asterisco(self):
+        assert texto.normalizar('BOLD CO ONLINE RTFE') == 'ONLINE RTFE'
+
+    def test_y_con_asterisco_como_siempre(self):
+        assert texto.normalizar('BOLD*ETRE') == 'ETRE'
+
+    @pytest.mark.parametrize(
+        ('crudo', 'limpio'),
+        [
+            ('MERCADO PAGO*TIERRAG', 'TIERRAG'),
+            ('MERCADOPAGO*ZONAFIT', 'ZONAFIT'),
+            ('MERCADO PAGO*ZONAFIT', 'ZONAFIT'),
+            ('PAYU*CINEMARK', 'CINEMARK'),
+            ('DLO*Didi', 'DIDI'),
+            ('UBER RIDES*DL', 'UBER RIDES'),
+            ('MP*ALGO', 'ALGO'),
+            ('WOMPI TIENDA DE LA ESQUINA', 'TIENDA DE LA ESQUINA'),
+        ],
+    )
+    def test_las_dos_formas_de_todas_las_puras(self, crudo, limpio):
+        assert texto.normalizar(crudo) == limpio
+
+    def test_mercado_libre_no_es_mercado_pago(self):
+        """El orden de la alternancia importa: con las cortas primero, 'MP'
+        cazaba dentro de 'MERCADO PAGO' y dejaba 'ERCADO PAGO'."""
+        assert texto.normalizar('MERCADO LIBRE') == 'MERCADO LIBRE'
+
+    @pytest.mark.parametrize(
+        'crudo',
+        [
+            'DOMICILIO RAPPI',
+            'SACAR NEQUI',
+            'PAGO PRUEBA PSE',
+            'ABONO TC RAPPI',
+        ],
+    )
+    def test_las_ambiguas_se_conservan_como_palabra(self, crudo):
+        """RAPPI, NEQUI y PSE son pasarela CON asterisco, pero por si solas
+        significan algo: 'DOMICILIO RAPPI' y 'SACAR NEQUI' los escribio el
+        usuario y quieren decir justo eso. Borrarlas dejaba el movimiento sin
+        identidad."""
+        assert texto.normalizar(crudo) == crudo.replace('  ', ' ')
+
+    def test_si_solo_queda_la_pasarela_no_se_borra(self):
+        """Un movimiento que es SOLO 'BOLD' no tiene nada detras. Vaciarlo
+        dejaria la clave en blanco y no habria con que preguntar."""
+        assert texto.normalizar('BOLD') == 'BOLD'
+        assert texto.normalizar('WOMPI') == 'WOMPI'
+
+    @pytest.mark.parametrize(
+        ('nombre', 'es'),
+        [
+            ('BOLD', True),
+            ('bold', True),
+            ('  BOLD  ', True),
+            ('MERCADO PAGO', True),
+            ('MERCADOPAGO', True),
+            ('WOMPI', True),
+            ('BOLD*ETRE', False),
+            ('ETRE', False),
+            ('RAPPI', False),
+            ('NEQUI', False),
+            ('MERCADO LIBRE', False),
+            ('', False),
+            (None, False),
+        ],
+    )
+    def test_es_pasarela_pura(self, nombre, es):
+        """Lo que decide si se puede aprender una regla con ese patron. RAPPI da
+        False a proposito: los domicilios de Rappi SI son un comercio."""
+        assert texto.es_pasarela_pura(nombre) is es
