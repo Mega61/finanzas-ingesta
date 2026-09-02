@@ -305,6 +305,14 @@ LAS ACCIONES:
               cambia un movimiento, cambia una regla. Llena `categoria` y
               `presupuesto`.
 
+  clasificar_producto   Esta diciendo QUE ES un producto de supermercado que
+              se le pregunto. Ojo: los productos son LINEAS DE FACTURA del
+              super (Exito, D1), no movimientos del banco. Si en la lista de
+              PRODUCTOS PENDIENTES hay uno y el mensaje describe que es ese
+              producto —«es el costo del domicilio», «eso es jabon», «arroz»—
+              esta accion, NO editar. Llena `producto_id`, `producto_grupo` y
+              `producto_categoria`.
+
   nada        No entendiste. Mejor eso que inventar.
 
 REGLAS DURAS:
@@ -330,6 +338,12 @@ REGLAS DURAS:
 - `confianza`: 0.9+ cuando la orden es inequivoca; 0.5-0.7 cuando adivinas a
   cual movimiento; menos de 0.5 si de verdad no sabes.
 - `explicacion` en una linea, en espanol, para mostrarsela al usuario.
+- Un PRODUCTO no es un MOVIMIENTO. «fletes gravado» es una linea de la factura
+  del super; una transaccion es un cargo del banco. Si el usuario contesta algo
+  que describe un producto pendiente, es `clasificar_producto`, y no le ofrezcas
+  cambiarle la categoria a una compra del banco.
+- `producto_grupo` y `producto_categoria` tienen que ser un par valido de la
+  lista de GRUPOS Y CATEGORIAS DE PRODUCTO que se te da.
 """
 
 
@@ -337,6 +351,9 @@ def _esquema_orden(
     ids: Iterable[str],
     categorias: Iterable[str],
     presupuestos: Iterable[str],
+    productos: Iterable[str] = (),
+    grupos: Iterable[str] = (),
+    cats_producto: Iterable[str] = (),
 ) -> dict[str, Any]:
     """El esquema de la respuesta.
 
@@ -364,6 +381,7 @@ def _esquema_orden(
                     'responder',
                     'borrar',
                     'regla_presupuesto',
+                    'clasificar_producto',
                     'nada',
                 ],
             },
@@ -378,6 +396,15 @@ def _esquema_orden(
             'comercio': {'type': 'string'},
             'etiquetas_agregar': {'type': 'array', 'items': {'type': 'string'}},
             'etiquetas_quitar': {'type': 'array', 'items': {'type': 'string'}},
+            **(
+                {
+                    'producto_id': enum(list(productos)[:40]),
+                    'producto_grupo': enum(grupos),
+                    'producto_categoria': enum(cats_producto),
+                }
+                if productos
+                else {}
+            ),
             'confianza': {'type': 'number'},
             'explicacion': {'type': 'string'},
         },
@@ -390,6 +417,9 @@ def _esquema_orden(
             'comercio',
             'etiquetas_agregar',
             'etiquetas_quitar',
+            'producto_id',
+            'producto_grupo',
+            'producto_categoria',
             'confianza',
             'explicacion',
         ],
@@ -404,6 +434,8 @@ def entender_orden(
     etiquetas: Iterable[str] = (),
     abiertas: list[Mapping[str, Any]] | None = None,
     historial: list[tuple[str, str]] | None = None,
+    productos: list[Mapping[str, Any]] | None = None,
+    grupos_producto: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Que quiere hacer el usuario, y sobre que movimientos.
 
@@ -446,6 +478,21 @@ def entender_orden(
                 f'{p.get("fecha")} {p.get("valor")} '
                 f'"{p.get("contraparte") or p.get("descripcion")}"'
             )
+    if productos:
+        lineas += [
+            '',
+            'PRODUCTOS DE SUPERMERCADO PENDIENTES (lineas de factura, NO '
+            'movimientos del banco):',
+        ]
+        for pr in productos[:20]:
+            lineas.append(
+                f'  producto_id={pr.get("id")} '
+                f'"{pr.get("descripcion") or pr.get("codigo")}"'
+            )
+    if grupos_producto:
+        lineas += ['', 'GRUPOS Y CATEGORIAS DE PRODUCTO:']
+        for g, cs in grupos_producto.items():
+            lineas.append(f'  {g}: {", ".join(cs)}')
     lineas += ['', 'CATEGORIAS: ' + ', '.join(sorted(categorias))]
     lineas.append('PRESUPUESTOS: ' + ', '.join(sorted(presupuestos)))
     if etiquetas:
@@ -463,6 +510,9 @@ def entender_orden(
                     [str(m.get('id')) for m in movimientos[:40] if m.get('id')],
                     categorias,
                     presupuestos,
+                    [str(p.get('id')) for p in (productos or []) if p.get('id')],
+                    list(grupos_producto or {}),
+                    sorted({c for cs in (grupos_producto or {}).values() for c in cs}),
                 ),
             },
         ),
@@ -473,7 +523,14 @@ def entender_orden(
     except json.JSONDecodeError as ex:
         raise SinIA(f'no pude leer el plan: {ex}; crudo={crudo[:200]}') from None
     # Se limpia lo que venga vacio, para que el llamador solo vea lo que hay.
-    for k in ('categoria', 'presupuesto', 'comercio'):
+    for k in (
+        'categoria',
+        'presupuesto',
+        'comercio',
+        'producto_id',
+        'producto_grupo',
+        'producto_categoria',
+    ):
         if not (d.get(k) or '').strip():
             d[k] = None
     for k in ('etiquetas_agregar', 'etiquetas_quitar', 'movimientos'):

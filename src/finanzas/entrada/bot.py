@@ -1375,6 +1375,8 @@ def _texto_producto(p):
         f'comprado {cuantas} · {plata}\n\n'
         '<i>El nombre viene cortado por el almacén. '
         'Lo que respondas queda para siempre.</i>'
+        + SALTO
+        + '<i>O respóndeme a este mensaje y ya: «es el costo del domicilio».</i>'
     )
 
 
@@ -1391,8 +1393,13 @@ def preguntar_productos(cx, limite=MAX_PRODUCTOS):
         )
         botones.append([('🤷 Saltar', f'fx:{p["id"]}:0')])
         try:
-            telegram.enviar(chat, _texto_producto(p), botones)
+            msg = telegram.enviar(chat, _texto_producto(p), botones)
             db.catalogo_marcar_preguntado_id(cx, p['id'])
+            # Se ata el mensaje al producto: asi contestar por escrito llega a
+            # donde debe. Sin esto la unica via eran los botones, y una
+            # respuesta escrita acababa en el camino de las transacciones.
+            if msg and msg.get('message_id'):
+                _a(cx).guardar_mensaje_producto(chat, msg['message_id'], p['id'])
             mandadas += 1
         except telegram.TelegramError as ex:
             print(f'  no pude preguntar por el producto #{p["id"]}: {ex}')
@@ -1520,6 +1527,11 @@ def _plan_de_ia(cx, chat, texto, abiertas):
         return None
     try:
         movs = movimientos.ultimos(limite=25)
+        # Tambien los PRODUCTOS pendientes. Sin esto, contestar «es el costo de
+        # domicilio» a la pregunta de «fletes gravado» caia en el camino de
+        # editar transacciones y el bot ofrecia cambiarle la categoria a una
+        # compra del banco: dos cosas distintas en el mismo chat.
+        prods = _a(cx).productos_preguntados(chat)
         return ia.entender_orden(
             texto,
             movs,
@@ -1528,6 +1540,8 @@ def _plan_de_ia(cx, chat, texto, abiertas):
             movimientos.etiquetas_mas_usadas(),
             abiertas=[dict(p) for p in abiertas],
             historial=HISTORIAL.get(str(chat)),
+            productos=[dict(p) for p in prods],
+            grupos_producto={g: list(catalogo.CATEGORIAS[g]) for g in catalogo.GRUPOS},
         )
     except Exception as ex:
         # Sin IA o con la llamada rota se cae al camino de patrones, que sigue
@@ -1583,6 +1597,9 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas):
         )
         _recordar_camino(chat, 'edicion')
         return True
+
+    if accion == 'clasificar_producto':
+        return _clasificar_producto_del_plan(cx, chat, plan)
 
     if accion == 'borrar':
         if len(ids) != 1:
@@ -1668,6 +1685,102 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas):
         [[('✏️ no era eso', f'mv:{ids[0]}:0')]],
     )
     _recordar_camino(chat, 'edicion')
+    return True
+
+
+def _responder_producto(cx, chat, catalogo_id, texto):
+    """Contestaste al mensaje de un producto concreto: no hay que adivinar cual.
+
+    Se le pide al modelo solo el grupo y la categoria, con el producto ya
+    fijado. Si no hay IA se cae a las reglas de palabras del catalogo, que para
+    «es el costo de domicilio» aciertan.
+    """
+    p = _a(cx).catalogo_por_id(int(catalogo_id))
+    if p is None:
+        telegram.enviar(chat, 'Ese producto ya no está en la cola.')
+        return
+    grupos = {g: list(catalogo.CATEGORIAS[g]) for g in catalogo.GRUPOS}
+    plan = None
+    if ia.disponible():
+        try:
+            plan = ia.entender_orden(
+                texto,
+                [],
+                movimientos.categorias(),
+                presupuestos.nombres_activos(),
+                productos=[{'id': catalogo_id, 'descripcion': p['descripcion']}],
+                grupos_producto=grupos,
+            )
+        except Exception as ex:
+            print(f'  no pude entender el producto: {str(ex)[:120]}')
+    if plan and plan.get('producto_grupo'):
+        plan['producto_id'] = str(catalogo_id)
+        _clasificar_producto_del_plan(cx, chat, plan)
+        return
+
+    # Respaldo: las reglas de palabras del propio catalogo, aplicadas a lo que
+    # el usuario escribio en vez de a la descripcion truncada del almacen.
+    _tipo, grupo, cat, _fuente = catalogo.clasificar(p['nit'], p['codigo'], texto, 19)
+    if grupo == 'Sin clasificar':
+        telegram.enviar(
+            chat,
+            f'No supe en qué grupo va «{texto[:40]}». Usa los botones del '
+            f'mensaje, que son los grupos que existen.',
+        )
+        return
+    _clasificar_producto_del_plan(
+        cx,
+        chat,
+        {
+            'producto_id': str(catalogo_id),
+            'producto_grupo': grupo,
+            'producto_categoria': cat,
+            'explicacion': f'por lo que escribiste: «{texto[:40]}»',
+        },
+    )
+
+
+def _clasificar_producto_del_plan(cx, chat, plan):
+    """Guarda que ES un producto de supermercado, dicho en palabras.
+
+    Antes la pregunta de producto solo aceptaba botones. Contestar «es el costo
+    de domicilio» a «fletes gravado» no tenia a donde llegar, y el mensaje
+    acababa en el camino de las transacciones ofreciendo cambiar la categoria
+    de una compra del banco.
+    """
+    pid = plan.get('producto_id')
+    grupo = plan.get('producto_grupo')
+    cat = plan.get('producto_categoria')
+    if not (pid and grupo):
+        return False
+    p = _a(cx).catalogo_por_id(int(pid))
+    if p is None:
+        telegram.enviar(chat, 'Ese producto ya no está en la cola.')
+        return True
+    # El par grupo/categoria tiene que ser valido: el modelo puede cruzarlos.
+    validas = catalogo.CATEGORIAS.get(grupo) or ()
+    if cat not in validas:
+        cat = validas[0] if validas else grupo
+    tipo = catalogo.tipo_de(grupo)
+    db.catalogo_responder_id(cx, int(pid), tipo, grupo, cat)
+    # La consulta del catalogo trae 'veces' en un sitio y 'compras' en
+    # otro; se acepta el que venga.
+    claves = set(p.keys())
+    veces = (
+        p['veces'] if 'veces' in claves else p['compras'] if 'compras' in claves else 0
+    )
+    arrastre = (
+        f'{SALTO}<i>Se aplicó a las {veces} compras anteriores.</i>'
+        if (veces or 0) > 1
+        else ''
+    )
+    telegram.enviar(
+        chat,
+        f'✅ <b>{p["descripcion"] or p["codigo"]}</b>{SALTO}'
+        f'{tipo} · {grupo} · {cat}{arrastre}{SALTO}'
+        f'<i>{plan.get("explicacion") or ""}</i>',
+    )
+    _recordar_camino(chat, 'producto')
     return True
 
 
@@ -1947,6 +2060,14 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
         if pid:
             _recordar_camino(chat, 'respuesta')
             _responder_con_texto(cx, chat, pid, texto)
+            return
+        # ¿O al mensaje de un PRODUCTO de supermercado? Son dos espacios
+        # distintos y en el mismo chat: «fletes gravado» es una linea de
+        # factura, no un cargo del banco.
+        cat_id = _a(cx).producto_de_mensaje(chat, respondiendo_a)
+        if cat_id:
+            _recordar_camino(chat, 'producto')
+            _responder_producto(cx, chat, cat_id, texto)
             return
         ed = _a(cx).edicion_en_curso(chat)
         if ed and ed['mensaje_id'] == respondiendo_a:

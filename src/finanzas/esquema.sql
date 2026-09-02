@@ -218,6 +218,27 @@ CREATE INDEX IF NOT EXISTS ix_preguntas_pendiente
 -- callback: Telegram admite 64 bytes ahi.
 --
 -- Es uno por chat a proposito: solo importa el ultimo.
+-- Que pregunta de PRODUCTO corresponde a que mensaje de Telegram.
+--
+-- No se puede reusar `preguntas_enviadas`: esa tiene clave ajena a
+-- `pendientes` y aqui el objetivo es una fila del catalogo, que es otro
+-- espacio de nombres.
+--
+-- Sin esto, la pregunta de producto mandaba botones y nada mas: contestar por
+-- escrito no tenia a donde llegar. El usuario respondio «es el costo de
+-- domicilio» a «fletes gravado» y el mensaje acabo en el camino de editar
+-- TRANSACCIONES, que le ofrecio cambiarle la categoria a una compra.
+CREATE TABLE IF NOT EXISTS preguntas_producto (
+  chat_id     TEXT    NOT NULL,
+  mensaje_id  INTEGER NOT NULL,
+  catalogo_id INTEGER NOT NULL,
+  PRIMARY KEY (chat_id, mensaje_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_preguntas_producto_catalogo
+  ON preguntas_producto (catalogo_id);
+
+
 -- Categoria -> presupuesto, dicho por el usuario.
 --
 -- El presupuesto se deducia del historico: si una categoria apunta al mismo

@@ -1031,6 +1031,49 @@ class Almacen:
         )
         self.cx.commit()
 
+    def guardar_mensaje_producto(
+        self, chat_id: str, mensaje_id: int, catalogo_id: int
+    ) -> None:
+        """Ata la pregunta de un producto a su mensaje de Telegram.
+
+        Sin esto, contestar por escrito a «¿que es esto? fletes gravado» no
+        tenia a donde llegar y el mensaje acababa en el camino de editar
+        transacciones.
+        """
+        self.cx.execute(
+            """INSERT OR REPLACE INTO preguntas_producto
+                  (chat_id, mensaje_id, catalogo_id) VALUES (?, ?, ?)""",
+            (str(chat_id), int(mensaje_id), int(catalogo_id)),
+        )
+        self.cx.commit()
+
+    def producto_de_mensaje(self, chat_id: str, mensaje_id: int) -> int | None:
+        r = self.cx.execute(
+            """SELECT catalogo_id FROM preguntas_producto
+               WHERE chat_id = ? AND mensaje_id = ?""",
+            (str(chat_id), int(mensaje_id)),
+        ).fetchone()
+        return r['catalogo_id'] if r else None
+
+    def productos_preguntados(self, chat_id: str, limite: int = 5) -> list:
+        """Los productos que se le preguntaron a este chat y siguen abiertos.
+
+        Es lo que permite que el modelo sepa que «fletes gravado» esta sobre la
+        mesa y no confunda la respuesta con una orden sobre una transaccion.
+        """
+        return self.cx.execute(
+            """SELECT c.rowid AS id, c.nit, c.codigo, c.descripcion,
+                      c.grupo, c.categoria
+                 FROM preguntas_producto q
+                 JOIN catalogo c ON c.rowid = q.catalogo_id
+                WHERE q.chat_id = ?
+                  -- 'Sin clasificar' y no NULL: es la convencion del catalogo,
+                  -- la misma que usa v_catalogo_por_preguntar.
+                  AND (c.grupo = 'Sin clasificar' OR c.grupo IS NULL)
+                ORDER BY q.mensaje_id DESC LIMIT ?""",
+            (str(chat_id), limite),
+        ).fetchall()
+
     def catalogo_marcar_preguntado_id(self, cat_id: int) -> None:
         self.cx.execute(
             "UPDATE catalogo SET preguntado_en = datetime('now') WHERE rowid = ?",

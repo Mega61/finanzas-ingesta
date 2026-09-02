@@ -181,8 +181,10 @@ REGLAS = [
         'Aseo y hogar',
         'Desechables',
     ),
+    # El flete es el costo de que te traigan el mercado, no un empaque.
+    (r'domicilio|domcilio|flete', 'Servicios', 'Domicilio'),
     (
-        r'domicilio|domcilio|preparaci|bolsa papel|bolsa reciclada|bolsa reutilizable',
+        r'preparaci|bolsa papel|bolsa reciclada|bolsa reutilizable',
         'Servicios',
         'Bolsas y empaques',
     ),
@@ -330,7 +332,11 @@ CATEGORIAS = {
     'Mascotas': ('Gato', 'Perro'),
     'Comida preparada': ('Comida preparada',),
     'Licores': ('Licores',),
-    'Servicios': ('Bolsas y empaques',),
+    # 'Domicilio' esta aparte de las bolsas porque no es lo mismo: un flete de
+    # 9.900 es el costo de que te traigan el mercado, y meterlo en «Bolsas y
+    # empaques» hace que el dashboard cuente empaques que nadie compro. Salio
+    # de una linea real: «FLETES GRAVADO».
+    'Servicios': ('Domicilio', 'Bolsas y empaques'),
     'Tecnologia': ('Tecnologia',),
     'Electrodomesticos': ('Electrodomesticos',),
     'Hogar': ('Hogar',),
