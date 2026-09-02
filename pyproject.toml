@@ -84,6 +84,11 @@ ignore = [
 # Las herramientas de un solo uso: CLI de diagnostico que corren fuera del
 # contenedor.
 "herramientas/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
+# El simulador del chat son DOBLES de Telegram y Firefly: sus firmas
+# tienen que coincidir con las de verdad aunque no usen todo lo que
+# reciben. Pedirle que use cada argumento seria pedirle que no sea un
+# doble.
+"herramientas/simular_chat.py" = ["T20", "PLC0415", "PTH", "ARG"]
 # Las pruebas de fechas construyen datetime naive A PROPOSITO, para
 # verificar que a_instante los convierta a aware.
 "tests/*" = ["T20", "ARG"]

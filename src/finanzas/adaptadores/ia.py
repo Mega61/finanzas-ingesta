@@ -176,6 +176,8 @@ def _esquema(
         # se recorta porque el esquema viaja en cada peticion
         return {'type': 'string', 'enum': list(vals)[:250]}
 
+    presupuestos = list(presupuestos)  # ver la nota en `_esquema_orden`
+    comercios = list(comercios)
     props = {
         'categoria': enum(categorias),
         'confianza': {'type': 'number'},
@@ -190,12 +192,12 @@ def _esquema(
         'type': 'object',
         'properties': props,
         'required': req,
+        # Solo lo que existe: un campo listado aqui y ausente de `properties`
+        # hace que la API rechace el esquema entero. Ver `_esquema_orden`.
         'propertyOrdering': [
-            'categoria',
-            'presupuesto',
-            'comercio',
-            'confianza',
-            'razon',
+            k
+            for k in ('categoria', 'presupuesto', 'comercio', 'confianza', 'razon')
+            if k in props
         ],
     }
 
@@ -369,60 +371,74 @@ def _esquema_orden(
     def enum(vals):
         return {'type': 'string', 'enum': list(vals)[:250]}
 
+    # Se materializan: `if categorias` sobre un generador vacio da verdadero
+    # y volveriamos a mandar el enum vacio que se quiso evitar.
     lista_ids = list(ids)[:60]
+    categorias = list(categorias)
+    presupuestos = list(presupuestos)
+    props = {
+        'accion': {
+            'type': 'string',
+            'enum': [
+                'consultar',
+                'editar',
+                'responder',
+                'borrar',
+                'regla_presupuesto',
+                'clasificar_producto',
+                'nada',
+            ],
+        },
+        'movimientos': {
+            'type': 'array',
+            'items': enum(lista_ids) if lista_ids else {'type': 'string'},
+        },
+        # No van en `required`: la API rechaza un enum con cadena vacia,
+        # asi que la forma de decir «ninguna» es omitir el campo. Y si la lista
+        # viene vacia —Firefly sin presupuestos, instalacion nueva— el campo no
+        # va: un enum vacio tumba la peticion completa y el bot arranca sin
+        # cerebro.
+        **({'categoria': enum(categorias)} if categorias else {}),
+        **({'presupuesto': enum(presupuestos)} if presupuestos else {}),
+        'comercio': {'type': 'string'},
+        'etiquetas_agregar': {'type': 'array', 'items': {'type': 'string'}},
+        'etiquetas_quitar': {'type': 'array', 'items': {'type': 'string'}},
+        **(
+            {
+                'producto_id': enum(list(productos)[:40]),
+                'producto_grupo': enum(grupos),
+                'producto_categoria': enum(cats_producto),
+            }
+            if productos
+            else {}
+        ),
+        'confianza': {'type': 'number'},
+        'explicacion': {'type': 'string'},
+    }
+    # El orden se arma de las propiedades que DE VERDAD estan. Listar un campo
+    # que no existe hace que la API rechace el esquema entero con un 404
+    # «Requested entity was not found», que no dice nada, y el plan falla en
+    # silencio: el bot cae al respaldo por patrones y parece tonto sin motivo.
+    # Pasaba siempre que no habia productos pendientes, o sea casi siempre.
+    orden = [
+        'accion',
+        'movimientos',
+        'categoria',
+        'presupuesto',
+        'comercio',
+        'etiquetas_agregar',
+        'etiquetas_quitar',
+        'producto_id',
+        'producto_grupo',
+        'producto_categoria',
+        'confianza',
+        'explicacion',
+    ]
     return {
         'type': 'object',
-        'properties': {
-            'accion': {
-                'type': 'string',
-                'enum': [
-                    'consultar',
-                    'editar',
-                    'responder',
-                    'borrar',
-                    'regla_presupuesto',
-                    'clasificar_producto',
-                    'nada',
-                ],
-            },
-            'movimientos': {
-                'type': 'array',
-                'items': enum(lista_ids) if lista_ids else {'type': 'string'},
-            },
-            # No van en `required`: la API rechaza un enum con cadena vacia,
-            # asi que la forma de decir «ninguna» es omitir el campo.
-            'categoria': enum(categorias),
-            'presupuesto': enum(presupuestos),
-            'comercio': {'type': 'string'},
-            'etiquetas_agregar': {'type': 'array', 'items': {'type': 'string'}},
-            'etiquetas_quitar': {'type': 'array', 'items': {'type': 'string'}},
-            **(
-                {
-                    'producto_id': enum(list(productos)[:40]),
-                    'producto_grupo': enum(grupos),
-                    'producto_categoria': enum(cats_producto),
-                }
-                if productos
-                else {}
-            ),
-            'confianza': {'type': 'number'},
-            'explicacion': {'type': 'string'},
-        },
+        'properties': props,
         'required': ['accion', 'confianza', 'explicacion'],
-        'propertyOrdering': [
-            'accion',
-            'movimientos',
-            'categoria',
-            'presupuesto',
-            'comercio',
-            'etiquetas_agregar',
-            'etiquetas_quitar',
-            'producto_id',
-            'producto_grupo',
-            'producto_categoria',
-            'confianza',
-            'explicacion',
-        ],
+        'propertyOrdering': [k for k in orden if k in props],
     }
 
 
