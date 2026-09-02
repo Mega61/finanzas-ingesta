@@ -14,7 +14,9 @@ salto de linea.
 import io
 import json
 import os
+import re
 import sys
+from pathlib import Path
 
 # la raiz del repo: estos scripts viven un nivel abajo
 from finanzas import config
@@ -22,14 +24,11 @@ from finanzas.adaptadores import graph
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 SALIDA = config.ruta_personal('portainer-variables.txt')
+STACK = config.ruta_proyecto('despliegue', 'stack.portainer.yml')
 
-# Estas hay que confirmarlas contra la instalacion de cada uno.
-POR_CONFIRMAR = {
-    'RED_FIREFLY': 'proxied',
-    'FIREFLY_URL': 'http://firefly_iii_core:8080',
-}
-
-SECRETO = ('TOKEN', 'CLAVE', 'PASSWORD', 'SECRET')
+# Que NO se imprime en consola. Faltaba 'KEY' y esta misma herramienta —la que
+# existe para manejar secretos— escupio la GEMINI_API_KEY completa al terminal.
+SECRETO = ('TOKEN', 'CLAVE', 'PASSWORD', 'SECRET', 'KEY', 'API')
 
 
 def refresh_token_de_graph():
@@ -50,41 +49,96 @@ def refresh_token_de_graph():
 
 def productos_en_una_linea():
     """productos.csv -> una sola linea, con ';' entre filas."""
-    ruta = os.path.join(AQUI, 'productos.csv')
+    ruta = config.ruta_proyecto('productos.csv')
     if not os.path.exists(ruta):
         return None
     with open(ruta, encoding='utf-8') as fh:
-        filas = [ln.strip() for ln in fh
-                 if ln.strip() and not ln.lstrip().startswith('#')]
+        filas = [
+            ln.strip()
+            for ln in fh
+            if ln.strip() and not ln.lstrip().startswith('#')
+        ]
     return ';'.join(filas)
 
 
+def variables_del_stack():
+    """Los nombres que el stack le pasa al contenedor, en su orden.
+
+    Se leen del stack y NO de una lista escrita aqui. La lista a mano se
+    desincronizo: le faltaban GEMINI_API_KEY y otras diez, y el archivo generado
+    quedaba incompleto sin que nada lo dijera. Se noto el dia que hubo que
+    recrear el stack desde cero.
+    """
+    texto = Path(STACK).read_text(encoding='utf-8')
+    dentro, fuera = False, []
+    for linea in texto.split('\n'):
+        if re.match(r'^\s{4}environment:', linea):
+            dentro = True
+            continue
+        if dentro:
+            if re.match(r'^\s{0,4}\S', linea):
+                break
+            m = re.match(r'^\s{6}([A-Z][A-Z0-9_]+):', linea)
+            if m:
+                fuera.append(m.group(1))
+    return fuera
+
+
+# De donde sale cada valor que no es un simple config.get(). Lo que no este
+# aqui se lee de la configuracion con su propio nombre.
+ESPECIALES = {
+    # El contenedor lo fija en el Dockerfile; no va por Portainer.
+    'FINANZAS_DATOS': lambda: None,
+    'GRAPH_REFRESH_TOKEN': lambda: (
+        config.get('GRAPH_REFRESH_TOKEN') or refresh_token_de_graph()
+    ),
+    'PRODUCTOS_CSV': productos_en_una_linea,
+    'EXTRACTO_CLAVE': lambda: config.get('EXTRACTO_CLAVE') or config.get('CLAVE'),
+    'TZ': lambda: config.get('TZ', 'America/Bogota'),
+}
+
+# Estas NO se leen del .env local a proposito: el valor de desarrollo y el del
+# contenedor son distintos.
+#
+# FIREFLY_URL en tu maquina es la URL publica, porque desde Windows no se
+# resuelve el nombre de un contenedor. Dentro de la red de Docker tiene que ser
+# el nombre del contenedor: asi no sale a internet ni pasa por el proxy inverso.
+# Tomar el del .env metia la URL publica en el stack, que funciona pero da la
+# vuelta por fuera.
+#
+# Se pueden fijar con FIREFLY_URL_CONTENEDOR y RED_FIREFLY en el .env.
+SOLO_DESPLIEGUE = {
+    'RED_FIREFLY': lambda: config.get('RED_FIREFLY') or 'proxied',
+    'FIREFLY_URL': lambda: (
+        config.get('FIREFLY_URL_CONTENEDOR') or 'http://firefly_iii_core:8080'
+    ),
+}
+
+
 def construir():
-    pares = [
-        ('TZ', config.get('TZ', 'America/Bogota')),
-        ('RED_FIREFLY', POR_CONFIRMAR['RED_FIREFLY']),
-        ('FIREFLY_URL', POR_CONFIRMAR['FIREFLY_URL']),
-        ('FIREFLY_TOKEN', config.get('FIREFLY_TOKEN')),
-        ('GRAPH_CLIENT_ID', config.get('GRAPH_CLIENT_ID')),
-        ('GRAPH_AUTHORITY', config.get('GRAPH_AUTHORITY', 'consumers')),
-        ('GRAPH_CUENTA', config.get('GRAPH_CUENTA')),
-        ('GRAPH_REFRESH_TOKEN', refresh_token_de_graph()),
-        ('GMAIL_USUARIO', config.get('GMAIL_USUARIO')),
-        ('GMAIL_APP_PASSWORD', config.get('GMAIL_APP_PASSWORD')),
-        ('TELEGRAM_TOKEN', config.get('TELEGRAM_TOKEN')),
-        ('TELEGRAM_CHAT_ID_JUAN', config.get('TELEGRAM_CHAT_ID_JUAN')),
-        ('TELEGRAM_CHAT_ID_NOVIA', config.get('TELEGRAM_CHAT_ID_NOVIA')),
-        ('EXTRACTO_CLAVE', config.get('EXTRACTO_CLAVE') or config.get('CLAVE')),
-        ('PRODUCTOS_CSV', productos_en_una_linea()),
-        ('INGESTA_INTERVALO_MIN', config.get('INGESTA_INTERVALO_MIN', '15')),
-        ('RESUMEN_HORA', config.get('RESUMEN_HORA', '21:00')),
-        ('CONCILIAR_HORA', config.get('CONCILIAR_HORA', '03:30')),
-        # a proposito: la primera vez conviene mirar el log en seco
-        ('INGESTA_EN_SERIO', 'no'),
-        ('INGESTA_DESDE', config.get('INGESTA_DESDE', '')),
-    ]
-    # las vacias se dejan afuera: Portainer no necesita variables en blanco
-    return [(k, v) for k, v in pares if v not in (None, '')]
+    """(nombre, valor) para cada variable del stack que tenga algo que poner."""
+    pares = []
+    # RED_FIREFLY no esta en el bloque environment: es la red del stack.
+    for nombre in ['RED_FIREFLY', *variables_del_stack()]:
+        if nombre in SOLO_DESPLIEGUE:
+            valor = SOLO_DESPLIEGUE[nombre]()
+        elif nombre in ESPECIALES:
+            valor = ESPECIALES[nombre]()
+        else:
+            valor = config.get(nombre)
+        if valor not in (None, ''):
+            pares.append((nombre, str(valor)))
+    return pares
+
+
+def faltantes(pares):
+    """Las que el stack exige y no se pudieron llenar.
+
+    El stack las marca con `:?` — sin ellas el contenedor no arranca.
+    """
+    texto = Path(STACK).read_text(encoding='utf-8')
+    exigidas = set(re.findall(r'\$\{([A-Z][A-Z0-9_]+):\?', texto))
+    return sorted(exigidas - set(dict(pares)))
 
 
 def main():
@@ -119,12 +173,12 @@ def main():
     out.write("=" * 72 + "\n\n")
 
     out.write("QUE CONFIRMAR ANTES DE DESPLEGAR\n\n")
-    out.write(f"  RED_FIREFLY={POR_CONFIRMAR['RED_FIREFLY']}\n")
+    out.write(f"  RED_FIREFLY={SOLO_DESPLIEGUE['RED_FIREFLY']()}\n")
     out.write("    Es la red de Docker donde vive Firefly. Si el despliegue\n")
     out.write("    falla con 'network not found', corre en el servidor:\n")
     out.write("        docker network ls\n")
     out.write("    y usa el nombre que aparezca.\n\n")
-    out.write(f"  FIREFLY_URL={POR_CONFIRMAR['FIREFLY_URL']}\n")
+    out.write(f"  FIREFLY_URL={SOLO_DESPLIEGUE['FIREFLY_URL']()}\n")
     out.write("    Es el nombre del contenedor de Firefly mas el puerto interno.\n")
     out.write("    Si no resuelve, se puede usar la URL publica.\n\n")
     out.write("  INGESTA_EN_SERIO=no\n")

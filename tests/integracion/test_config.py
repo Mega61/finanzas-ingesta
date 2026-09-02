@@ -17,6 +17,7 @@ nuevo que leyera una variable nueva no se revisaba. Ahora escanea el arbol.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -41,6 +42,11 @@ EXENTAS = {
     # las tres carpetas: solo se fijan para mover la instalacion de sitio
     'FINANZAS_PROYECTO',
     'FINANZAS_PERSONAL',
+    # Estas dos las lee el GENERADOR del bloque de Portainer, no el servicio.
+    # RED_FIREFLY es la red del stack (va en `networks:`, no en environment) y
+    # FIREFLY_URL_CONTENEDOR es lo que acaba siendo FIREFLY_URL alla dentro.
+    'RED_FIREFLY',
+    'FIREFLY_URL_CONTENEDOR',
 }
 
 # Lo que el stack puede pasar sin que nadie lo lea con config.get: TZ la usa
@@ -145,3 +151,66 @@ def test_los_secretos_de_verdad_estan_en_el_stack(clave: str):
     conjunto de arriba pasa igual si el codigo deja de leer uno por un typo:
     con GEMINI_API_KEY paso exactamente eso."""
     assert clave in variables_del_stack()
+
+
+class TestElGeneradorCubreElStack:
+    """`herramientas/generar_variables.py` produce el bloque que se pega en
+    Portainer. Tenia su propia lista escrita a mano y le faltaban once
+    variables, GEMINI_API_KEY entre ellas.
+
+    Eso no se noto hasta que hubo que recrear el stack desde cero y el archivo
+    generado estaba incompleto. Ahora deriva del stack, y esto lo verifica.
+    """
+
+    @staticmethod
+    def _generador():
+        ruta = RAIZ / 'herramientas' / 'generar_variables.py'
+        spec = importlib.util.spec_from_file_location('gv', ruta)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_conoce_todas_las_variables_del_stack(self):
+        gv = self._generador()
+        del_stack = set(gv.variables_del_stack())
+        assert del_stack == variables_del_stack(), (
+            'el generador y esta prueba leen el mismo bloque; si difieren, uno '
+            'de los dos parsers esta mal'
+        )
+
+    def test_no_deja_fuera_ninguna_que_el_stack_exija(self):
+        """Las marcadas con `:?` en el stack: sin ellas el contenedor no
+        arranca."""
+        gv = self._generador()
+        exigidas = set(
+            re.findall(
+                r'\$\{([A-Z][A-Z0-9_]+):\?',
+                (DESPLIEGUE / 'stack.portainer.yml').read_text(encoding='utf-8'),
+            )
+        )
+        sabe_llenar = set(gv.SOLO_DESPLIEGUE) | set(gv.ESPECIALES) | exigidas
+        assert exigidas <= sabe_llenar
+
+    def test_firefly_url_del_contenedor_no_sale_del_env_local(self):
+        """En Windows FIREFLY_URL es la URL publica, porque no se resuelve el
+        nombre de un contenedor. Dentro de Docker tiene que ser el nombre del
+        contenedor, o el trafico sale a internet y vuelve por el proxy."""
+        gv = self._generador()
+        assert 'FIREFLY_URL' in gv.SOLO_DESPLIEGUE
+        assert 'RED_FIREFLY' in gv.SOLO_DESPLIEGUE
+
+    def test_no_imprime_las_llaves_de_api(self):
+        """La herramienta que existe para manejar secretos escupio la
+        GEMINI_API_KEY completa al terminal, porque su lista de que es secreto
+        no incluia 'KEY'."""
+        gv = self._generador()
+        for palabra in ('TOKEN', 'PASSWORD', 'KEY', 'API', 'CLAVE', 'SECRET'):
+            assert palabra in gv.SECRETO
+
+    def test_productos_csv_se_busca_en_la_raiz_del_proyecto(self):
+        """Al mover las herramientas a su carpeta, la ruta relativa quedo
+        apuntando a herramientas/productos.csv, que no existe."""
+        codigo = (RAIZ / 'herramientas' / 'generar_variables.py').read_text(
+            encoding='utf-8'
+        )
+        assert "ruta_proyecto('productos.csv')" in codigo
