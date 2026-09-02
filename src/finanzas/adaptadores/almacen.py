@@ -623,6 +623,56 @@ class Almacen:
             'SELECT * FROM propuestas WHERE pendiente_id = ?', (pendiente_id,)
         ).fetchone()
 
+    def usuario_por_chat(self, chat_id: str) -> sqlite3.Row | None:
+        return self.cx.execute(
+            'SELECT * FROM usuarios WHERE telegram_chat_id = ?', (str(chat_id),)
+        ).fetchone()
+
+    # ------------------------------------------- edicion de un movimiento
+
+    def abrir_edicion(
+        self, chat_id: str, firefly_id: str, mensaje_id: int | None = None
+    ) -> None:
+        """Anota que este chat esta editando ese movimiento de Firefly."""
+        self.cx.execute(
+            """INSERT INTO edicion_en_curso (chat_id, firefly_id, mensaje_id)
+               VALUES (?, ?, ?)
+               ON CONFLICT (chat_id) DO UPDATE SET
+                  firefly_id = excluded.firefly_id,
+                  mensaje_id = excluded.mensaje_id,
+                  creado_en  = datetime('now')""",
+            (str(chat_id), str(firefly_id), mensaje_id),
+        )
+        self.cx.commit()
+
+    def edicion_en_curso(self, chat_id: str) -> sqlite3.Row | None:
+        return self.cx.execute(
+            'SELECT * FROM edicion_en_curso WHERE chat_id = ?', (str(chat_id),)
+        ).fetchone()
+
+    def cerrar_edicion(self, chat_id: str) -> None:
+        self.cx.execute(
+            'DELETE FROM edicion_en_curso WHERE chat_id = ?', (str(chat_id),)
+        )
+        self.cx.commit()
+
+    def cerrar_preguntas_del_chat(self, chat_id: str, motivo: str) -> int:
+        """Cierra TODAS las preguntas abiertas de un chat de una vez.
+
+        Es lo que hace `/listo`. Sin esto, el bot volvia a preguntar cada 24h
+        por cada movimiento abierto y no habia forma de decirle que ya estaba
+        resuelto salvo contestar uno por uno.
+        """
+        cur = self.cx.execute(
+            """UPDATE pendientes SET pregunta = NULL, decidido_por = ?,
+                  actualizado_en = datetime('now')
+               WHERE pregunta IS NOT NULL AND usuario_id IN (
+                   SELECT id FROM usuarios WHERE telegram_chat_id = ?)""",
+            (motivo, str(chat_id)),
+        )
+        self.cx.commit()
+        return cur.rowcount
+
     def guardar_texto_en_espera(self, chat_id: str, txt: str) -> None:
         """El texto libre que el bot resolvio por su cuenta, para que siga vivo
         si el usuario toca «era otro»."""

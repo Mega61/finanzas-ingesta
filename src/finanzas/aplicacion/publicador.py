@@ -62,14 +62,24 @@ class IndiceFirefly:
         if params:
             ruta += '?' + '&'.join(params)
         self.por_monto = {}
-        self.external = set()
+        # external_id -> lo que Firefly YA tiene de ese movimiento. Era un set,
+        # y con eso el publicador sabia que el movimiento ya estaba pero no QUE
+        # decia. Guardar la categoria aqui no cuesta nada —ya se esta
+        # recorriendo todo— y es lo que permite cerrar la pregunta en vez de
+        # seguir preguntando por algo que ya esta bien registrado.
+        self.external = {}
         self.n = 0
         for t in firefly.get_all(ruta):
             for s in t.get('attributes', {}).get('transactions', []):
                 self.n += 1
                 ext = s.get('external_id')
                 if ext:
-                    self.external.add(ext)
+                    self.external[ext] = {
+                        'firefly_id': t.get('id'),
+                        'categoria': s.get('category_name'),
+                        'presupuesto': s.get('budget_name'),
+                        'destino': s.get('destination_name'),
+                    }
                 f = _a_fecha(s.get('date'))
                 if not f:
                     continue
@@ -149,6 +159,38 @@ def armar_payload(p):
 # ---------------------------------------------------------------- publicar
 
 
+def _adoptar_lo_de_firefly(cx, p, ya):
+    """El movimiento ya esta en Firefly. Se toma lo que dice Firefly.
+
+    Antes esto solo marcaba `estado='publicado'` y dejaba la pregunta ABIERTA,
+    asi que el bot seguia preguntando —cada 24h, para siempre— por movimientos
+    que ya estaban correctamente registrados. Se nota al recrear el stack: si el
+    volumen se pierde, TODO se vuelve a ingerir, cada external_id ya existe en
+    Firefly, y el usuario acaba con el bot insistiendo sobre cosas resueltas.
+
+    Firefly es la fuente de verdad para lo que ya esta ahi. Si tiene categoria,
+    no hay nada que preguntar.
+    """
+    campos = {'estado': 'publicado', 'firefly_id': ya.get('firefly_id')}
+    if ya.get('categoria'):
+        campos.update(
+            categoria=ya['categoria'],
+            pregunta=None,
+            confianza=1.0,
+            decidido_por='ya_estaba_en_firefly',
+        )
+        if ya.get('presupuesto'):
+            campos['presupuesto'] = ya['presupuesto']
+        if ya.get('destino'):
+            campos['cuenta_destino'] = ya['destino']
+    db.pendiente_actualizar(cx, p['id'], **campos)
+    cx.commit()
+    detalle = 'el external_id ya existe en Firefly'
+    if ya.get('categoria'):
+        detalle += f' — adopto su categoria ({ya["categoria"]})'
+    return 'ya_estaba', detalle
+
+
 def publicar_uno(cx, p, idx=None, dry_run=True):
     """Devuelve (accion, detalle). accion: creado | duplicado | ya_estaba |
     seco | error."""
@@ -159,9 +201,7 @@ def publicar_uno(cx, p, idx=None, dry_run=True):
 
     # red 2: el external_id ya esta en Firefly
     if idx is not None and p['external_id'] in idx.external:
-        db.pendiente_actualizar(cx, p['id'], estado='publicado')
-        cx.commit()
-        return 'ya_estaba', 'el external_id ya existe en Firefly'
+        return _adoptar_lo_de_firefly(cx, p, idx.external[p['external_id']])
 
     # red 3: mismo monto, misma cuenta, fecha cercana
     if idx is not None:

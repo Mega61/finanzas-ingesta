@@ -21,6 +21,7 @@ from finanzas.aplicacion import (
     asesor,
     clasificador,
     interprete,
+    movimientos,
     presupuestos,
     publicador,
 )
@@ -388,6 +389,8 @@ DESCRIPCIONES = (
     ('/pendientes', 'lo que falta por clasificar'),
     ('/resumen', 'cómo va la conciliación'),
     ('/sinconfirmar', 'lo que está en Firefly sin confirmar'),
+    ('/ultimos', 'los últimos movimientos, tocables para cambiarlos'),
+    ('/listo', 'ya están bien, no me preguntes más'),
     ('/presupuestos', 'cómo van los cinco presupuestos del mes'),
     ('/version', 'qué código está corriendo'),
     ('/ayuda', 'esto'),
@@ -610,6 +613,382 @@ def _toque_pedir_texto(t):
         _guardar_mensaje(t.cx, t.chat, eco['message_id'], t.pid)
 
 
+# ------------------------------------------- movimientos ya registrados
+#
+# Todo lo de aqui abajo trabaja contra FIREFLY, no contra la cola. Es la mitad
+# que faltaba: el bot solo sabia resolver preguntas abiertas, y una vez cerrada
+# la unica forma de corregir algo era entrar a Firefly a mano.
+
+CUANTOS_ULTIMOS = 10
+
+
+def _usuario_de(cx, chat):
+    u = _a(cx).usuario_por_chat(chat)
+    return u['id'] if u else 1
+
+
+def _para_puntuar(movs):
+    """Los movimientos con la forma que espera `intencion.a_que_movimiento`.
+
+    Ese modulo busca el nombre del comercio en `contraparte`; en Firefly esta en
+    `destino` (o en la descripcion si no hay cuenta de destino).
+    """
+    return [
+        {
+            'id': int(m['id']),
+            'valor': m['valor'],
+            'contraparte': m['destino'] or m['descripcion'],
+            'categoria': m['categoria'],
+        }
+        for m in movs
+        if m['id']
+    ]
+
+
+def _categorias_para(cx, valor):
+    """Las categorias a ofrecer, filtradas por direccion.
+
+    No se guardan en ninguna tabla: se recalculan igual en el momento de
+    mostrarlas y en el de recibir el toque, asi que el indice del boton sigue
+    apuntando a lo mismo. Guardarlas exigiria una fila con clave ajena a
+    `pendientes`, y aqui el objetivo es un id de Firefly.
+    """
+    direccion = 'ingreso' if valor > 0 else 'gasto'
+    try:
+        usadas = [
+            r['categoria']
+            for r in _a(cx).categorias_usadas(direccion)
+            if r['categoria']
+        ]
+    except Exception:
+        usadas = []
+    # Sin reglas aprendidas —instalacion nueva, o una direccion que nunca se ha
+    # usado— la lista queda vacia y el menu sale SIN ningun boton. Se cae a las
+    # categorias que existan en Firefly, igual que las preguntas normales.
+    if len(usadas) < 4:
+        for c in _categorias_firefly():
+            if c not in usadas:
+                usadas.append(c)
+    return usadas[:6]
+
+
+def _botonera(pares, por_fila=2):
+    botones, fila = [], []
+    for par in pares:
+        fila.append(par)
+        if len(fila) == por_fila:
+            botones.append(fila)
+            fila = []
+    if fila:
+        botones.append(fila)
+    return botones
+
+
+def cmd_ultimos(cx, chat, texto=''):
+    """Los ultimos movimientos, cada uno tocable para cambiarlo.
+
+    /ultimos            los 10 mas recientes
+    /ultimos tierragro  los que coincidan
+    """
+    partes = (texto or '').split()
+    consulta = ' '.join(partes[1:]) if len(partes) > 1 else None
+    try:
+        movs = (
+            movimientos.buscar(consulta, limite=CUANTOS_ULTIMOS)
+            if consulta
+            else movimientos.ultimos(limite=CUANTOS_ULTIMOS)
+        )
+    except Exception as ex:
+        telegram.enviar(chat, f'No pude leer Firefly: {str(ex)[:150]}')
+        return
+    if not movs:
+        cola = f' de «{consulta}»' if consulta else ''
+        telegram.enviar(chat, f'No encontré movimientos{cola}.')
+        return
+
+    encabezado = f'<b>Movimientos{" · " + consulta if consulta else ""}</b>'
+    lineas = [encabezado, '']
+    lineas += [movimientos.describir(m) for m in movs]
+    lineas.append('\nToca uno para cambiarlo.')
+    telegram.enviar(
+        chat,
+        '\n'.join(lineas),
+        _botonera(
+            [
+                (
+                    f'{_plata(m["valor"])} {(m["destino"] or m["descripcion"])[:12]}',
+                    f'mv:{m["id"]}:0',
+                )
+                for m in movs
+            ]
+        ),
+    )
+
+
+def cmd_listo(cx, chat, _texto=''):
+    """«Ya estan bien, no me preguntes mas»: cierra todas las preguntas.
+
+    Es lo que faltaba. El bot vuelve a preguntar cada 24h por lo que siga
+    abierto, y no habia forma de decirle que ya estaba resuelto salvo contestar
+    una por una. Con movimientos ya correctos en Firefly, eso es puro ruido.
+    """
+    alm = _a(cx)
+    abiertas = alm.pendientes_abiertos_de_chat(chat)
+    if not abiertas:
+        telegram.enviar(chat, 'No tengo nada abierto. ✅')
+        return
+
+    # lo que Firefly ya sabe de cada uno, para adoptar su categoria
+    try:
+        en_firefly = {
+            str(m['id']): m for m in movimientos.ultimos(limite=500, dias=120)
+        }
+    except Exception:
+        en_firefly = {}
+
+    adoptadas, sin_publicar = 0, 0
+    for p in abiertas:
+        ff = en_firefly.get(str(p['firefly_id'] or ''))
+        if ff and ff['categoria'] and not p['categoria']:
+            db.pendiente_actualizar(
+                cx, p['id'], categoria=ff['categoria'], confianza=1.0
+            )
+            adoptadas += 1
+        if p['estado'] in ('nuevo', 'error'):
+            # nunca llego a Firefly: cerrar la pregunta sin mas lo dejaria en
+            # el limbo, asi que se descarta explicitamente
+            db.pendiente_actualizar(cx, p['id'], estado='descartado')
+            sin_publicar += 1
+    cerradas = alm.cerrar_preguntas_del_chat(chat, 'usuario_dijo_listo')
+
+    lineas = [
+        f'Listo. Cerré <b>{cerradas}</b> preguntas y no te vuelvo a preguntar '
+        f'por ellas.'
+    ]
+    if adoptadas:
+        lineas.append(f'De {adoptadas} tomé la categoría que ya tenían en Firefly.')
+    if sin_publicar:
+        lineas.append(
+            f'{sin_publicar} no habían llegado a Firefly, así que las descarté.'
+        )
+    lineas.append('\nSi alguna quedó mal: /ultimos y la cambias.')
+    telegram.enviar(chat, '\n'.join(lineas))
+
+
+def _menu_movimiento(cx, chat, tx_id, mensaje_id=None):
+    """El menu de un movimiento de Firefly: categoria, confirmar o borrar."""
+    m = movimientos.uno(str(tx_id))
+    if m is None:
+        telegram.enviar(chat, 'Ese movimiento ya no existe en Firefly.')
+        return
+    cats = _categorias_para(cx, m['valor'])
+    botones = _botonera([(c, f'mc:{tx_id}:{i}') for i, c in enumerate(cats)])
+    ultima = [('✏️ otra cosa', f'mt:{tx_id}:0')]
+    if movimientos.SIN_CONFIRMAR in m['etiquetas']:
+        ultima.append(('✅ está bien', f'mk:{tx_id}:0'))
+    botones.append(ultima)
+    botones.append([('🗑 borrar', f'mx:{tx_id}:0')])
+
+    texto = (
+        f'<b>{movimientos.describir(m)}</b>\n'
+        f'<i>{m["origen"]} → {m["destino"]}</i>\n\n'
+        f'¿Qué le cambio?'
+    )
+    if mensaje_id:
+        telegram.editar(chat, mensaje_id, texto)
+        telegram.enviar(chat, 'Elige:', botones)
+    else:
+        telegram.enviar(chat, texto, botones)
+
+
+def _aplicar_edicion(cx, chat, tx_id, cambios, aviso=None):
+    """Aplica los cambios en Firefly y lo reporta con el resultado releido."""
+    try:
+        m = movimientos.editar(str(tx_id), **cambios)
+    except Exception as ex:
+        if aviso:
+            aviso('no pude')
+        telegram.enviar(chat, f'No pude cambiarlo: {str(ex)[:180]}')
+        return None
+    db.bitacora(
+        cx,
+        'editar',
+        usuario_id=_usuario_de(cx, chat),
+        firefly_id=str(tx_id),
+        payload=cambios,
+        ok=True,
+    )
+    cx.commit()
+    if aviso:
+        aviso('listo')
+    que = ', '.join(f'{k}: {v}' for k, v in cambios.items())
+    telegram.enviar(
+        chat,
+        f'✅ <i>{que}</i>\n<b>{movimientos.describir(m)}</b>',
+        [[('✏️ otra vez', f'mv:{tx_id}:0')]],
+    )
+    return m
+
+
+# ------------------------------------------------------ toques de movimiento
+
+
+def _toque_ver_movimiento(t):
+    t.aviso('')
+    _menu_movimiento(t.cx, t.chat, t.pid, mensaje_id=t.mid)
+
+
+def _toque_categoria_movimiento(t):
+    m = movimientos.uno(str(t.pid))
+    if m is None:
+        t.aviso('ese movimiento ya no existe')
+        return
+    cats = _categorias_para(t.cx, m['valor'])
+    cat = cats[t.idx] if t.idx < len(cats) else None
+    if not cat:
+        t.aviso('esa opción ya no está')
+        return
+    _aplicar_edicion(t.cx, t.chat, str(t.pid), {'categoria': cat}, aviso=t.aviso)
+
+
+def _toque_confirmar_movimiento(t):
+    """Le quita «sin-confirmar»: el movimiento queda cerrado sin esperar el
+    extracto."""
+    try:
+        movimientos.confirmar(str(t.pid))
+    except Exception as ex:
+        t.aviso('no pude')
+        telegram.enviar(t.chat, f'No pude confirmarlo: {str(ex)[:150]}')
+        return
+    t.aviso('confirmado')
+    t.reemplazar('✅ Confirmado. Le quité la etiqueta «sin-confirmar».')
+
+
+def _toque_borrar_movimiento(t):
+    """Pide confirmacion: borrar de Firefly no se puede deshacer."""
+    m = movimientos.uno(str(t.pid))
+    if m is None:
+        t.aviso('ya no existe')
+        return
+    t.aviso('¿seguro?')
+    telegram.enviar(
+        t.chat,
+        f'Vas a BORRAR de Firefly:\n<b>{movimientos.describir(m)}</b>\n\n'
+        f'No se puede deshacer.',
+        [[('🗑 sí, bórralo', f'mB:{t.pid}:0'), ('cancelar', f'mv:{t.pid}:0')]],
+    )
+
+
+def _toque_borrar_confirmado(t):
+    try:
+        movimientos.borrar(str(t.pid))
+    except Exception as ex:
+        t.aviso('no pude')
+        telegram.enviar(t.chat, f'No pude borrarlo: {str(ex)[:150]}')
+        return
+    db.bitacora(
+        t.cx,
+        'borrar',
+        usuario_id=_usuario_de(t.cx, t.chat),
+        firefly_id=str(t.pid),
+        respuesta='borrado desde el bot',
+        ok=True,
+    )
+    t.cx.commit()
+    t.aviso('borrado')
+    t.reemplazar('🗑 Borrado de Firefly.')
+
+
+def _toque_texto_movimiento(t):
+    """Pide por escrito que cambiarle. La respuesta llega por texto libre y se
+    ata a este movimiento con `edicion_en_curso`."""
+    t.aviso('escríbelo')
+    eco = telegram.enviar(
+        t.chat,
+        '¿Qué le cambio? Responde a este mensaje.\n'
+        '<i>Por ejemplo: «es Mercado», «el comercio es Etre».</i>',
+    )
+    _a(t.cx).abrir_edicion(t.chat, str(t.pid), (eco or {}).get('message_id'))
+
+
+# --------------------------------------------------------- editar por texto
+
+
+def _editar_por_texto(cx, chat, texto, tx_id=None):
+    """«cambia la ultima a Mercado», «la de tierragro ponla en Gato».
+
+    Encuentra el movimiento por lo que dice el texto —el comercio, el monto, o
+    «la ultima»— y le aplica el cambio. Si no puede identificarlo, muestra los
+    ultimos con botones en vez de rendirse.
+    """
+    ed = intencion.es_edicion(texto)
+    try:
+        movs = movimientos.ultimos(limite=CUANTOS_ULTIMOS)
+    except Exception as ex:
+        telegram.enviar(chat, f'No pude leer Firefly: {str(ex)[:150]}')
+        return
+    if not movs and tx_id is None:
+        telegram.enviar(chat, 'No veo movimientos recientes que cambiar.')
+        return
+
+    objetivo = None
+    if tx_id is not None:
+        objetivo = movimientos.uno(str(tx_id))
+    elif ed.la_ultima:
+        objetivo = movs[0]
+    else:
+        g = intencion.hay_un_ganador(
+            intencion.a_que_movimiento(texto, _para_puntuar(movs))
+        )
+        if g:
+            objetivo = next((m for m in movs if int(m['id']) == g.id), None)
+
+    if objetivo is None:
+        telegram.enviar(chat, 'No supe a cuál te refieres. Toca el que quieras:')
+        cmd_ultimos(cx, chat)
+        return
+
+    if ed.borrar:
+        telegram.enviar(
+            chat,
+            f'Vas a BORRAR de Firefly:\n'
+            f'<b>{movimientos.describir(objetivo)}</b>\n\nNo se puede deshacer.',
+            [
+                [
+                    ('🗑 sí, bórralo', f'mB:{objetivo["id"]}:0'),
+                    ('cancelar', f'mv:{objetivo["id"]}:0'),
+                ]
+            ],
+        )
+        return
+
+    cambios = {}
+    try:
+        cat = interprete.catalogo(cx, _usuario_de(cx, chat))
+        hallazgos = interprete.buscar_categoria(texto, cat['categorias'])
+        if hallazgos:
+            cambios['categoria'] = hallazgos[0][1]
+    except Exception:
+        pass
+    if ed.comercio:
+        cambios['comercio'] = ed.comercio
+    if ed.monto is not None:
+        cambios['monto'] = ed.monto
+
+    if not cambios:
+        telegram.enviar(
+            chat,
+            f'Entendí que hablas de:\n'
+            f'<b>{movimientos.describir(objetivo)}</b>\n\n'
+            f'Pero no entendí qué cambiarle.',
+        )
+        _menu_movimiento(cx, chat, objetivo['id'])
+        return
+
+    _a(cx).cerrar_edicion(chat)
+    _aplicar_edicion(cx, chat, str(objetivo['id']), cambios)
+
+
 # La letra que viaja en callback_data. Es de un caracter porque el limite son
 # 64 bytes contando el id del pendiente y el indice de la opcion.
 TOQUES = {
@@ -621,6 +1000,14 @@ TOQUES = {
     'b': _toque_presupuesto,
     't': _toque_pedir_texto,
     'm': _toque_mover,
+    # Los que empiezan por 'm' y siguen: trabajan contra un id de FIREFLY, no
+    # contra un pendiente de la cola.
+    'mv': _toque_ver_movimiento,
+    'mc': _toque_categoria_movimiento,
+    'mk': _toque_confirmar_movimiento,
+    'mx': _toque_borrar_movimiento,
+    'mB': _toque_borrar_confirmado,
+    'mt': _toque_texto_movimiento,
 }
 
 
@@ -658,6 +1045,14 @@ def _cmd_version(_cx, chat, _texto):
     telegram.enviar(chat, _version_texto())
 
 
+def _cmd_ultimos(cx, chat, texto):
+    cmd_ultimos(cx, chat, texto)
+
+
+def _cmd_listo(cx, chat, texto):
+    cmd_listo(cx, chat, texto)
+
+
 def _cmd_presupuestos(_cx, chat, _texto):
     telegram.enviar(chat, '<b>Presupuestos del mes</b>\n\n' + presupuestos.formatear())
 
@@ -670,6 +1065,8 @@ COMANDOS = {
     '/sinconfirmar': _cmd_sinconfirmar,
     '/version': _cmd_version,
     '/presupuestos': _cmd_presupuestos,
+    '/ultimos': _cmd_ultimos,
+    '/listo': _cmd_listo,
 }
 
 
@@ -753,13 +1150,15 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
     Ahora se LEE el mensaje, en este orden:
 
       1. Si respondiste a un mensaje concreto, es ese. No hay nada que pensar.
-      2. Si es una consulta («¿me alcanza para...?»), va al asesor, haya o no
+      2. Si pides un CAMBIO («cambia la ultima a Mercado», «borra la ultima»),
+         va contra Firefly. Esto va antes del asesor, que no puede editar.
+      3. Si es una consulta («¿me alcanza para...?»), va al asesor, haya o no
          preguntas abiertas.
-      3. Si hay una sola pregunta abierta, es esa.
-      4. Con varias, se puntua el texto contra cada una: el comercio que
+      4. Si hay una sola pregunta abierta, es esa.
+      5. Con varias, se puntua el texto contra cada una: el comercio que
          nombras, la categoria que implica, el monto. Si una gana claro, se
          resuelve y se dice CUAL.
-      5. Si ninguna gana, se aplica a la ultima que se te pregunto —que es lo
+      6. Si ninguna gana, se aplica a la ultima que se te pregunto —que es lo
          que un humano asumiria— diciendolo, y con botones para moverla de una.
     """
     # 1. respondio a un mensaje concreto
@@ -768,10 +1167,22 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
         if pid:
             _responder_con_texto(cx, chat, pid, texto)
             return
+        # ¿o al mensaje de «¿que le cambio?» de un movimiento de Firefly?
+        ed = _a(cx).edicion_en_curso(chat)
+        if ed and ed['mensaje_id'] == respondiendo_a:
+            _editar_por_texto(cx, chat, texto, tx_id=ed['firefly_id'])
+            return
 
     abiertas = abiertas_del_chat(cx, chat)
 
-    # 2. una consulta va al asesor aunque haya cosas abiertas
+    # 2. una orden de cambio va contra Firefly, no contra la cola. Va ANTES del
+    #    asesor: «cambia la ultima a Mercado» no lleva marcas de consulta, y el
+    #    asesor no puede editar nada.
+    if intencion.es_edicion(texto).pide_cambio:
+        _editar_por_texto(cx, chat, texto)
+        return
+
+    # 3. una consulta va al asesor aunque haya cosas abiertas
     if intencion.es_para_el_asesor(texto):
         _consultar_asesor(cx, chat, texto)
         return
@@ -780,12 +1191,12 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
         _consultar_asesor(cx, chat, texto)
         return
 
-    # 3. una sola: no hay ambiguedad que resolver
+    # 4. una sola: no hay ambiguedad que resolver
     if len(abiertas) == 1:
         _responder_con_texto(cx, chat, abiertas[0]['id'], texto)
         return
 
-    # 4. varias: leer el mensaje. La categoria que implica el texto se calcula
+    # 5. varias: leer el mensaje. La categoria que implica el texto se calcula
     #    UNA vez (es la misma para todos) y se pasa como senal mas.
     implicada = _categoria_implicada(cx, abiertas[0], texto)
     filas = [dict(m) for m in abiertas]
@@ -803,7 +1214,7 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
         _responder_con_texto(cx, chat, ganador.id, texto)
         return
 
-    # 5. Nada en el texto senala a ninguna. Se aplica a la ultima preguntada,
+    # 6. Nada en el texto senala a ninguna. Se aplica a la ultima preguntada,
     #    que es la que estabas mirando, y se dice: una respuesta aplicada en
     #    silencio al movimiento equivocado es lo unico inaceptable aqui.
     _aplicar_a_la_ultima(cx, chat, abiertas, texto)

@@ -16,7 +16,7 @@ import contextlib
 from datetime import timedelta
 
 from finanzas.adaptadores import firefly, ia
-from finanzas.aplicacion import clasificador, presupuestos
+from finanzas.aplicacion import clasificador, movimientos, presupuestos
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import fechas as _fechas
 
@@ -149,6 +149,10 @@ def armar_contexto():
         'deudas': deu,
         'obligaciones': obligaciones_fijas(),
         'tarjetas': cortes_de_tarjeta(),
+        # Los movimientos concretos. Sin esto el asesor solo veia agregados y
+        # «cual fue la ultima transaccion» era imposible de responder: no por el
+        # modelo, sino porque nadie le habia dado el dato.
+        'ultimos': movimientos.ultimos(limite=25),
     }
 
 
@@ -168,6 +172,14 @@ def contexto_en_texto(ctx=None):
         L.append('  por categoria:')
         for cat, v in list(g['por_categoria'].items())[:14]:
             L.append(f'    {cat}: {_plata(v)}')
+
+    L += [
+        '',
+        movimientos.en_texto(
+            c.get('ultimos') or [],
+            'LOS 25 MOVIMIENTOS MAS RECIENTES (el primero es el ultimo que entro)',
+        ),
+    ]
 
     L += ['', 'PRESUPUESTOS DEL MES']
     for b in c['presupuestos']:
@@ -220,6 +232,20 @@ REGLAS DURAS:
   salvo que te pidan detalle.
 - Usa formato de Telegram: <b>negrita</b> y <i>cursiva</i>. Nada de markdown
   con asteriscos ni tablas.
+
+SOBRE MOVIMIENTOS CONCRETOS:
+- En el contexto tienes los movimientos mas recientes, el primero es el ultimo
+  que entro. Si te preguntan «cual fue la ultima», respondelo con su fecha,
+  monto, comercio y categoria. Antes no tenias este dato y contestabas que no
+  podias; ahora si lo tienes, asi que no digas que no.
+- Si te preguntan por un comercio o una categoria, busca en esa lista y
+  responde con los movimientos que veas, no con el total del mes.
+- Cada movimiento trae su id como #1455. Si el usuario quiere CAMBIAR algo,
+  dile que te lo diga tal cual ("cambia la ultima a Mercado", "la de 212 mil
+  ponla en Compras Casa") y que tu lo aplicas — pero no digas que ya lo
+  cambiaste: cambiar es otro camino del bot, tu solo respondes.
+- Los marcados «sin confirmar» estan en Firefly pero no se han cruzado contra
+  el extracto. No es que esten mal.
 """
 
 

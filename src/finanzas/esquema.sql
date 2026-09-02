@@ -218,6 +218,20 @@ CREATE INDEX IF NOT EXISTS ix_preguntas_pendiente
 -- callback: Telegram admite 64 bytes ahi.
 --
 -- Es uno por chat a proposito: solo importa el ultimo.
+-- Que movimiento de FIREFLY se esta editando desde el chat.
+--
+-- No se puede reusar `preguntas_enviadas` ni `sugerencias`: las dos tienen
+-- clave ajena a `pendientes`, y aqui el objetivo es un id de Firefly, que es
+-- otro espacio de nombres. Un movimiento de Firefly puede no tener pendiente
+-- (lo registraste a mano) y un pendiente puede no estar en Firefly todavia.
+CREATE TABLE IF NOT EXISTS edicion_en_curso (
+  chat_id    TEXT PRIMARY KEY,
+  firefly_id TEXT NOT NULL,
+  mensaje_id INTEGER,
+  creado_en  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+
 CREATE TABLE IF NOT EXISTS textos_en_espera (
   chat_id   TEXT PRIMARY KEY,
   texto     TEXT NOT NULL,

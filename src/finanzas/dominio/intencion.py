@@ -234,3 +234,81 @@ def hay_un_ganador(
     if len(coincidencias) > 1 and mejor.puntaje - coincidencias[1].puntaje < margen:
         return None
     return mejor
+
+
+# ------------------------------------------------------ pedir un cambio
+
+# Verbos con los que se pide cambiar algo YA registrado. Se exigen explicitos:
+# «era Etre» es la respuesta a una pregunta abierta, no una orden de editar, y
+# confundirlas haria que contestar una pregunta modificara otro movimiento.
+# El sufijo `\w{0,5}` es por los pronombres pegados del espanol: «cambiala»,
+# «ponlo», «pasamela», «corrigele». Sin eso `\bcambia\b` no caza con «cambiala»
+# y la orden se iba por otro camino sin que nada lo dijera.
+_EDITAR = re.compile(
+    r'\b(cambia\w{0,5}|cambiar|corrig\w{0,5}|corregir|pon\w{0,5}|pas\w{0,5}'
+    r'|muev\w{0,5}|actualiza\w{0,5}|edita\w{0,5}|renombra\w{0,5}'
+    r'|reclasifica\w{0,5}|marca\w{0,5})\b',
+    re.I,
+)
+_BORRAR = re.compile(
+    r'\b(borra\w{0,5}|borrar|elimina\w{0,5}|eliminar|quita\w{0,5}|quitar)\b',
+    re.I,
+)
+# «la ultima», «el ultimo», «la mas reciente»
+_LA_ULTIMA = re.compile(
+    r'\b(la|el)\s+(ultima|ultimo|mas\s+reciente)\b|\bultima\s+transaccion\b'
+    r'|\bultimo\s+movimiento\b',
+    re.I,
+)
+# «el comercio es Etre», «se llama Etre», «de Etre»
+_COMERCIO = re.compile(
+    r'\b(?:el\s+)?(?:comercio|negocio|tienda|lugar)\s+(?:es|era|se\s+llama)\s+'
+    r'(.{2,40}?)\s*$',
+    re.I,
+)
+
+
+@dataclass(frozen=True)
+class Edicion:
+    """Lo que se entendio de una orden de cambio."""
+
+    pide_cambio: bool
+    borrar: bool = False
+    la_ultima: bool = False
+    comercio: str | None = None
+    monto: float | None = None
+
+
+def es_edicion(txt: str | None) -> Edicion:
+    """¿El mensaje pide cambiar o borrar algo ya registrado?
+
+    >>> es_edicion('cambia la ultima a Mercado').pide_cambio
+    True
+    >>> es_edicion('era Etre, venden cosas para la casa').pide_cambio
+    False
+    >>> es_edicion('borra la ultima').borrar
+    True
+    """
+    if not txt:
+        return Edicion(False)
+    t = _texto.sin_tildes(str(txt)).lower().strip()
+    borrar = bool(_BORRAR.search(t))
+    cambiar = bool(_EDITAR.search(t))
+    if not (borrar or cambiar):
+        return Edicion(False)
+
+    m = _COMERCIO.search(str(txt))
+    montos = montos_mencionados(txt)
+    return Edicion(
+        pide_cambio=True,
+        borrar=borrar,
+        la_ultima=bool(_LA_ULTIMA.search(t)),
+        comercio=m.group(1).strip(' .,') if m else None,
+        # Un monto solo se toma como monto NUEVO si lo pide explicitamente;
+        # si no, el numero suele ser para identificar cual movimiento es.
+        monto=(
+            next(iter(sorted(montos)))
+            if montos and re.search(r'\b(son|es|vale|valen|monto)\b', t)
+            else None
+        ),
+    )

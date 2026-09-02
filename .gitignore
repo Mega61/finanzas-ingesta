@@ -50,3 +50,7 @@ desktop.ini
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Custom
+
+facturas_example/
