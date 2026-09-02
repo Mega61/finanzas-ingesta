@@ -340,3 +340,83 @@ class TestVincularChat:
         alm.guardar_usuario('Juan', 'url', 'tok', '111')
         assert alm.vincular_chat('222') is None, 'ya todos tienen chat'
         assert alm.usuario_por_nombre('Juan')['telegram_chat_id'] == '111'
+
+
+class TestLosAbiertosSinFiltroDeTiempo:
+    """`v_por_preguntar` excluye lo preguntado hace menos de un dia, para que el
+    demonio no repita la misma pregunta en cada pasada. Cuando la lista la pide
+    el USUARIO con /pendientes, ese cuidado no aplica: contestarle «no tengo
+    nada por preguntarte» con tres preguntas abiertas lo deja sin forma de
+    retomarlas."""
+
+    def _abierto(self, alm, usuario, correo, nombre):
+        pid, _ = alm.crear_pendiente(
+            correo_id=correo,
+            usuario_id=usuario,
+            tipo='compra_tarjeta',
+            fecha='2026-09-02',
+            valor=-1000.0,
+            moneda='COP',
+            contraparte=nombre,
+            descripcion=nombre,
+            estado='publicado',
+            pregunta='categoria',
+            external_id=f'x-{nombre}',
+        )
+        return pid
+
+    def test_lo_preguntado_hoy_sale_igual(self, alm, usuario, correo):
+        pid = self._abierto(alm, usuario, correo, 'TIERRAGRO')
+        alm.marcar_preguntado(pid)
+        assert alm.pendientes_por_preguntar() == [], 'el demonio no lo repite'
+        assert [p['id'] for p in alm.pendientes_abiertos()] == [pid]
+
+    def test_lo_ya_contestado_no_sale(self, alm, usuario, correo):
+        pid = self._abierto(alm, usuario, correo, 'TIERRAGRO')
+        alm.actualizar_pendiente(pid, pregunta=None)
+        assert alm.pendientes_abiertos() == []
+
+    def test_un_usuario_inactivo_no_sale(self, alm, usuario, correo):
+        self._abierto(alm, usuario, correo, 'TIERRAGRO')
+        alm.cx.execute('UPDATE usuarios SET activo = 0')
+        alm.cx.commit()
+        assert alm.pendientes_abiertos() == []
+
+
+class TestElPlanEnEspera:
+    """El boton «si, hazlo» ejecuta el plan que se MOSTRO. Antes le volvia a
+    preguntar al modelo, asi que lo confirmado no era lo aplicado."""
+
+    def test_se_guarda_y_se_recupera(self, alm):
+        plan = {'accion': 'editar', 'movimientos': ['1441'], 'categoria': 'Gato'}
+        alm.guardar_texto_en_espera('555', 'la de tierragro a gato', plan)
+        assert alm.plan_en_espera('555') == plan
+        assert alm.texto_en_espera('555') == 'la de tierragro a gato'
+
+    def test_sin_plan_devuelve_none(self, alm):
+        """Los textos que quedaron en espera antes de que esto existiera."""
+        alm.guardar_texto_en_espera('555', 'algo')
+        assert alm.plan_en_espera('555') is None
+
+    def test_de_un_chat_que_no_existe_devuelve_none(self, alm):
+        assert alm.plan_en_espera('nadie') is None
+
+    def test_el_segundo_reemplaza_al_primero(self, alm):
+        alm.guardar_texto_en_espera('555', 'uno', {'accion': 'editar'})
+        alm.guardar_texto_en_espera('555', 'dos', {'accion': 'borrar'})
+        assert alm.texto_en_espera('555') == 'dos'
+        assert alm.plan_en_espera('555')['accion'] == 'borrar'
+
+    def test_un_plan_que_no_es_json_no_revienta(self, alm):
+        """La columna es texto: un valor de una version anterior no puede
+        tumbar el boton."""
+        alm.guardar_texto_en_espera('555', 'algo')
+        alm.cx.execute("UPDATE textos_en_espera SET plan = 'no soy json'")
+        alm.cx.commit()
+        assert alm.plan_en_espera('555') is None
+
+    def test_olvidarlo_lo_borra(self, alm):
+        alm.guardar_texto_en_espera('555', 'algo', {'accion': 'editar'})
+        alm.olvidar_texto_en_espera('555')
+        assert alm.texto_en_espera('555') is None
+        assert alm.plan_en_espera('555') is None

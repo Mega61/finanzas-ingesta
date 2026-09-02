@@ -305,6 +305,14 @@ LAS ACCIONES:
               pregunto: «fue la comida de la gata en tierragro», «esto fue el
               gym», «era Etre, una empresa que vende cosas para la casa». Esto
               tambien acaba en un cambio, pero es una respuesta, no una orden.
+              SI HAY PREGUNTAS ABIERTAS y el mensaje DESCRIBE que fue una
+              compra sin preguntar nada -- «mercado del mes», «compras»,
+              «ropa», «el gym», «un antojo», «lo del trabajo» -- es responder,
+              no consultar: son las palabras con las que se contesta «¿que
+              fue esto?». Una consulta pregunta algo; esto afirma algo. Si no
+              sabes A CUAL de las abiertas va, deja `movimientos` vacio y baja
+              la confianza -- se le preguntara -- pero no lo manden al asesor,
+              que no puede clasificar nada.
 
   borrar      Pide borrar un movimiento de verdad. NO confundir con quitar una
               etiqueta.

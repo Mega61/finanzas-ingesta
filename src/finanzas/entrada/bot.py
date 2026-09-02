@@ -857,8 +857,23 @@ def _categorias_para(cx, valor):
     # usado— la lista queda vacia y el menu sale SIN ningun boton. Se cae a las
     # categorias que existan en Firefly, igual que las preguntas normales.
     if len(usadas) < 4:
+        # Pero sin las que la historia dice que son de la OTRA direccion: el
+        # relleno es alfabetico, asi que a un gasto le ofrecia «Abono» de
+        # primero. Si nunca se ha usado en ningun lado no se puede saber, y
+        # entra: inventar una regla ahi seria peor.
+        try:
+            otra = {
+                r['categoria']
+                for r in _a(cx).categorias_usadas(
+                    'gasto' if direccion == 'ingreso' else 'ingreso'
+                )
+                if r['categoria']
+            }
+        except Exception:
+            otra = set()
+        propias = set(usadas)
         for c in _categorias_firefly():
-            if c not in usadas:
+            if c not in usadas and (c not in otra or c in propias):
                 usadas.append(c)
     return usadas[:6]
 
