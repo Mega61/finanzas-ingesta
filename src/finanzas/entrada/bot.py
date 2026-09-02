@@ -1438,11 +1438,26 @@ def _editar_por_texto(cx, chat, texto, tx_id=None, campo=None):
 MAX_PRODUCTOS = 3
 
 
+def _columna(fila, nombre, si_no_esta=None):
+    """El valor de esa columna si la consulta la trajo.
+
+    Las filas del catalogo vienen de dos consultas: una hace el join con
+    `factura_lineas` y trae `gasto` y `compras`, y la otra -- la de buscar un
+    producto por su id -- no. Indexar a ciegas revienta con «No item with that
+    key» y deja el toque sin contestar.
+    """
+    try:
+        valor = fila[nombre]
+    except (IndexError, KeyError):
+        return si_no_esta
+    return si_no_esta if valor is None else valor
+
+
 def _texto_producto(p):
     # Sin signo: en un movimiento el + o el - dice si entra o sale plata, pero
     # una compra de supermercado siempre sale, y "+$6.059" se lee al reves.
-    plata = _dinero.formatear(p['gasto'] or 0, 'COP')
-    veces = p['compras'] or 0
+    plata = _dinero.formatear(_columna(p, 'gasto', 0), 'COP')
+    veces = _columna(p, 'compras', 0)
     cuantas = 'una vez' if veces == 1 else f'{veces} veces'
     return (
         '🛒 <b>¿Qué es esto?</b>\n\n'
@@ -1872,6 +1887,11 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas, ya_confirmado=False):
         [[('✏️ no era eso', f'mv:{ids[0]}:0')]],
     )
     _recordar_camino(chat, 'edicion')
+    # El mensaje ademas preguntaba algo. Antes esa parte se perdia en silencio:
+    # se hacia el cambio y la pregunta no se contestaba nunca.
+    if plan.get('consultar_tambien'):
+        _recordar_camino(chat, 'asesor')
+        _consultar_asesor(cx, chat, texto)
     return True
 
 
@@ -1998,10 +2018,7 @@ def _clasificar_producto_del_plan(cx, chat, plan, confianza=1.0):
     db.catalogo_responder_id(cx, int(pid), tipo, grupo, cat)
     # La consulta del catalogo trae 'veces' en un sitio y 'compras' en
     # otro; se acepta el que venga.
-    claves = set(p.keys())
-    veces = (
-        p['veces'] if 'veces' in claves else p['compras'] if 'compras' in claves else 0
-    )
+    veces = _columna(p, 'veces') or _columna(p, 'compras', 0)
     arrastre = (
         f'{SALTO}<i>Se aplicó a las {veces} compras anteriores.</i>'
         if (veces or 0) > 1

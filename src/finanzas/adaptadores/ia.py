@@ -324,6 +324,14 @@ LAS ACCIONES:
 
   nada        No entendiste. Mejor eso que inventar.
 
+Y aparte de la accion:
+
+  consultar_tambien   Ponlo en true cuando el mensaje ADEMAS pregunte algo que
+              haya que responder: «cuanto llevo en antojos y cambia la ultima a
+              mercado», «cuanto me queda en antojos? ah y ponle la etiqueta
+              ropa a la de etre». Se hace el cambio y luego se le contesta la
+              pregunta. Sin esto la pregunta se perdia en silencio.
+
 REGLAS DURAS:
 
 - `movimientos` son ids de la lista que se te dio. NUNCA inventes uno. Si la
@@ -470,6 +478,12 @@ def _esquema_orden(
             if productos
             else {}
         ),
+        # Un mensaje puede pedir un cambio Y preguntar algo: «cuanto llevo en
+        # antojos y cambia la ultima a mercado». Con una sola accion, la
+        # pregunta se perdia sin decir nada -- y en una corrida el propio
+        # modelo lo delato escribiendo «y luego consultar el gasto en Antojos»
+        # en la explicacion, sin consultar nada.
+        'consultar_tambien': {'type': 'boolean'},
         'confianza': {'type': 'number'},
         'explicacion': {'type': 'string'},
     }
@@ -487,6 +501,7 @@ def _esquema_orden(
         'etiquetas_agregar',
         'etiquetas_quitar',
         'lotes',
+        'consultar_tambien',
         'producto_id',
         'producto_grupo',
         'producto_categoria',

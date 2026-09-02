@@ -416,3 +416,234 @@ class TestAplicarLaReglaALoViejo:
             },
         )
         assert any('no hay reglas' in a for a in tg.avisos)
+
+
+def _campo(estado, tid, clave):
+    """Lo ultimo que se le mando a Firefly para ese movimiento."""
+    for t, payload in reversed(estado['puts']):
+        if t == tid and clave in payload['transactions'][0]:
+            return payload['transactions'][0][clave]
+    return None
+
+
+class TestLotes:
+    """Un mensaje puede darle valores DISTINTOS a movimientos distintos.
+
+    Antes el plan tenia un solo juego de cambios para toda la lista, asi que
+    «la de tierragro ponla en gato y la de uber en salidas» le ponia lo mismo a
+    las dos: ganaba el ultimo campo. Y el texto que se le mostraba al usuario
+    decia lo correcto, que es lo peor de todo -- parecia que habia funcionado.
+    """
+
+    def test_cada_lote_recibe_lo_suyo(self, entorno):
+        alm, _tg, estado, _u, con_plan = entorno
+        con_plan(
+            {
+                **PLAN_BASE,
+                'movimientos': [],
+                'lotes': [
+                    {'movimientos': ['1441'], 'categoria': 'Gato'},
+                    {'movimientos': ['1458'], 'categoria': 'Mercado'},
+                ],
+            }
+        )
+        bot.manejar_update(
+            alm.cx, _msg('la de tierragro ponla en gato y la otra en mercado')
+        )
+        assert _campo(estado, '1441', 'category_name') == 'Gato'
+        assert _campo(estado, '1458', 'category_name') == 'Mercado'
+
+    def test_los_campos_de_arriba_se_ignoran_si_hay_lotes(self, entorno):
+        """Si no, un `categoria` suelto arriba pisaria los lotes."""
+        alm, _tg, estado, _u, con_plan = entorno
+        con_plan(
+            {
+                **PLAN_BASE,
+                'movimientos': ['1441', '1458'],
+                'categoria': 'Compras',
+                'lotes': [{'movimientos': ['1441'], 'categoria': 'Gato'}],
+            }
+        )
+        bot.manejar_update(alm.cx, _msg('la de tierragro a gato'))
+        assert {tid for tid, _ in estado['puts']} == {'1441'}
+        assert _campo(estado, '1441', 'category_name') == 'Gato'
+
+    def test_responder_cierra_la_pregunta_de_cada_lote(self, entorno):
+        """Contestar tres preguntas de un tiro cerraba una sola y las otras dos
+        quedaban abiertas sin decir nada."""
+        alm, _tg, _e, uid, con_plan = entorno
+        bid = alm.guardar_buzon(uid, 'graph', 'j@e.com')
+        cid, _ = alm.guardar_correo(bid, '<m>', 'banco', 'Alerta', '2026-09-02', 'x')
+        ids = []
+        for i, (ffid, cat) in enumerate([('1441', 'Gato'), ('1458', 'Compras')]):
+            pid, _ = alm.crear_pendiente(
+                correo_id=cid,
+                usuario_id=uid,
+                tipo='compra_tarjeta',
+                fecha='2026-09-02',
+                valor=-100.0,
+                moneda='COP',
+                contraparte=f'X{i}',
+                descripcion=f'X{i}',
+                categoria=cat,
+                estado='publicado',
+                pregunta='categoria',
+                external_id=f'lote-{i}',
+            )
+            alm.actualizar_pendiente(pid, firefly_id=ffid)
+            ids.append(pid)
+        alm.cx.commit()
+        con_plan(
+            {
+                **PLAN_BASE,
+                'accion': 'responder',
+                'movimientos': [],
+                'lotes': [
+                    {'movimientos': ['1441'], 'categoria': 'Gato'},
+                    {'movimientos': ['1458'], 'categoria': 'Mercado'},
+                ],
+            }
+        )
+        bot.manejar_update(alm.cx, _msg('la primera es del gato y la otra mercado'))
+        for pid in ids:
+            fila = alm.cx.execute(
+                'SELECT pregunta FROM pendientes WHERE id = ?', (pid,)
+            ).fetchone()
+            assert fila['pregunta'] is None, f'el pendiente {pid} sigue abierto'
+
+
+class TestEdicionMasiva:
+    """«cambia todas a mercado» reescribia los diez movimientos sin preguntar
+    -- el ingreso incluido, que quedaba con categoria de gasto."""
+
+    def test_arriba_del_umbral_pide_confirmacion(self, entorno, monkeypatch):
+        # El umbral se baja para no atar la prueba al numero de movimientos del
+        # fixture: lo que se verifica es el mecanismo, no el numero.
+        monkeypatch.setattr(bot, 'MAXIMO_SIN_CONFIRMAR', 3)
+        alm, tg, estado, _u, con_plan = entorno
+        con_plan(
+            {
+                **PLAN_BASE,
+                'movimientos': ['1441', '1458', '1457', '1459'],
+                'categoria': 'Mercado',
+            }
+        )
+        bot.manejar_update(alm.cx, _msg('cambia todas a mercado'))
+        assert estado['puts'] == [], 'no puede escribir antes de confirmar'
+        assert '4 movimientos' in ' '.join(tg.enviados)
+
+    def test_al_confirmar_se_aplica_el_plan_que_se_mostro(self, entorno, monkeypatch):
+        """El boton volvia a preguntarle al modelo, asi que lo confirmado no era
+        lo aplicado. Y como el umbral se recalculaba sobre el plan nuevo, una
+        orden de mas de cuatro no se aplicaba NUNCA."""
+        monkeypatch.setattr(bot, 'MAXIMO_SIN_CONFIRMAR', 3)
+        alm, _tg, estado, _u, con_plan = entorno
+        con_plan(
+            {
+                **PLAN_BASE,
+                'movimientos': ['1441', '1458', '1457', '1459'],
+                'categoria': 'Mercado',
+            }
+        )
+        bot.manejar_update(alm.cx, _msg('cambia todas a mercado'))
+        # si volviera a preguntarle al modelo, el plan seria OTRO
+        monkeypatch.setattr(
+            bot.ia,
+            'entender_orden',
+            lambda *a, **k: {**PLAN_BASE, 'movimientos': ['1441'], 'categoria': 'Ropa'},
+        )
+        bot.manejar_update(
+            alm.cx,
+            {
+                'callback_query': {
+                    'id': 'q',
+                    'data': 'ok:1441:0',
+                    'message': {'message_id': 9, 'chat': {'id': '555'}},
+                }
+            },
+        )
+        tocados = {tid for tid, _ in estado['puts']}
+        assert tocados == {'1441', '1458', '1457', '1459'}
+        assert _campo(estado, '1441', 'category_name') == 'Mercado', 'no Ropa'
+
+    def test_debajo_del_umbral_pasa_directo(self, entorno):
+        alm, _tg, estado, _u, con_plan = entorno
+        con_plan(
+            {**PLAN_BASE, 'movimientos': ['1458', '1457'], 'categoria': 'Mercado'}
+        )
+        bot.manejar_update(alm.cx, _msg('las ultimas 2 a mercado'))
+        assert {tid for tid, _ in estado['puts']} == {'1458', '1457'}
+
+
+class TestUnPresupuestoQueNoExiste:
+    """«ponla en el presupuesto Viajes Largos» -- que no existe -- hacia que el
+    modelo le pusiera la CATEGORIA «Viajes», que si existe: el movimiento
+    perdia su categoria por algo que nunca se pidio."""
+
+    def test_no_se_cambia_la_categoria_en_su_lugar(self, entorno):
+        alm, tg, estado, _u, con_plan = entorno
+        con_plan({**PLAN_BASE, 'movimientos': ['1441'], 'categoria': 'Viajes'})
+        bot.manejar_update(
+            alm.cx, _msg('la de tierragro ponla en el presupuesto Viajes Largos')
+        )
+        assert estado['puts'] == []
+        assert 'No tengo un presupuesto con ese nombre' in ' '.join(tg.enviados)
+
+    def test_un_presupuesto_que_si_existe_se_aplica(self, entorno):
+        alm, _tg, estado, _u, con_plan = entorno
+        con_plan({**PLAN_BASE, 'movimientos': ['1441'], 'presupuesto': 'Vivir'})
+        bot.manejar_update(
+            alm.cx, _msg('la de tierragro ponla en el presupuesto vivir')
+        )
+        assert _campo(estado, '1441', 'budget_name') == 'Vivir'
+
+
+class TestLasEtiquetasLasEscribeElUsuario:
+    """El modelo agregaba etiquetas que nadie pidio: a «es lo de google, eso es
+    del trabajo» le ponia `reembolsable`."""
+
+    def test_una_etiqueta_que_no_esta_en_el_mensaje_no_se_pone(self, entorno):
+        alm, _tg, estado, _u, con_plan = entorno
+        con_plan(
+            {
+                **PLAN_BASE,
+                'movimientos': ['1441'],
+                'categoria': 'Gato',
+                'etiquetas_agregar': ['reembolsable'],
+            }
+        )
+        bot.manejar_update(alm.cx, _msg('la de tierragro es comida del gato'))
+        assert 'reembolsable' not in _tags_de(estado, '1441')
+
+    def test_la_que_si_escribio_se_pone(self, entorno):
+        alm, _tg, estado, _u, con_plan = entorno
+        con_plan(
+            {
+                **PLAN_BASE,
+                'movimientos': ['1441'],
+                'etiquetas_agregar': ['Ropa'],
+            }
+        )
+        bot.manejar_update(alm.cx, _msg('ponle el tag Ropa a la de tierragro'))
+        assert 'Ropa' in _tags_de(estado, '1441')
+
+
+class TestLaPreguntaQueVieneDeMas:
+    """«cuanto llevo en antojos y cambia la ultima a mercado»: se hacia el
+    cambio y la pregunta se perdia en silencio."""
+
+    def test_se_hace_el_cambio_y_se_contesta(self, entorno):
+        alm, tg, estado, _u, con_plan = entorno
+        con_plan(
+            {
+                **PLAN_BASE,
+                'movimientos': ['1441'],
+                'categoria': 'Mercado',
+                'consultar_tambien': True,
+            }
+        )
+        bot.manejar_update(
+            alm.cx, _msg('cuanto llevo en antojos y cambia la de tierragro a mercado')
+        )
+        assert _campo(estado, '1441', 'category_name') == 'Mercado'
+        assert any('[asesor]' in e for e in tg.enviados), 'y contesta la pregunta'
