@@ -267,10 +267,20 @@ def montar(reg, con_ia=True):
             })
             return {'message_id': TelegramFalso._id}
 
-        def editar(self, chat, message_id, texto, modo='HTML'):
-            reg.dijo.append({'texto': _sin_html(texto), 'crudo': texto,
-                             'html_malo': _html_malo(texto), 'botones': [],
-                             'datos': [], 'editado': message_id})
+        def editar(self, chat, message_id, texto, botones=None, modo='HTML'):
+            # Los botones SI se registran: `editar` los lleva desde que se
+            # descubrio que no los llevaba y dos sitios se los pasaban de
+            # cuarto argumento posicional -- donde va el modo -- y Telegram
+            # contestaba «unsupported parse_mode». Sin registrarlos aqui, la
+            # pantalla siguiente sale sin botones y no se nota.
+            reg.dijo.append({
+                'texto': _sin_html(texto),
+                'crudo': texto,
+                'html_malo': _html_malo(texto),
+                'botones': [[t for t, _ in fila] for fila in (botones or [])],
+                'datos': [d for fila in (botones or []) for _, d in fila],
+                'editado': message_id,
+            })
             return {'message_id': message_id}
 
         def responder_callback(self, cq_id, texto=None, alerta=False):

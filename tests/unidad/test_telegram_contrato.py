@@ -9,6 +9,8 @@ equivocada. Ya paso dos veces. De ahi esta prueba.
 
 from __future__ import annotations
 
+import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -131,3 +133,63 @@ class TestMenuDeComandos:
         )
         tg.poner_comandos([('/x', 'd' * 400)])
         assert len(visto['commands'][0]['description']) == 256
+
+
+class TestLosDoblesSeParecenAlDeVerdad:
+    """Un doble mas permisivo que el adaptador real no prueba nada: prueba el
+    doble.
+
+    Asi llego a produccion un crash: `telegram.editar` NO aceptaba botones,
+    pero el doble de las pruebas de productos si (`editar(chat, mid, texto,
+    botones=None, modo='HTML')`). Sus pruebas pasaban en verde mientras en el
+    servidor la botonera se colaba como cuarto argumento posicional -- donde va
+    el modo -- y Telegram contestaba «unsupported parse_mode». Tocar
+    «Alimentacion» al clasificar un producto no hacia nada.
+
+    Esta prueba compara las firmas de los dobles contra las del adaptador.
+    """
+
+    @staticmethod
+    def _dobles():
+        """Las clases de los archivos de prueba que se hacen pasar por Telegram."""
+        encontrados = []
+        carpeta = RAIZ / 'tests' / 'integracion'
+        for archivo in sorted(carpeta.glob('test_*.py')):
+            # Por ruta y no por nombre de modulo: `tests/` no es un paquete.
+            spec = importlib.util.spec_from_file_location(archivo.stem, archivo)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            for nombre in dir(mod):
+                obj = getattr(mod, nombre)
+                if (
+                    isinstance(obj, type)
+                    and 'elegram' in nombre
+                    and hasattr(obj, 'enviar')
+                ):
+                    encontrados.append((archivo.name, obj))
+        return encontrados
+
+    def test_hay_dobles_que_revisar(self):
+        """Si el descubrimiento se rompe, la prueba pasaria sin revisar nada."""
+        assert self._dobles(), 'no encontre ningun doble de Telegram'
+
+    @pytest.mark.parametrize('funcion', ['enviar', 'editar'])
+    def test_los_parametros_van_en_el_mismo_orden(self, funcion):
+        de_verdad = [
+            p
+            for p in inspect.signature(getattr(telegram, funcion)).parameters
+            if p not in ('chat_id', 'message_id')
+        ]
+        for archivo, doble in self._dobles():
+            metodo = getattr(doble, funcion, None)
+            if metodo is None:
+                continue
+            del_doble = [
+                p
+                for p in inspect.signature(metodo).parameters
+                if p not in ('self', 'chat', 'chat_id', 'message_id', 'mid')
+            ]
+            assert del_doble == de_verdad, (
+                f'{archivo}: el doble de `{funcion}` recibe {del_doble} y el '
+                f'adaptador {de_verdad}. Un doble mas permisivo esconde el bug.'
+            )

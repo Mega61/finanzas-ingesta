@@ -70,7 +70,7 @@ class TelegramFalso:
         self._id += 1
         return {'message_id': self._id}
 
-    def editar(self, chat, message_id, texto, modo='HTML'):
+    def editar(self, chat, message_id, texto, botones=None, modo='HTML'):
         self.editados.append(texto)
         return {'message_id': message_id}
 

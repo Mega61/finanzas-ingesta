@@ -45,7 +45,7 @@ class TelegramFalso:
         self._siguiente_id += 1
         return {'message_id': self._siguiente_id, 'text': texto}
 
-    def editar(self, chat, message_id, texto, modo='HTML'):
+    def editar(self, chat, message_id, texto, botones=None, modo='HTML'):
         self.editados.append((str(chat), message_id, texto))
         return {'message_id': message_id}
 

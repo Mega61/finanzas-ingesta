@@ -114,6 +114,12 @@ def enviar(
         'parse_mode': modo,
         'disable_web_page_preview': True,
     }
+    _poner_botones(payload, botones)
+    return _con_respaldo_plano('sendMessage', payload)
+
+
+def _poner_botones(payload: dict[str, Any], botones: Botones | None) -> None:
+    """El teclado, si hay. Aparte porque `editar` lo necesita igual."""
     if botones:
         payload['reply_markup'] = {
             'inline_keyboard': [
@@ -121,24 +127,33 @@ def enviar(
                 for fila in botones
             ]
         }
-    return _con_respaldo_plano('sendMessage', payload)
 
 
 def editar(
-    chat_id: str | int, message_id: int, texto: str, modo: str = 'HTML'
+    chat_id: str | int,
+    message_id: int,
+    texto: str,
+    botones: Botones | None = None,
+    modo: str = 'HTML',
 ) -> dict[str, Any]:
     """Se usa para reemplazar la pregunta por la respuesta: deja el chat
-    limpio en vez de una fila de preguntas ya contestadas."""
-    return _con_respaldo_plano(
-        'editMessageText',
-        {
-            'chat_id': str(chat_id),
-            'message_id': message_id,
-            'text': texto[:4096],
-            'parse_mode': modo,
-            'disable_web_page_preview': True,
-        },
-    )
+    limpio en vez de una fila de preguntas ya contestadas.
+
+    Lleva botones, y el orden de los parametros es el MISMO que en `enviar` a
+    proposito. No los llevaba, y dos sitios le pasaban la botonera de cuarto
+    argumento posicional -- donde iba el modo -- asi que Telegram contestaba
+    «unsupported parse_mode» y reventaba el manejador. Era el paso de elegir el
+    grupo de un producto: se tocaba «Alimentacion» y el bot no hacia nada.
+    """
+    payload: dict[str, Any] = {
+        'chat_id': str(chat_id),
+        'message_id': message_id,
+        'text': texto[:4096],
+        'parse_mode': modo,
+        'disable_web_page_preview': True,
+    }
+    _poner_botones(payload, botones)
+    return _con_respaldo_plano('editMessageText', payload)
 
 
 def _con_respaldo_plano(metodo: str, payload: dict[str, Any]) -> dict[str, Any]:
