@@ -750,6 +750,11 @@ def _objetivos_del_lote(ed, movs):
         # haya dicho la categoria a la que QUIERE moverlas.
         if filtrados:
             candidatos = filtrados
+        elif not ed.cuantas:
+            # Ni filtro que cace ni numero: NO es un lote. Devolver todo hacia
+            # que «ponle la categoria Chuches a la ultima» contestara «entendi
+            # que hablas de 10 movimientos» cuando se pidio uno.
+            return []
     if ed.cuantas:
         candidatos = candidatos[: ed.cuantas]
     return candidatos if len(candidatos) > 1 else []
@@ -770,10 +775,20 @@ def _aplicar_en_lote(cx, chat, texto, ed, objetivos):
     cambios.update(_cambios_de_etiquetas_y_presupuesto(ed, texto))
 
     if not cambios:
+        # Si nombro una categoria que no existe, se dice: callarselo deja al
+        # usuario creyendo que el problema fue otro.
+        inventada = ''
+        if ed.categoria_filtro:
+            cats = movimientos.categorias()
+            objetivo = _texto_dom.normalizar(ed.categoria_filtro)
+            if not any(_texto_dom.normalizar(c) == objetivo for c in cats):
+                inventada = (
+                    f'No tengo una categoría «{_escapar(ed.categoria_filtro)}». '
+                )
         telegram.enviar(
             chat,
-            f'Entendí que hablas de {len(objetivos)} movimientos, pero no de '
-            f'qué cambiarles. Tócalos uno por uno:',
+            f'{inventada}Entendí que hablas de {len(objetivos)} movimientos, '
+            f'pero no de qué cambiarles. Tócalos uno por uno:',
         )
         cmd_ultimos(cx, chat)
         return
@@ -1270,6 +1285,13 @@ def _toque_borrar_movimiento(t):
 
 
 def _toque_borrar_confirmado(t):
+    # Que siga existiendo. Un doble toque en el boton mandaba dos DELETE y
+    # decia «Borrado de Firefly» las dos veces; el segundo es un 404 contra
+    # Firefly de verdad.
+    if movimientos.uno(str(t.pid)) is None:
+        t.aviso('ese ya no existe')
+        t.reemplazar('🗑 Ese movimiento ya no está en Firefly.')
+        return
     try:
         movimientos.borrar(str(t.pid))
     except Exception as ex:
@@ -1636,8 +1658,14 @@ def _plan_de_ia(cx, chat, texto, abiertas):
         return None
 
 
-def _cambios_del_plan(plan):
-    """Los campos de `movimientos.editar` que pide el plan."""
+def _cambios_del_plan(plan, texto=''):
+    """Los campos de `movimientos.editar` que pide el plan.
+
+    Las etiquetas se filtran contra lo que el usuario ESCRIBIO: el modelo le
+    agregaba etiquetas que nadie pidio -- a «es lo de google, eso es del
+    trabajo» le ponia `reembolsable` -- y una etiqueta es justo el dato que
+    solo aporta el usuario.
+    """
     cambios = {}
     if plan.get('categoria'):
         cambios['categoria'] = plan['categoria']
@@ -1646,13 +1674,19 @@ def _cambios_del_plan(plan):
     if plan.get('comercio'):
         cambios['comercio'] = plan['comercio']
     if plan.get('etiquetas_agregar'):
-        cambios['etiquetas'] = plan['etiquetas_agregar']
+        pedidas = (
+            intencion.etiquetas_respaldadas(texto, plan['etiquetas_agregar'])
+            if texto
+            else plan['etiquetas_agregar']
+        )
+        if pedidas:
+            cambios['etiquetas'] = pedidas
     if plan.get('etiquetas_quitar'):
         cambios['quitar_etiquetas'] = plan['etiquetas_quitar']
     return cambios
 
 
-def _lotes_del_plan(plan):
+def _lotes_del_plan(plan, texto=''):
     """El plan como una lista de (ids, cambios).
 
     Un mensaje puede darle valores distintos a movimientos distintos: «la de
@@ -1664,13 +1698,13 @@ def _lotes_del_plan(plan):
     lotes = []
     for lote in plan.get('lotes') or []:
         ids = [str(i) for i in (lote.get('movimientos') or [])]
-        cambios = _cambios_del_plan(lote)
+        cambios = _cambios_del_plan(lote, texto)
         if ids and cambios:
             lotes.append((ids, cambios))
     if lotes:
         return lotes
     ids = [str(i) for i in (plan.get('movimientos') or [])]
-    cambios = _cambios_del_plan(plan)
+    cambios = _cambios_del_plan(plan, texto)
     return [(ids, cambios)] if ids and cambios else []
 
 
@@ -1752,7 +1786,7 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas, ya_confirmado=False):
     if accion not in ('editar', 'responder'):
         return False
 
-    lotes = _lotes_del_plan(plan)
+    lotes = _lotes_del_plan(plan, texto)
     if not lotes:
         return False
 
@@ -2528,21 +2562,26 @@ def _categoria_implicada(cx, cualquiera, texto):
 
 
 def _aplicar_a_la_ultima(cx, chat, abiertas, texto):
-    """Ultimo recurso: la ultima que se pregunto, diciendolo y con botones."""
-    ultima = abiertas[0]
-    _guardar_texto_en_espera(cx, chat, texto)
+    """Varias preguntas abiertas y ninguna senal de a cual va: se PREGUNTA.
 
-    lineas = [
-        f'Lo tomo como respuesta al de '
-        f'<b>{_plata(ultima["valor"], ultima["moneda"])}</b> en '
-        f'{_escapar(ultima["contraparte"])[:28]}, que es el ultimo que te pregunte.',
-        '',
-        'Si era otro, tocalo:',
-    ]
+    Antes aplicaba a la ultima que se pregunto, diciendolo y con botones para
+    moverla. El argumento era que lo malo no es aplicar sino aplicar en
+    silencio, y para una sola pregunta abierta sigue siendo cierto. Con tres
+    abiertas y cero senal, la probabilidad de acertar es una de tres: contestar
+    «gym» con Zona Fit abierta acababa escrito en Google Workspace, con su
+    presupuesto y todo. Ahi ya no es avisar, es apostar con los datos del
+    usuario.
+
+    El texto queda en espera, asi que el boton lo aplica sin tener que
+    reescribirlo.
+    """
+    _guardar_texto_en_espera(cx, chat, texto)
     botones = []
     fila = []
-    for p in abiertas[1:6]:
-        etiqueta = f'{_plata(p["valor"], p["moneda"])} {(p["contraparte"] or "")[:14]}'
+    for p in abiertas[:6]:
+        etiqueta = (
+            f'{_plata(p["valor"], p["moneda"])} {(p["contraparte"] or "")[:14]}'
+        )
         fila.append((etiqueta, f'm:{p["id"]}:0'))
         if len(fila) == 2:
             botones.append(fila)
@@ -2550,8 +2589,13 @@ def _aplicar_a_la_ultima(cx, chat, abiertas, texto):
     if fila:
         botones.append(fila)
 
-    telegram.enviar(chat, '\n'.join(lineas), botones or None)
-    _responder_con_texto(cx, chat, ultima['id'], texto)
+    telegram.enviar(
+        chat,
+        f'«{_escapar(texto[:60])}» me sirve, pero tengo '
+        f'<b>{len(abiertas)} preguntas abiertas</b> y no sé a cuál va. '
+        f'¿A cuál?',
+        botones or None,
+    )
 
 
 # Arriba de este umbral el bot APLICA y ofrece deshacer. Por debajo, propone y

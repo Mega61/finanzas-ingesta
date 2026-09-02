@@ -201,24 +201,46 @@ class TestYaNoSeRinde:
         bot.manejar_update(alm.cx, _mensaje('los 212 mil fueron cosas para la casa'))
         assert 'BOLD' in ' '.join(tg.enviados)
 
-    def test_sin_ninguna_senal_lo_aplica_al_ultimo_y_lo_dice(self, entorno):
+    def test_sin_ninguna_senal_pregunta_en_vez_de_apostar(self, entorno):
         """«era Etre, venden cosas para la casa» no nombra nada que este en los
-        movimientos. Se aplica al ultimo preguntado —lo que asumiria cualquiera—
-        pero DICIENDOLO, y con botones para moverlo."""
+        movimientos.
+
+        Antes se aplicaba al ultimo preguntado, diciendolo y con botones para
+        moverlo: el argumento era que lo malo no es aplicar sino aplicar en
+        silencio. Con TRES preguntas abiertas y cero senal eso acierta una de
+        tres, y equivocarse no es solo un dato mal puesto -- cierra la pregunta
+        equivocada y puede aprender una regla falsa. Contestar «gym» con Zona
+        Fit abierta acabo escrito en Google Workspace, con presupuesto y todo.
+
+        Y el costo de preguntar es cero: el toque para elegir es el MISMO que
+        antes hacia falta para corregir la apuesta.
+        """
         alm, tg, _ids, _, _ = entorno
         bot.manejar_update(
             alm.cx, _mensaje('era Etre, una empresa que vende cosas para la casa')
         )
         todo = ' '.join(tg.enviados)
-        assert 'ultimo que te pregunte' in todo
-        assert tg.botones, 'tiene que ofrecer los otros dos'
+        assert 'no sé a cuál va' in todo
+        assert tg.botones, 'tiene que ofrecer las tres'
+        assert not _resueltos(alm)['BOLD CO ONLINE RTFE'], 'no puede escribir nada'
 
-    def test_los_botones_permiten_moverlo_de_un_toque(self, entorno):
+    def test_con_una_sola_abierta_si_la_aplica(self, entorno):
+        """Con una sola no hay nada que adivinar, y preguntar seria un mensaje
+        de mas por nada."""
+        alm, _tg, _ids, _, _ = entorno
+        alm.cx.execute(
+            "UPDATE pendientes SET pregunta = NULL"
+            " WHERE contraparte != 'BOLD CO ONLINE RTFE'"
+        )
+        alm.cx.commit()
+        bot.manejar_update(alm.cx, _mensaje('era Etre, venden cosas para la casa'))
+        assert _resueltos(alm)['BOLD CO ONLINE RTFE'] is not None
+
+    def test_los_botones_permiten_elegir_de_un_toque(self, entorno):
         alm, tg, _ids, _, _ = entorno
         bot.manejar_update(alm.cx, _mensaje('era Etre, venden cosas para la casa'))
-        # el callback de los botones apunta a los OTROS movimientos
         datos = [d for fila in tg.botones[0] for _, d in fila]
-        assert datos, 'sin botones no hay como corregir'
+        assert datos, 'sin botones no hay como elegir'
         assert all(d.startswith('m:') for d in datos)
 
 
@@ -278,9 +300,9 @@ class TestMoverLaRespuesta:
     def test_mueve_el_texto_al_movimiento_que_tocaste(self, entorno):
         alm, _tg, ids, _, _ = entorno
         bot.manejar_update(alm.cx, _mensaje('era Etre, venden cosas para la casa'))
-        # se aplico al de BOLD (el ultimo preguntado)
-        assert _resueltos(alm)['BOLD CO ONLINE RTFE'] is not None
-        # ahora se toca el de TIERRAG
+        # con tres abiertas y sin senal no escribe nada: pregunta
+        assert _resueltos(alm)['BOLD CO ONLINE RTFE'] is None
+        # y el toque lo aplica al que se elija
         otro = ids['MERCADO PAGO*TIERRAG']
         bot.manejar_update(
             alm.cx,

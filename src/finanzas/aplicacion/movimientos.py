@@ -157,6 +157,20 @@ CAMBIABLES = (
 )
 
 
+# Un nombre no pasa de esto. No es cosmetico: un comercio de cuatro mil
+# caracteres queda GUARDADO en Firefly, y a partir de ahi el recorte a 4096 que
+# hace Telegram corta el mensaje por la mitad de una etiqueta `<b>`, el HTML
+# queda invalido y toda pantalla que lo muestre -- incluidas las que servirian
+# para corregirlo -- deja de llegar. Se recorta el VALOR, no el mensaje ya
+# formateado.
+MAXIMO_NOMBRE = 120
+
+
+def _acortar(valor: str) -> str:
+    v = ' '.join(str(valor).split())
+    return v[:MAXIMO_NOMBRE]
+
+
 def editar(tx_id: str, **cambios: Any) -> dict[str, Any]:
     """Aplica los cambios en Firefly. Devuelve lo que quedo, ya releido.
 
@@ -184,12 +198,12 @@ def editar(tx_id: str, **cambios: Any) -> dict[str, Any]:
     if cambios.get('presupuesto'):
         campos['budget_name'] = cambios['presupuesto']
     if cambios.get('descripcion'):
-        campos['description'] = cambios['descripcion']
+        campos['description'] = _acortar(cambios['descripcion'])
     if cambios.get('notas'):
-        campos['notes'] = cambios['notas']
+        campos['notes'] = cambios['notas'][:2000]
     if cambios.get('comercio'):
         lado = 'destination_name' if actual['valor'] < 0 else 'source_name'
-        campos[lado] = cambios['comercio']
+        campos[lado] = _acortar(cambios['comercio'])
 
     if campos:
         firefly.actualizar_split(str(tx_id), **campos)
@@ -199,9 +213,12 @@ def editar(tx_id: str, **cambios: Any) -> dict[str, Any]:
     # falta cruzar contra el extracto.
     if cambios.get('etiquetas'):
         etqs = cambios['etiquetas']
-        firefly.agregar_etiqueta(
-            str(tx_id), *(etqs if isinstance(etqs, (list, tuple)) else [etqs])
-        )
+        lista = etqs if isinstance(etqs, (list, tuple)) else [etqs]
+        # Se recortan igual que los nombres, y se descartan las vacias: una
+        # etiqueta en blanco no se puede volver a quitar desde el chat.
+        limpias = [_acortar(e) for e in lista if str(e).strip()]
+        if limpias:
+            firefly.agregar_etiqueta(str(tx_id), *limpias)
     if cambios.get('quitar_etiquetas'):
         etqs = cambios['quitar_etiquetas']
         for e in etqs if isinstance(etqs, (list, tuple)) else [etqs]:

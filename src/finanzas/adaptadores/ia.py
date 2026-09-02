@@ -328,6 +328,14 @@ REGLAS DURAS:
 
 - `movimientos` son ids de la lista que se te dio. NUNCA inventes uno. Si la
   orden no dice a cual, dejalo vacio y baja la confianza.
+- UN NUMERO CON SEPARADOR DE MILES ES UN MONTO, NO UN ID. En Colombia se
+  escribe «1.441» o «1,441» para mil cuatrocientos cuarenta y uno. «la de
+  1,441» es el movimiento que VALE eso, no el id 1441. Los ids se nombran con
+  «#» o diciendo «el movimiento 1441».
+- Si el mensaje pide varias cosas y solo puedes con una -- por ejemplo un
+  cambio y ademas una pregunta -- haz la que puedas y DILO en `explicacion`:
+  «lo de antojos preguntamelo aparte». Nunca inventes una excusa: decir «no hay
+  movimientos recientes» cuando si hay deja al usuario creyendo algo falso.
 - «las que estan en X» es un FILTRO para saber a cuales se refiere, no una
   orden de ponerles X. Si dice «las ultimas 2 estan en compras, agregales la
   etiqueta Ropa», el unico cambio es la etiqueta: la categoria no se toca.

@@ -18,6 +18,7 @@ import pytest
 
 from finanzas.adaptadores import db
 from finanzas.adaptadores.almacen import Almacen
+from finanzas.aplicacion import movimientos
 from finanzas.entrada import bot
 
 RAIZ = Path(__file__).resolve().parent.parent.parent
@@ -369,8 +370,6 @@ class TestElHtmlNoTumbaElMensaje:
         assert '&lt;3' in tg.enviados[0][1]
 
     def test_el_ampersand_de_un_comercio_se_escapa(self):
-        from finanzas.aplicacion import movimientos
-
         m = {
             'id': '1',
             'fecha': '2026-09-02',

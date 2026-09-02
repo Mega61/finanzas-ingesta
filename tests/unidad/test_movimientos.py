@@ -335,3 +335,23 @@ class TestLaContraparte:
         m = self._mov(113943)
         m['origen'] = None
         assert movimientos.contraparte(m) == 'Abono'
+
+
+class TestLoQueSeGuardaTieneTope:
+    """Un comercio de cuatro mil caracteres queda GUARDADO en Firefly, y desde
+    ahi el recorte a 4096 que hace Telegram corta el mensaje por la mitad de
+    una etiqueta `<b>`: el HTML queda invalido, Telegram lo rechaza entero y
+    toda pantalla que muestre ese movimiento deja de llegar -- incluidas las
+    que servirian para corregirlo. Se recorta el VALOR, no el mensaje."""
+
+    def test_un_comercio_larguisimo_se_recorta(self):
+        assert len(movimientos._acortar('Tienda' + 'A' * 4200)) == (
+            movimientos.MAXIMO_NOMBRE
+        )
+
+    def test_los_saltos_de_linea_se_aplanan(self):
+        """Un nombre con saltos rompe el formato de la linea del chat."""
+        assert movimientos._acortar('Cafe\n\n  Bar') == 'Cafe Bar'
+
+    def test_un_nombre_normal_no_se_toca(self):
+        assert movimientos._acortar('Tienda D1 Sabaneta') == 'Tienda D1 Sabaneta'

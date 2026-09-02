@@ -342,3 +342,36 @@ class TestEtiquetasYLote:
     def test_borrar_sigue_siendo_borrar(self):
         e = intencion.es_edicion('borra la ultima')
         assert e.borrar and e.etiqueta_agregar is None
+
+
+class TestLasEtiquetasLasPoneElUsuario:
+    """El modelo agregaba etiquetas que nadie pidio: a «es lo de google, eso es
+    del trabajo» le ponia `reembolsable`. Una etiqueta es justo el dato que
+    solo aporta el usuario, asi que si no la escribio, no va."""
+
+    def test_una_etiqueta_que_no_esta_en_el_mensaje_se_cae(self):
+        assert intencion.etiquetas_respaldadas(
+            'es lo de google, eso es del trabajo', ['reembolsable', 'trabajo']
+        ) == ['trabajo']
+
+    def test_la_que_si_escribio_pasa(self):
+        assert intencion.etiquetas_respaldadas(
+            'las ultimas 2 estan en compras y quiero agregar el tag Ropa', ['Ropa']
+        ) == ['Ropa']
+
+    def test_el_plural_y_las_tildes_son_la_misma_intencion(self):
+        assert intencion.etiquetas_respaldadas('etiquetalo como cenas', ['Cena']) == [
+            'Cena'
+        ]
+        assert intencion.etiquetas_respaldadas('ponle almuerzo', ['Almuerzo']) == [
+            'Almuerzo'
+        ]
+
+    def test_no_respalda_por_dos_letras(self):
+        """Con menos de cuatro, «uber» respaldaria cualquier «ub»."""
+        assert intencion.etiquetas_respaldadas('ponle uber', ['Ubicacion']) == []
+
+    def test_sin_texto_no_filtra(self):
+        """El respaldo sin IA no pasa texto, y ahi las etiquetas ya vienen de
+        una regla que las leyo del mensaje."""
+        assert intencion.etiquetas_respaldadas('', ['Ropa']) == []

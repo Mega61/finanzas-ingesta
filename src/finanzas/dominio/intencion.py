@@ -24,6 +24,7 @@ con botones, que es un toque.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from finanzas.dominio import texto as _texto
@@ -514,3 +515,43 @@ def pide_presupuesto(txt: str | None) -> bool:
     tiene que ser de presupuesto o no ser nada.
     """
     return bool(txt and _PIDE_PRESUPUESTO.search(txt))
+
+
+def etiquetas_respaldadas(txt: str | None, etiquetas: Iterable[str]) -> list[str]:
+    """Las etiquetas que de verdad aparecen en lo que el usuario escribio.
+
+    El modelo agregaba etiquetas que nadie pidio: a «es lo de google, eso es
+    del trabajo» le puso `reembolsable`, que no esta en el mensaje. Una
+    etiqueta es un dato que solo aporta el usuario, asi que si no la escribio,
+    no va.
+
+    Se compara por el principio de la palabra y sin tildes, para que
+    «etiquetalo como cenas» respalde la etiqueta «Cena» -- singular, plural y
+    acentos son la misma intencion. Cuatro caracteres es el minimo: con menos,
+    «uber» respaldaria cualquier cosa que empiece por «ub».
+    """
+    if not txt:
+        return []
+    palabras = {p for p in re.split(r'[^0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+', txt) if p}
+    normales = {_sin_tildes(p.lower()) for p in palabras}
+    respaldadas = []
+    for e in etiquetas:
+        n = _sin_tildes(str(e).lower())
+        if not n:
+            continue
+        corto = n[:4]
+        if any(p == n or p.startswith(corto) or n.startswith(p[:4]) for p in normales):
+            respaldadas.append(e)
+    return respaldadas
+
+
+def _sin_tildes(s: str) -> str:
+    return (
+        s.replace('á', 'a')
+        .replace('é', 'e')
+        .replace('í', 'i')
+        .replace('ó', 'o')
+        .replace('ú', 'u')
+        .replace('ü', 'u')
+        .replace('ñ', 'n')
+    )
