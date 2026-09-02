@@ -311,3 +311,64 @@ class TestMoverLaRespuesta:
             },
         )
         assert any('escribelo de nuevo' in a for a in tg.avisos)
+
+
+class TestElHiloDeLaConversacion:
+    """Preguntar y seguir preguntando, sin que el bot cambie de tema.
+
+    La conversacion real que fallo:
+        TU : cual fue la ultima transaccion?      -> bien, al asesor
+        TU : y la anterior a esa                  -> le saco el movimiento de
+                                                     Google Workspace con
+                                                     botones de categoria
+    """
+
+    @pytest.mark.parametrize(
+        'seguimiento',
+        [
+            'y la anterior a esa',
+            'y la anterior?',
+            'y antes de esa?',
+            'la penultima',
+            'y la otra',
+            'cual mas',
+        ],
+    )
+    def test_el_seguimiento_va_al_asesor_y_no_a_las_preguntas_abiertas(
+        self, entorno, seguimiento
+    ):
+        alm, tg, _ids, consultas, _u = entorno
+        bot.manejar_update(alm.cx, _mensaje('cual fue la ultima transaccion?'))
+        bot.manejar_update(alm.cx, _mensaje(seguimiento))
+        assert consultas == ['cual fue la ultima transaccion?', seguimiento]
+        # y no toco ningun movimiento ni saco ninguna pregunta
+        assert tg.enviados == []
+
+    def test_una_respuesta_de_verdad_sigue_llegando_a_su_movimiento(self, entorno):
+        """El arreglo no puede haber roto lo otro: describir una compra sigue
+        siendo una respuesta, aunque acabe de hablar con el asesor."""
+        alm, tg, _ids, consultas, _u = entorno
+        bot.manejar_update(alm.cx, _mensaje('cual fue la ultima transaccion?'))
+        bot.manejar_update(alm.cx, _mensaje('fue la comida de la gata en tierragro'))
+        assert consultas == ['cual fue la ultima transaccion?']
+        assert 'TIERRAG' in ' '.join(tg.enviados)
+
+    def test_el_hilo_se_recuerda_por_chat(self, entorno):
+        """El modo es del chat, no global."""
+        alm, _tg, _ids, consultas, _u = entorno
+        bot.manejar_update(alm.cx, _mensaje('cuanto llevo gastado'))
+        assert bot._venia_del_asesor('555')
+        assert not bot._venia_del_asesor('otro-chat')
+        assert consultas == ['cuanto llevo gastado']
+
+    def test_el_hilo_caduca(self, entorno, monkeypatch):
+        """Pasado un rato, un «y la otra» ya no se sabe de que hablaba. Se
+        decide solo por el texto, que para estas formas basta."""
+        _alm, _tg, _ids, _c, _u = entorno
+        bot._recordar_camino('555', 'asesor')
+        assert bot._venia_del_asesor('555')
+        # se envejece la marca en vez de parchar time.time(), que se llama a si
+        # mismo dentro del lambda y se va en recursion
+        camino, cuando = bot.ULTIMO_CAMINO['555']
+        bot.ULTIMO_CAMINO['555'] = (camino, cuando - bot.MINUTOS_DE_HILO * 60 - 1)
+        assert not bot._venia_del_asesor('555')

@@ -1136,87 +1136,121 @@ def abiertas_del_chat(cx, chat):
     return _a(cx).pendientes_abiertos_de_chat(chat)
 
 
+# El ultimo camino que tomo cada chat, para no romper el hilo. En memoria, como
+# el historial del asesor: si el proceso se reinicia se pierde la conversacion
+# entera y da igual haber guardado el modo.
+ULTIMO_CAMINO = {}
+# Cuanto vale ese recuerdo. Pasado ese rato, un «y la otra» ya no se sabe de que
+# hablaba y se decide solo por el texto.
+MINUTOS_DE_HILO = 15
+
+
+def _recordar_camino(chat, camino):
+    ULTIMO_CAMINO[str(chat)] = (camino, time.time())
+
+
+def _venia_del_asesor(chat):
+    camino, cuando = ULTIMO_CAMINO.get(str(chat), (None, 0))
+    return camino == 'asesor' and (time.time() - cuando) < MINUTOS_DE_HILO * 60
+
+
 def _texto_libre(cx, chat, texto, respondiendo_a=None):
     """Un mensaje escrito a mano y que hay que resolver solo.
 
-    Antes esto tenia dos modos y los dos molestaban. Primero tomaba la pregunta
-    MAS RECIENTE, asi que contestar la tercera de seis resolvia la sexta y la
-    categoria caia en el movimiento equivocado. Se arreglo pasando a NO adivinar
-    —«responde al mensaje de la que quieras contestar»— y eso es igual de malo
-    por el otro lado: escribes «era Etre, venden cosas para la casa» y el bot te
-    dice que no sabe de que le hablas. Y el asesor solo se consultaba cuando NO
-    habia preguntas abiertas, o sea casi nunca.
+    El orden importa y cada paso esta donde esta por un fallo concreto:
 
-    Ahora se LEE el mensaje, en este orden:
-
-      1. Si respondiste a un mensaje concreto, es ese. No hay nada que pensar.
-      2. Si pides un CAMBIO («cambia la ultima a Mercado», «borra la ultima»),
-         va contra Firefly. Esto va antes del asesor, que no puede editar.
-      3. Si es una consulta («¿me alcanza para...?»), va al asesor, haya o no
-         preguntas abiertas.
-      4. Si hay una sola pregunta abierta, es esa.
-      5. Con varias, se puntua el texto contra cada una: el comercio que
-         nombras, la categoria que implica, el monto. Si una gana claro, se
-         resuelve y se dice CUAL.
-      6. Si ninguna gana, se aplica a la ultima que se te pregunto —que es lo
-         que un humano asumiria— diciendolo, y con botones para moverla de una.
+      1. Si respondiste a un mensaje, es ese. No hay nada que pensar.
+      2. Si pides un CAMBIO («cambia la ultima a Mercado»), va contra Firefly.
+         Antes del asesor, que no puede editar.
+      3. Si es una consulta («¿me alcanza?», «cual fue la ultima»), al asesor,
+         haya o no preguntas abiertas.
+      4. Si vienes hablando con el asesor y esto continua la conversacion («y la
+         anterior a esa»), sigue con el asesor. Sin esto, ese mensaje caia en el
+         camino de las respuestas y el bot sacaba un movimiento cualquiera con
+         botones de categoria.
+      5. Si el texto no implica NINGUNA categoria ni senala NINGUN movimiento,
+         no es una respuesta. Al asesor. Esta es la garantia dura: sin ella,
+         cualquier cosa que no se entienda acaba tratada como respuesta a la
+         ultima pregunta abierta.
+      6. Ya con la certeza de que parece una respuesta: una sola abierta es esa;
+         con varias se puntua; y si ninguna gana, la ultima preguntada, pero
+         diciendolo y con botones para moverla.
     """
     # 1. respondio a un mensaje concreto
     if respondiendo_a:
         pid = _pendiente_de_mensaje(cx, chat, respondiendo_a)
         if pid:
+            _recordar_camino(chat, 'respuesta')
             _responder_con_texto(cx, chat, pid, texto)
             return
-        # ¿o al mensaje de «¿que le cambio?» de un movimiento de Firefly?
         ed = _a(cx).edicion_en_curso(chat)
         if ed and ed['mensaje_id'] == respondiendo_a:
+            _recordar_camino(chat, 'edicion')
             _editar_por_texto(cx, chat, texto, tx_id=ed['firefly_id'])
             return
 
-    abiertas = abiertas_del_chat(cx, chat)
-
-    # 2. una orden de cambio va contra Firefly, no contra la cola. Va ANTES del
-    #    asesor: «cambia la ultima a Mercado» no lleva marcas de consulta, y el
-    #    asesor no puede editar nada.
+    # 2. una orden de cambio va contra Firefly, no contra la cola
     if intencion.es_edicion(texto).pide_cambio:
+        _recordar_camino(chat, 'edicion')
         _editar_por_texto(cx, chat, texto)
         return
 
-    # 3. una consulta va al asesor aunque haya cosas abiertas
+    # 3. una consulta explicita
     if intencion.es_para_el_asesor(texto):
+        _recordar_camino(chat, 'asesor')
         _consultar_asesor(cx, chat, texto)
         return
 
+    # 4. seguir el hilo: «y la anterior a esa» continua la conversacion. Ninguna
+    #    de estas formas describe una compra, asi que no depende del modo.
+    if intencion.es_seguimiento(texto):
+        _recordar_camino(chat, 'asesor')
+        _consultar_asesor(cx, chat, texto)
+        return
+
+    abiertas = abiertas_del_chat(cx, chat)
     if not abiertas:
+        _recordar_camino(chat, 'asesor')
         _consultar_asesor(cx, chat, texto)
         return
 
-    # 4. una sola: no hay ambiguedad que resolver
+    # 5. las senales se calculan UNA vez y se reusan abajo
+    implicada = _categoria_implicada(cx, abiertas[0], texto)
+    filas = [dict(m) for m in abiertas]
+    coincidencias = intencion.a_que_movimiento(texto, filas, implicada)
+    senala = any(c.senalado for c in coincidencias)
+
+    # Si veniamos hablando con el asesor y esto no dice ninguna categoria ni
+    # nombra ningun movimiento, sigue siendo conversacion. Se limita a ese caso
+    # a proposito: como filtro general descartaba respuestas de verdad, porque
+    # aqui solo corre la heuristica barata y no la interpretacion completa —
+    # «era Etre, una empresa que vende cosas para la casa» no da categoria por
+    # heuristica y si es una respuesta.
+    if _venia_del_asesor(chat) and not implicada and not senala:
+        _recordar_camino(chat, 'asesor')
+        _consultar_asesor(cx, chat, texto)
+        return
+
+    _recordar_camino(chat, 'respuesta')
+
+    # 6. es una respuesta: a cual
     if len(abiertas) == 1:
         _responder_con_texto(cx, chat, abiertas[0]['id'], texto)
         return
 
-    # 5. varias: leer el mensaje. La categoria que implica el texto se calcula
-    #    UNA vez (es la misma para todos) y se pasa como senal mas.
-    implicada = _categoria_implicada(cx, abiertas[0], texto)
-    filas = [dict(m) for m in abiertas]
-    coincidencias = intencion.a_que_movimiento(texto, filas, implicada)
     ganador = intencion.hay_un_ganador(coincidencias)
-
     if ganador:
         elegido = next(m for m in abiertas if m['id'] == ganador.id)
         telegram.enviar(
             chat,
-            f'Entiendo que hablas del de <b>{_plata(elegido["valor"], elegido["moneda"])}'
-            f'</b> en {(elegido["contraparte"] or "")[:28]}'
+            f'Entiendo que hablas del de '
+            f'<b>{_plata(elegido["valor"], elegido["moneda"])}</b> en '
+            f'{(elegido["contraparte"] or "")[:28]}'
             f'\n<i>({", ".join(ganador.razones)})</i>',
         )
         _responder_con_texto(cx, chat, ganador.id, texto)
         return
 
-    # 6. Nada en el texto senala a ninguna. Se aplica a la ultima preguntada,
-    #    que es la que estabas mirando, y se dice: una respuesta aplicada en
-    #    silencio al movimiento equivocado es lo unico inaceptable aqui.
     _aplicar_a_la_ultima(cx, chat, abiertas, texto)
 
 

@@ -312,3 +312,60 @@ def es_edicion(txt: str | None) -> Edicion:
             else None
         ),
     )
+
+
+# --------------------------------------------------- seguir la conversacion
+
+# Formas de continuar una pregunta anterior. No llevan verbo ni signo de
+# interrogacion, asi que por si solas no parecen preguntas.
+#
+# «y la anterior a esa» se tomo como la RESPUESTA a una pregunta abierta y el
+# bot contesto mostrando el movimiento de Google Workspace con botones de
+# categoria. La palabra «esa» cuenta como pasado y anulaba la regla del signo de
+# interrogacion, asi que ni con «?» se salvaba.
+# (a) Referencias explicitas a otro elemento de la conversacion. Valen por si
+#     solas: ninguna de estas describe una compra.
+_REFERENCIA = re.compile(
+    r'\b(anterior|anteriores|penultima|penultimo|siguiente'
+    r'|antes\s+de\s+(esa|ese|esto|eso)|la\s+otra|el\s+otro|las\s+otras'
+    r'|(la|el|lo)\s+de\s+antes|de\s+antes'
+    r'|cual\s+mas|algo\s+mas|mas\s+detalle|mas\s+detalles|explicame'
+    r'|ampliame|amplia|detallame|detalla)\b',
+    re.I,
+)
+# «y esa», «y eso» NO estan arriba a proposito: «y ese fue el mercado del mes
+# que hicimos en el exito» empieza igual y describe una compra. Caen en (b), que
+# exige que el mensaje sea corto y sin contenido propio.
+# (b) Empezar por una palabra de continuacion. Sola NO basta: «ya te dije, es
+#     mercado» empieza asi y es una respuesta. Se exige ademas que el mensaje
+#     sea muy corto y que no traiga ninguna palabra que pueda ser un comercio,
+#     porque «y fue en tierragro» tambien empieza por «y» y si nombra uno.
+_CONTINUA = re.compile(r'^(y|ok|ya|pero|entonces|ah|osea|o\s+sea)\b', re.I)
+
+
+def es_seguimiento(txt: str | None) -> bool:
+    """¿Continua la conversacion anterior en vez de empezar algo?
+
+    Es lo que evita romper el hilo. «y la anterior a esa» no lleva verbo ni
+    signo de interrogacion, asi que no parecia una pregunta: caia en el camino
+    de las respuestas y el bot sacaba un movimiento cualquiera con botones de
+    categoria. Y peor, la palabra «esa» cuenta como pasado y anulaba la regla
+    del signo de interrogacion, asi que ni escribiendo «?» se salvaba.
+
+    >>> es_seguimiento('y la anterior a esa')
+    True
+    >>> es_seguimiento('fue la comida de la gata en tierragro')
+    False
+    >>> es_seguimiento('ya te dije, es mercado')
+    False
+    """
+    if not txt:
+        return False
+    t = _texto.sin_tildes(str(txt)).lower().strip()
+    if not t:
+        return False
+    if _REFERENCIA.search(t):
+        return True
+    if not _CONTINUA.search(t):
+        return False
+    return len(t.split()) <= 4 and not _texto.tokens_distintivos(t)

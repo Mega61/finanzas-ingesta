@@ -192,3 +192,81 @@ class TestAQueMovimiento:
         cs = intencion.a_que_movimiento('zonafit', TRES)
         assert cs[0].id == 848
         assert cs[0].puntaje > cs[-1].puntaje
+
+
+class TestSeguirLaConversacion:
+    """El caso que rompio la paciencia: preguntó por la ultima transaccion, bien,
+    y despues «y la anterior a esa» — y el bot le saco el movimiento de Google
+    Workspace con botones de categoria.
+
+    «y la anterior a esa» no lleva verbo ni signo de interrogacion, asi que no
+    parecia una pregunta y caia en el camino de las respuestas. Y peor: la
+    palabra «esa» cuenta como pasado y anulaba la regla del signo de
+    interrogacion, asi que ni escribiendo «?» se salvaba.
+    """
+
+    @pytest.mark.parametrize(
+        'txt',
+        [
+            'y la anterior a esa',
+            'y la anterior?',
+            'y la anterior',
+            'la anterior',
+            'y antes de esa',
+            'y antes de esa?',
+            'la penultima',
+            'y la otra',
+            'y la de antes?',
+            'cual mas',
+            'algo mas',
+            'explicame mas',
+            'dame mas detalles',
+            'ok y la otra',
+            'y esa?',
+            'y eso?',
+        ],
+    )
+    def test_esto_continua_la_conversacion(self, txt):
+        assert intencion.es_seguimiento(txt)
+
+    @pytest.mark.parametrize(
+        'txt',
+        [
+            'fue la comida de la gata en tierragro',
+            'era Etre, una empresa que vende cosas para la casa',
+            'esto fue el gym',
+            'mercado del mes',
+            'gasolina de la moto',
+            'suplementos de zona fit',
+        ],
+    )
+    def test_describir_una_compra_no_es_seguimiento(self, txt):
+        assert not intencion.es_seguimiento(txt)
+
+    def test_empezar_por_y_no_basta(self):
+        """«y fue en tierragro» y «ya te dije, es mercado» empiezan como un
+        seguimiento y son respuestas: nombran algo. Se exige que el mensaje sea
+        corto Y sin contenido propio."""
+        assert not intencion.es_seguimiento('y fue en tierragro')
+        assert not intencion.es_seguimiento('ya te dije, es mercado')
+
+    def test_un_mensaje_largo_que_empieza_por_y_describe(self):
+        assert not intencion.es_seguimiento(
+            'y ese fue el mercado del mes que hicimos en el exito'
+        )
+
+    @pytest.mark.parametrize('txt', ['', None, '   '])
+    def test_vacio_no_es_seguimiento(self, txt):
+        assert not intencion.es_seguimiento(txt)
+
+    def test_ninguna_forma_de_seguimiento_se_toma_como_edicion(self):
+        """Si «y la anterior» se leyera como una orden de cambio, preguntar por
+        un movimiento acabaria modificando otro."""
+        for txt in (
+            'y la anterior a esa',
+            'la penultima',
+            'y la otra',
+            'cual mas',
+            'explicame mas',
+        ):
+            assert not intencion.es_edicion(txt).pide_cambio, txt
