@@ -68,6 +68,11 @@ def entorno(monkeypatch, tmp_path):
 
     tg = TelegramFalso()
     monkeypatch.setattr(bot, 'telegram', tg)
+
+    # La IA se apaga a proposito: estas pruebas cubren el camino de RESPALDO
+    # por patrones. El camino del plan del modelo tiene sus propias pruebas,
+    # con `entender_orden` simulado. Sin esto, cada prueba llamaria a Gemini.
+    monkeypatch.setattr(bot.ia, 'disponible', lambda: False)
     monkeypatch.setattr(db, 'ruta', lambda: str(tmp_path / 'x.db'))
 
     uid = alm.guardar_usuario('Juan', 'https://f.ejemplo', 'tok', '555')

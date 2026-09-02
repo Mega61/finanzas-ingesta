@@ -47,6 +47,10 @@ TIMEOUT = int(config.get('GEMINI_TIMEOUT', '60'))
 # deteccion de MAX_TOKENS para no devolver texto truncado como si estuviera bien.
 THINKING_CLASIFICAR = int(config.get('GEMINI_THINKING_CLASIFICAR', '0'))
 THINKING_ASESOR = int(config.get('GEMINI_THINKING_ASESOR', '1024'))
+# Entender una orden si se beneficia de razonar un poco: hay que decidir la
+# accion Y a que movimientos aplica, y equivocarse en lo segundo cambia el
+# movimiento equivocado.
+THINKING_ORDENES = int(config.get('GEMINI_THINKING_ORDENES', '512'))
 
 
 def _config_generacion(
@@ -265,4 +269,213 @@ def interpretar(
         d['categoria'] = None
     if d.get('presupuesto') and d['presupuesto'] not in presupuestos:
         d['presupuesto'] = None
+    return d
+
+
+# ------------------------------------------------------- entender una orden
+
+ORDENES = """Eres el cerebro de un bot de finanzas personales por Telegram. El
+usuario te escribe en espanol coloquial colombiano y tu decides QUE quiere
+hacer y SOBRE QUE movimientos.
+
+Se te da la lista de sus movimientos recientes con su id, y los catalogos de
+categorias, presupuestos y etiquetas que existen. Devuelves un plan.
+
+LAS ACCIONES:
+
+  consultar   Pregunta algo sobre sus finanzas: «cuanto llevo gastado»,
+              «cual fue la ultima», «me alcanza para una bici», «y la anterior
+              a esa». No cambia nada. Si dudas entre consultar y editar y no
+              hay un verbo de cambio claro, es consultar.
+
+  editar      Pide cambiar algo YA registrado: la categoria, el presupuesto,
+              las etiquetas o el nombre del comercio. Puede ser sobre varios:
+              «las ultimas 2 estan en compras, agregales la etiqueta Ropa».
+
+  responder   Esta contestando a que corresponde un movimiento que el bot le
+              pregunto: «fue la comida de la gata en tierragro», «esto fue el
+              gym», «era Etre, una empresa que vende cosas para la casa». Esto
+              tambien acaba en un cambio, pero es una respuesta, no una orden.
+
+  borrar      Pide borrar un movimiento de verdad. NO confundir con quitar una
+              etiqueta.
+
+  regla_presupuesto  Dice que una CATEGORIA siempre va a un PRESUPUESTO:
+              «Compras va en Antojos», «Regalos siempre es Vivir». Eso no
+              cambia un movimiento, cambia una regla. Llena `categoria` y
+              `presupuesto`.
+
+  nada        No entendiste. Mejor eso que inventar.
+
+REGLAS DURAS:
+
+- `movimientos` son ids de la lista que se te dio. NUNCA inventes uno. Si la
+  orden no dice a cual, dejalo vacio y baja la confianza.
+- «las que estan en X» es un FILTRO para saber a cuales se refiere, no una
+  orden de ponerles X. Si dice «las ultimas 2 estan en compras, agregales la
+  etiqueta Ropa», el unico cambio es la etiqueta: la categoria no se toca.
+- «la ultima» es el PRIMERO de la lista, que viene del mas nuevo al mas viejo.
+  «la anterior a esa» es el segundo. «las ultimas 2» son los dos primeros.
+- `categoria` y `presupuesto` solo pueden ser de los catalogos. Si el usuario
+  nombra algo que no esta, deja el campo vacio y dilo en `explicacion`.
+- `comercio` SI es libre: el banco manda el nombre de la pasarela de pago
+  («MERCADO PAGO*XX», «BOLD CO...») y el negocio real solo lo sabe el usuario.
+  Llenalo cuando te de un nombre propio de negocio.
+- Las etiquetas son libres y ADITIVAS. Poner una no quita las que ya estan.
+  `etiquetas_quitar` solo cuando pida explicitamente quitarlas.
+- Distingue etiqueta de categoria: «agregale la etiqueta Ropa» es una etiqueta
+  aunque «Ropa» tambien sea una categoria.
+- Distingue categoria de presupuesto por el catalogo del que sale el nombre.
+  «ponla en Gato» es categoria; «ponla en Antojos» es presupuesto.
+- `confianza`: 0.9+ cuando la orden es inequivoca; 0.5-0.7 cuando adivinas a
+  cual movimiento; menos de 0.5 si de verdad no sabes.
+- `explicacion` en una linea, en espanol, para mostrarsela al usuario.
+"""
+
+
+def _esquema_orden(
+    ids: Iterable[str],
+    categorias: Iterable[str],
+    presupuestos: Iterable[str],
+) -> dict[str, Any]:
+    """El esquema de la respuesta.
+
+    Los enum son la red de seguridad que importa: sin ellos el modelo inventa
+    una categoria que no existe o un id de movimiento que no le dimos, y el bot
+    la aplica. Con el enum, la API no deja que salga otra cosa.
+
+    `comercio` y las etiquetas quedan LIBRES a proposito: el nombre del negocio
+    y una etiqueta nueva son justo lo que el usuario aporta y el sistema no
+    puede conocer de antemano.
+    """
+
+    def enum(vals):
+        return {'type': 'string', 'enum': list(vals)[:250]}
+
+    lista_ids = list(ids)[:60]
+    return {
+        'type': 'object',
+        'properties': {
+            'accion': {
+                'type': 'string',
+                'enum': [
+                    'consultar',
+                    'editar',
+                    'responder',
+                    'borrar',
+                    'regla_presupuesto',
+                    'nada',
+                ],
+            },
+            'movimientos': {
+                'type': 'array',
+                'items': enum(lista_ids) if lista_ids else {'type': 'string'},
+            },
+            # No van en `required`: la API rechaza un enum con cadena vacia,
+            # asi que la forma de decir «ninguna» es omitir el campo.
+            'categoria': enum(categorias),
+            'presupuesto': enum(presupuestos),
+            'comercio': {'type': 'string'},
+            'etiquetas_agregar': {'type': 'array', 'items': {'type': 'string'}},
+            'etiquetas_quitar': {'type': 'array', 'items': {'type': 'string'}},
+            'confianza': {'type': 'number'},
+            'explicacion': {'type': 'string'},
+        },
+        'required': ['accion', 'confianza', 'explicacion'],
+        'propertyOrdering': [
+            'accion',
+            'movimientos',
+            'categoria',
+            'presupuesto',
+            'comercio',
+            'etiquetas_agregar',
+            'etiquetas_quitar',
+            'confianza',
+            'explicacion',
+        ],
+    }
+
+
+def entender_orden(
+    texto: str,
+    movimientos: list[Mapping[str, Any]],
+    categorias: Iterable[str],
+    presupuestos: Iterable[str],
+    etiquetas: Iterable[str] = (),
+    abiertas: list[Mapping[str, Any]] | None = None,
+    historial: list[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Que quiere hacer el usuario, y sobre que movimientos.
+
+    Esta es la pieza que faltaba. Antes a Gemini solo se le preguntaba «¿que
+    categoria?» sobre UN movimiento, con el comercio restringido a un enum de
+    los que ya existian —asi que ni podia proponer un nombre nuevo— y todo lo
+    demas lo decidian expresiones regulares: a cual te referias, si era
+    pregunta o respuesta, las etiquetas, el plural, los presupuestos. Cada
+    fallo del bot salio de ahi.
+
+    Levanta SinIA si no hay API key o la llamada falla, para que el llamador
+    pueda caer al camino de regex.
+    """
+    lineas = [f'MENSAJE DEL USUARIO: {texto}', '']
+    if historial:
+        lineas.append('LA CONVERSACION HASTA AHORA (lo ultimo al final):')
+        for rol, txt in historial[-6:]:
+            lineas.append(f'  {rol}: {txt[:180]}')
+        lineas.append('')
+    lineas.append('SUS MOVIMIENTOS RECIENTES (del mas nuevo al mas viejo):')
+    for m in movimientos[:40]:
+        etqs = [
+            e
+            for e in (m.get('etiquetas') or [])
+            if e.lower() not in ('sin-confirmar', 'ingesta-automatica')
+            and not e.lower().startswith('recon-')
+        ]
+        lineas.append(
+            f'  id={m.get("id")} {m.get("fecha")} {m.get("valor")} '
+            f'"{m.get("destino") or m.get("descripcion")}" '
+            f'categoria={m.get("categoria") or "-"} '
+            f'presupuesto={m.get("presupuesto") or "-"} '
+            f'etiquetas={",".join(etqs) or "-"}'
+        )
+    if abiertas:
+        lineas += ['', 'MOVIMIENTOS QUE EL BOT LE PREGUNTO Y SIGUEN SIN RESOLVER:']
+        for p in abiertas[:10]:
+            lineas.append(
+                f'  id_firefly={p.get("firefly_id") or "?"} '
+                f'{p.get("fecha")} {p.get("valor")} '
+                f'"{p.get("contraparte") or p.get("descripcion")}"'
+            )
+    lineas += ['', 'CATEGORIAS: ' + ', '.join(sorted(categorias))]
+    lineas.append('PRESUPUESTOS: ' + ', '.join(sorted(presupuestos)))
+    if etiquetas:
+        lineas.append('ETIQUETAS QUE YA USA: ' + ', '.join(sorted(etiquetas)[:60]))
+
+    payload = {
+        'systemInstruction': {'parts': [{'text': ORDENES}]},
+        'contents': [{'role': 'user', 'parts': [{'text': chr(10).join(lineas)}]}],
+        'generationConfig': _config_generacion(
+            1600,
+            THINKING_ORDENES,
+            {
+                'responseMimeType': 'application/json',
+                'responseSchema': _esquema_orden(
+                    [str(m.get('id')) for m in movimientos[:40] if m.get('id')],
+                    categorias,
+                    presupuestos,
+                ),
+            },
+        ),
+    }
+    crudo = texto_de(_llamar(payload), ' al entender la orden')
+    try:
+        d = json.loads(crudo)
+    except json.JSONDecodeError as ex:
+        raise SinIA(f'no pude leer el plan: {ex}; crudo={crudo[:200]}') from None
+    # Se limpia lo que venga vacio, para que el llamador solo vea lo que hay.
+    for k in ('categoria', 'presupuesto', 'comercio'):
+        if not (d.get(k) or '').strip():
+            d[k] = None
+    for k in ('etiquetas_agregar', 'etiquetas_quitar', 'movimientos'):
+        d[k] = [x for x in (d.get(k) or []) if str(x).strip()]
     return d

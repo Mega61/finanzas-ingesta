@@ -80,6 +80,7 @@ services:
       # tope justo la respuesta sale cortada. Ver el comentario en
       # src/finanzas/adaptadores/ia.py.
       GEMINI_THINKING_CLASIFICAR: ${GEMINI_THINKING_CLASIFICAR:-0}
+      GEMINI_THINKING_ORDENES: ${GEMINI_THINKING_ORDENES:-512}
       GEMINI_THINKING_ASESOR: ${GEMINI_THINKING_ASESOR:-1024}
       GEMINI_MAX_ASESOR: ${GEMINI_MAX_ASESOR:-4000}
 

@@ -74,6 +74,11 @@ def entorno(monkeypatch):
     tg = TelegramFalso()
     monkeypatch.setattr(bot, 'telegram', tg)
 
+    # La IA se apaga a proposito: estas pruebas cubren el camino de RESPALDO
+    # por patrones. El camino del plan del modelo tiene sus propias pruebas,
+    # con `entender_orden` simulado. Sin esto, cada prueba llamaria a Gemini.
+    monkeypatch.setattr(bot.ia, 'disponible', lambda: False)
+
     # Nada sale a la red. Lo que se prueba aqui es el RUTEO: a que movimiento
     # va el texto y si va al asesor. La interpretacion en si tiene sus propias
     # pruebas, y dejarla real hacia que esto tardara minutos llamando a Gemini.

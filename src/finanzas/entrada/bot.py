@@ -158,9 +158,15 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
         botones.append([('🚫 No es un movimiento', f'x:{p["id"]}:0')])
 
         texto = (
-            '¿Qué categoría es esto?\n\n'
+            '¿Qué es esto?\n\n'
             + describir(p)
             + f'\n\n<i>{p["descripcion"] or ""}</i>'
+            # Los botones son el atajo, no la unica via. Decirlo importa: sin
+            # esto la unica forma visible de contestar eran ocho categorias de
+            # setenta y una, y para todo lo demas —presupuesto, etiqueta,
+            # nombre del comercio— no habia camino.
+            + '\n\n<i>O escríbeme y ya: «fue ropa en Etre, antojos, '
+            'etiqueta Ropa».</i>'
         )
         try:
             msg = telegram.enviar(chat, texto, botones)
@@ -1492,6 +1498,240 @@ def cmd_productos(cx, chat, _texto=''):
     preguntar_productos(cx, limite=MAX_PRODUCTOS)
 
 
+# --------------------------------------------------- entender con el modelo
+#
+# Este es el camino principal desde que existe. Antes el ruteo lo hacian
+# expresiones regulares y a Gemini solo se le preguntaba «¿que categoria?»
+# sobre UN movimiento, con el comercio restringido a un enum de los que ya
+# existian —asi que ni podia proponer un nombre nuevo—. Todo lo demas —a cual
+# te referias, si era pregunta o respuesta, las etiquetas, el plural, los
+# presupuestos— salia de patrones que habia que ir parchando uno por uno.
+#
+# El modelo no era el cuello de botella: era que no se le estaba preguntando.
+
+# Por debajo de esto no se aplica nada solo: se muestra lo que se entendio y se
+# pide un toque. El modelo devuelve 0.9+ cuando la orden es inequivoca.
+CONFIANZA_PARA_APLICAR = 0.75
+
+
+def _plan_de_ia(cx, chat, texto, abiertas):
+    """Lo que el modelo entiende del mensaje, o None si no se puede usar."""
+    if not ia.disponible():
+        return None
+    try:
+        movs = movimientos.ultimos(limite=25)
+        return ia.entender_orden(
+            texto,
+            movs,
+            movimientos.categorias(),
+            presupuestos.nombres_activos(),
+            movimientos.etiquetas_mas_usadas(),
+            abiertas=[dict(p) for p in abiertas],
+            historial=HISTORIAL.get(str(chat)),
+        )
+    except Exception as ex:
+        # Sin IA o con la llamada rota se cae al camino de patrones, que sigue
+        # funcionando: peor, pero funcionando.
+        print(f'  no pude entender con IA: {type(ex).__name__}: {str(ex)[:160]}')
+        return None
+
+
+def _cambios_del_plan(plan):
+    """Los campos de `movimientos.editar` que pide el plan."""
+    cambios = {}
+    if plan.get('categoria'):
+        cambios['categoria'] = plan['categoria']
+    if plan.get('presupuesto'):
+        cambios['presupuesto'] = plan['presupuesto']
+    if plan.get('comercio'):
+        cambios['comercio'] = plan['comercio']
+    if plan.get('etiquetas_agregar'):
+        cambios['etiquetas'] = plan['etiquetas_agregar']
+    if plan.get('etiquetas_quitar'):
+        cambios['quitar_etiquetas'] = plan['etiquetas_quitar']
+    return cambios
+
+
+def _ejecutar_plan(cx, chat, texto, plan, abiertas):
+    """Hace lo que el plan dice. Devuelve True si lo atendio."""
+    accion = plan.get('accion')
+    confianza = float(plan.get('confianza') or 0)
+    ids = [str(i) for i in (plan.get('movimientos') or [])]
+    porque = plan.get('explicacion') or ''
+
+    if accion in ('nada', None):
+        return False
+
+    if accion == 'consultar':
+        _recordar_camino(chat, 'asesor')
+        _consultar_asesor(cx, chat, texto)
+        return True
+
+    if accion == 'regla_presupuesto':
+        cat, pres = plan.get('categoria'), plan.get('presupuesto')
+        if not (cat and pres):
+            return False
+        _a(cx).fijar_presupuesto_de_categoria(cat, pres)
+        telegram.enviar(
+            chat,
+            f'📌 Anotado: <b>{cat}</b> va a <b>{pres}</b>.\n'
+            f'<i>{porque}</i>\n\n'
+            f'Esto gana sobre lo que diga el histórico, así que la próxima '
+            f'compra de esa categoría entra con presupuesto sola.\n'
+            f'¿Se lo pongo también a las que ya están sin presupuesto?',
+            [[('sí, a las de este mes', 'rp:0:0')]],
+        )
+        _recordar_camino(chat, 'edicion')
+        return True
+
+    if accion == 'borrar':
+        if len(ids) != 1:
+            return False
+        m = movimientos.uno(ids[0])
+        if m is None:
+            return False
+        telegram.enviar(
+            chat,
+            f'Vas a BORRAR de Firefly:\n<b>{movimientos.describir(m)}</b>\n\n'
+            f'No se puede deshacer.',
+            [[('🗑 sí, bórralo', f'mB:{ids[0]}:0'), ('cancelar', f'mv:{ids[0]}:0')]],
+        )
+        _recordar_camino(chat, 'edicion')
+        return True
+
+    if accion not in ('editar', 'responder'):
+        return False
+
+    cambios = _cambios_del_plan(plan)
+    if not cambios or not ids:
+        return False
+
+    # Confianza baja: se muestra lo que se entendio y se pide un toque. Aplicar
+    # en silencio algo que no se entendio bien es lo unico inaceptable.
+    if confianza < CONFIANZA_PARA_APLICAR:
+        _guardar_texto_en_espera(cx, chat, texto)
+        objetivo = ids[0]
+        telegram.enviar(
+            chat,
+            f'Creo que quieres esto, pero no estoy seguro:\n'
+            f'<i>{porque}</i>\n\n'
+            f'{_resumen_de_cambios(cambios)}',
+            [
+                [('✅ sí, hazlo', f'ok:{objetivo}:0')],
+                [('⚙️ mejor lo toco yo', f'mv:{objetivo}:0')],
+            ],
+        )
+        _recordar_camino(chat, 'edicion')
+        return True
+
+    resultados = movimientos.editar_varios(ids, **cambios)
+    lineas = [f'✅ <i>{porque}</i>', '']
+    for r in resultados:
+        if r.get('error'):
+            lineas.append(f'⚠️ #{r["id"]}: {r["error"]}')
+        else:
+            lineas.append(movimientos.describir(r['movimiento']))
+
+    # Si era la RESPUESTA a algo que el bot pregunto, tambien se cierra la
+    # pregunta: si no, seguiria preguntando por algo ya resuelto.
+    cerradas = 0
+    if accion == 'responder':
+        por_firefly = {str(p['firefly_id']): p for p in abiertas if p['firefly_id']}
+        for i in ids:
+            p = por_firefly.get(i)
+            if p:
+                db.pendiente_actualizar(
+                    cx,
+                    p['id'],
+                    pregunta=None,
+                    categoria=cambios.get('categoria') or p['categoria'],
+                    presupuesto=cambios.get('presupuesto') or p['presupuesto'],
+                    confianza=1.0,
+                    decidido_por='usuario',
+                )
+                cerradas += 1
+        cx.commit()
+    if cerradas:
+        lineas.append(f'\n<i>{cerradas} pregunta(s) cerradas.</i>')
+
+    db.bitacora(
+        cx,
+        'plan_ia',
+        usuario_id=_usuario_de(cx, chat),
+        payload={'texto': texto, 'plan': plan, 'cambios': cambios},
+        ok=all(not r.get('error') for r in resultados),
+    )
+    cx.commit()
+    telegram.enviar(
+        chat,
+        SALTO.join(lineas),
+        [[('✏️ no era eso', f'mv:{ids[0]}:0')]],
+    )
+    _recordar_camino(chat, 'edicion')
+    return True
+
+
+def _resumen_de_cambios(cambios):
+    """Los cambios en lenguaje llano, para confirmarlos."""
+    nombres = {
+        'categoria': 'categoría',
+        'presupuesto': 'presupuesto',
+        'comercio': 'comercio',
+        'etiquetas': 'agregar etiqueta',
+        'quitar_etiquetas': 'quitar etiqueta',
+        'monto': 'monto',
+    }
+    filas = []
+    for k, v in cambios.items():
+        valor = ', '.join(v) if isinstance(v, list) else v
+        filas.append(f'· {nombres.get(k, k)}: <b>{valor}</b>')
+    return SALTO.join(filas)
+
+
+def _toque_confirmar_plan(t):
+    """«si, hazlo» sobre un plan que el modelo no dio por seguro."""
+    txt = _texto_en_espera(t.cx, t.chat)
+    if not txt:
+        t.aviso('ya no tengo ese mensaje')
+        return
+    t.aviso('va')
+    plan = _plan_de_ia(t.cx, t.chat, txt, abiertas_del_chat(t.cx, t.chat))
+    if not plan:
+        t.reemplazar('No pude entenderlo de nuevo. Tócalo y te lo cambio a mano.')
+        return
+    plan['confianza'] = 1.0
+    _ejecutar_plan(t.cx, t.chat, txt, plan, abiertas_del_chat(t.cx, t.chat))
+
+
+def _toque_presupuesto_a_los_viejos(t):
+    """Aplica la regla recien fijada a los movimientos de este mes que estan sin
+    presupuesto. Es lo que hace que fijarla no sea solo para el futuro."""
+    fijados = _a(t.cx).presupuestos_fijados()
+    if not fijados:
+        t.aviso('no hay reglas puestas')
+        return
+    t.aviso('voy')
+    arreglados = []
+    for m in movimientos.ultimos(limite=300, dias=45):
+        if m['presupuesto'] or not m['categoria'] or m['valor'] > 0:
+            continue
+        pres = fijados.get(m['categoria'])
+        if not pres:
+            continue
+        try:
+            movimientos.editar(str(m['id']), presupuesto=pres)
+            arreglados.append(f'{movimientos.describir(m)} → {pres}')
+        except Exception as ex:
+            arreglados.append(f'⚠️ #{m["id"]}: {str(ex)[:80]}')
+    if not arreglados:
+        telegram.enviar(t.chat, 'No había ninguno sin presupuesto. ✅')
+        return
+    telegram.enviar(
+        t.chat,
+        f'Le puse presupuesto a {len(arreglados)}:' + SALTO + SALTO.join(arreglados),
+    )
+
+
 TOQUES = {
     'c': _toque_categoria,
     'x': _toque_descartar,
@@ -1519,6 +1759,9 @@ TOQUES = {
     'se': _toque_elegir_etiqueta,
     'ne': _toque_pedir_etiqueta,
     'nc': _toque_pedir_comercio,
+    # El plan que propone el modelo cuando no esta seguro.
+    'ok': _toque_confirmar_plan,
+    'rp': _toque_presupuesto_a_los_viejos,
     # Los que empiezan por 'f' trabajan contra el CATALOGO de productos, que
     # es un tercer espacio de nombres: ni la cola de pendientes ni Firefly.
     'fg': _toque_producto_grupo,
@@ -1713,19 +1956,29 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
             )
             return
 
-    # 2. una orden de cambio va contra Firefly, no contra la cola
+    abiertas_ahora = abiertas_del_chat(cx, chat)
+
+    # 2. QUE ENTIENDE EL MODELO. Este es el camino principal: se le da el
+    #    mensaje, los movimientos recientes con su id y los catalogos, y
+    #    devuelve un plan. Todo lo de abajo es el respaldo para cuando no hay
+    #    API key o la llamada falla.
+    plan = _plan_de_ia(cx, chat, texto, abiertas_ahora)
+    if plan and _ejecutar_plan(cx, chat, texto, plan, abiertas_ahora):
+        return
+
+    # 3. respaldo por patrones: una orden de cambio va contra Firefly
     if intencion.es_edicion(texto).pide_cambio:
         _recordar_camino(chat, 'edicion')
         _editar_por_texto(cx, chat, texto)
         return
 
-    # 3. una consulta explicita
+    # 4. una consulta explicita
     if intencion.es_para_el_asesor(texto):
         _recordar_camino(chat, 'asesor')
         _consultar_asesor(cx, chat, texto)
         return
 
-    # 4. seguir el hilo: «y la anterior a esa» continua la conversacion. Ninguna
+    # 5. seguir el hilo: «y la anterior a esa» continua la conversacion. Ninguna
     #    de estas formas describe una compra, asi que no depende del modo.
     if intencion.es_seguimiento(texto):
         _recordar_camino(chat, 'asesor')
@@ -1738,7 +1991,7 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
         _consultar_asesor(cx, chat, texto)
         return
 
-    # 5. las senales se calculan UNA vez y se reusan abajo
+    # 6. las senales se calculan UNA vez y se reusan abajo
     implicada = _categoria_implicada(cx, abiertas[0], texto)
     filas = [dict(m) for m in abiertas]
     coincidencias = intencion.a_que_movimiento(texto, filas, implicada)
@@ -1757,7 +2010,7 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
 
     _recordar_camino(chat, 'respuesta')
 
-    # 6. es una respuesta: a cual
+    # 7. es una respuesta: a cual
     if len(abiertas) == 1:
         _responder_con_texto(cx, chat, abiertas[0]['id'], texto)
         return

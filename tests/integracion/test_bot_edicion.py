@@ -91,6 +91,11 @@ def entorno(monkeypatch):
     tg = TelegramFalso()
     monkeypatch.setattr(bot, 'telegram', tg)
 
+    # La IA se apaga a proposito: estas pruebas cubren el camino de RESPALDO
+    # por patrones. El camino del plan del modelo tiene sus propias pruebas,
+    # con `entender_orden` simulado. Sin esto, cada prueba llamaria a Gemini.
+    monkeypatch.setattr(bot.ia, 'disponible', lambda: False)
+
     estado = {
         'txs': [
             _tx(1456, -21040, 'Municipio Sabaneta', 'Mercado'),
