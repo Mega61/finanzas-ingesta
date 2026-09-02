@@ -18,6 +18,8 @@ import contextlib
 import time
 
 from finanzas.adaptadores import firefly
+from finanzas.adaptadores.almacen import Almacen
+from finanzas.aplicacion import taxonomia
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import fechas as _fechas
 
@@ -96,6 +98,31 @@ _cache_mapa: dict[tuple, tuple[float, dict]] = {}
 def olvidar_cache():
     """Para las pruebas y para forzar una relectura."""
     _cache_mapa.clear()
+
+
+def presupuesto_de_categoria(categoria, cx=None, mapa=None):
+    """El presupuesto que le toca a una categoria, en orden de autoridad:
+
+      1. Lo que TU dijiste (tabla presupuesto_por_categoria). Es una decision.
+      2. La lista fija del codigo (taxonomia).
+      3. El historico, solo si decide solo (80% o mas).
+
+    El primero faltaba, y por eso las categorias de verdad repartidas se
+    quedaban sin presupuesto para siempre: 'Compras' esta 7 a 2 entre Antojos e
+    Imprevistos (78%, justo por debajo del umbral) y 'Regalos' esta 4 a 4. Sin
+    forma de zanjarlo, cada compra de esas entraba a Firefly sin presupuesto y
+    habia que ponerselo a mano.
+    """
+    if not categoria:
+        return None
+    if cx is not None:
+        fijado = Almacen(cx).presupuesto_fijado(categoria)
+        if fijado:
+            return fijado
+    fijo = taxonomia.presupuesto_de(categoria)
+    if fijo:
+        return fijo
+    return presupuesto_seguro(categoria, mapa)
 
 
 def presupuesto_seguro(categoria, mapa=None):

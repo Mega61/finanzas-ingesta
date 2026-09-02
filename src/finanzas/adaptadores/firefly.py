@@ -145,6 +145,33 @@ def quitar_etiqueta(tx_id: str, etiqueta: str) -> bool:
     return True
 
 
+def agregar_etiqueta(tx_id: str, *etiquetas: str) -> list[str]:
+    """Agrega etiquetas SIN borrar las que ya estan. Devuelve la lista final.
+
+    La API reemplaza `tags` completo, asi que hay que leer, unir y escribir. Si
+    se mandara solo la nueva se perderian `sin-confirmar` e
+    `ingesta-automatica`, que son las que usa la conciliacion para saber que
+    falta cruzar contra el extracto.
+    """
+    nuevos = [e.strip() for e in etiquetas if e and e.strip()]
+    if not nuevos:
+        return []
+    cambios, final = [], []
+    for s in _splits(tx_id):
+        tags = list(s.get('tags') or [])
+        bajas = {t.lower() for t in tags}
+        for e in nuevos:
+            if e.lower() not in bajas:
+                tags.append(e)
+                bajas.add(e.lower())
+        final = tags
+        cambios.append(
+            {'transaction_journal_id': s.get('transaction_journal_id'), 'tags': tags}
+        )
+    call('PUT', f'/api/v1/transactions/{tx_id}', {'transactions': cambios})
+    return final
+
+
 def cambiar_monto(tx_id: str, monto: float, nota_extra: str | None = None) -> bool:
     """Corrige el monto cuando el extracto trae otro. Solo para transacciones
     de un solo split: si hay varios no se toca, se avisa."""

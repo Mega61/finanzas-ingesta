@@ -495,10 +495,10 @@ def clasificar(cx, usuario_id, evento, indice=None):
         # el historico apunta a Esencial 49 de 49 veces— entraba a Firefly SIN
         # presupuesto y habia que ponerselo a mano. El mapa esta cacheado por
         # proceso: si no, cada movimiento releeria todo el historico.
+        # Lo que el usuario haya dicho gana sobre la regla aprendida: si dijo
+        # «Compras va en Antojos», eso manda aunque el historico este repartido.
         r['presupuesto'] = (
-            taxonomia.presupuesto_de(cat_final)
-            or regla['presupuesto']
-            or presupuestos.presupuesto_seguro(cat_final)
+            presupuestos.presupuesto_de_categoria(cat_final, cx) or regla['presupuesto']
         )
         r['etiquetas'] = etiqueta
         r['confianza'] = 0.4 if preguntar else conf

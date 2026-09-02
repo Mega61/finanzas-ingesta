@@ -28,6 +28,7 @@ from finanzas.aplicacion import (
 )
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import intencion
+from finanzas.dominio import texto as _texto_dom
 
 
 def _a(cx):
@@ -137,7 +138,23 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
                 fila = []
         if fila:
             botones.append(fila)
-        botones.append([('✏️ Otra categoria', f't:{p["id"]}:0')])
+        botones.append([('✏️ escribirlo', f't:{p["id"]}:0')])
+        # Si ya esta en Firefly, se ofrece el menu completo: presupuesto,
+        # etiquetas, comercio y las 71 categorias. Antes solo habia ocho
+        # botones de categoria y no habia camino a nada mas.
+        if p['firefly_id']:
+            botones.append(
+                [
+                    ('📂 categorías', f'lc:{p["firefly_id"]}:0'),
+                    ('💰 presupuesto', f'pb:{p["firefly_id"]}:0'),
+                ]
+            )
+            botones.append(
+                [
+                    ('🏷 etiqueta', f'le:{p["firefly_id"]}:0'),
+                    ('🏪 comercio', f'nc:{p["firefly_id"]}:0'),
+                ]
+            )
         botones.append([('🚫 No es un movimiento', f'x:{p["id"]}:0')])
 
         texto = (
@@ -486,11 +503,32 @@ class Toque:
         telegram.editar(self.chat, self.mid, texto)
 
     def resolver(self, etiqueta, **respuesta):
-        """El camino comun: aplicar la respuesta y reescribir el mensaje."""
+        """El camino comun: aplicar la respuesta y reescribir el mensaje.
+
+        Deja los botones del menu completo en el resultado. Una categoria no es
+        todo lo que lleva un movimiento, y antes, despues de elegirla, no
+        quedaba ningun camino para el presupuesto, la etiqueta o el comercio.
+        """
         p, detalle = aplicar_respuesta(self.cx, self.pid, **respuesta)
         self.aviso(etiqueta)
-        if p is not None:
-            self.reemplazar(f'✅ <b>{etiqueta}</b>\n{describir(p)}\n<i>{detalle}</i>')
+        if p is None:
+            return
+        self.reemplazar(f'✅ <b>{etiqueta}</b>\n{describir(p)}\n<i>{detalle}</i>')
+        if p['firefly_id']:
+            telegram.enviar(
+                self.chat,
+                '¿Algo más?',
+                [
+                    [
+                        ('💰 presupuesto', f'pb:{p["firefly_id"]}:0'),
+                        ('🏷 etiqueta', f'le:{p["firefly_id"]}:0'),
+                    ],
+                    [
+                        ('🏪 comercio', f'nc:{p["firefly_id"]}:0'),
+                        ('📂 otra categoría', f'lc:{p["firefly_id"]}:0'),
+                    ],
+                ],
+            )
 
 
 def _toque_categoria(t):
@@ -622,6 +660,106 @@ def _toque_pedir_texto(t):
 # la unica forma de corregir algo era entrar a Firefly a mano.
 
 CUANTOS_ULTIMOS = 10
+
+# El salto de linea, como constante: los reemplazos automaticos sobre este
+# archivo lo han partido tres veces.
+SALTO = chr(10)
+
+
+def _cambios_de_etiquetas_y_presupuesto(ed, texto):
+    """Lo que la orden pide ademas de la categoria.
+
+    El presupuesto se resuelve MIRANDO si el nombre es un presupuesto de
+    verdad. «ponla en Gato» y «ponla en Antojos» se escriben igual: el que
+    manda es de que lista sale el nombre, no la forma de la frase.
+    """
+    cambios = {}
+    if ed.etiqueta_agregar:
+        cambios['etiquetas'] = [ed.etiqueta_agregar]
+    if ed.etiqueta_quitar:
+        cambios['quitar_etiquetas'] = [ed.etiqueta_quitar]
+    try:
+        activos = presupuestos.nombres_activos()
+    except Exception:
+        return cambios
+    normal = {_texto_dom.normalizar(b): b for b in activos}
+    for palabra in _texto_dom.normalizar(texto).split():
+        if palabra in normal:
+            cambios['presupuesto'] = normal[palabra]
+            break
+    else:
+        for b in activos:
+            if _texto_dom.normalizar(b) in _texto_dom.normalizar(texto):
+                cambios['presupuesto'] = b
+                break
+    return cambios
+
+
+def _objetivos_del_lote(ed, movs):
+    """Los movimientos a los que aplica una orden en plural, o lista vacia.
+
+    «las ultimas 2» toma los dos mas recientes; si ademas dice una categoria
+    («las ultimas 2 estan en compras») se filtra por ella, que es lo que hace
+    que el numero y el filtro se confirmen entre si.
+    """
+    if not ed.cuantas and not ed.categoria_filtro:
+        return []
+    candidatos = movs
+    if ed.categoria_filtro:
+        objetivo = _texto_dom.normalizar(ed.categoria_filtro)
+        filtrados = [
+            m for m in movs if _texto_dom.normalizar(m['categoria']) == objetivo
+        ]
+        # Si el filtro no caza con nada, se ignora y manda el numero: puede que
+        # haya dicho la categoria a la que QUIERE moverlas.
+        if filtrados:
+            candidatos = filtrados
+    if ed.cuantas:
+        candidatos = candidatos[: ed.cuantas]
+    return candidatos if len(candidatos) > 1 else []
+
+
+def _aplicar_en_lote(cx, chat, texto, ed, objetivos):
+    """Los mismos cambios en varios movimientos, reportando uno por uno."""
+    cambios = {}
+    try:
+        cat = interprete.catalogo(cx, _usuario_de(cx, chat))
+        hallazgos = interprete.buscar_categoria(texto, cat['categorias'])
+        if hallazgos and not ed.categoria_filtro:
+            cambios['categoria'] = hallazgos[0][1]
+    except Exception:
+        pass
+    if ed.comercio:
+        cambios['comercio'] = ed.comercio
+    cambios.update(_cambios_de_etiquetas_y_presupuesto(ed, texto))
+
+    if not cambios:
+        telegram.enviar(
+            chat,
+            f'Entendí que hablas de {len(objetivos)} movimientos, pero no de '
+            f'qué cambiarles. Tócalos uno por uno:',
+        )
+        cmd_ultimos(cx, chat)
+        return
+
+    ids = [str(m['id']) for m in objetivos]
+    resultados = movimientos.editar_varios(ids, **cambios)
+    que = ', '.join(f'{k}: {v}' for k, v in cambios.items())
+    lineas = [f'✅ <i>{que}</i>  en {len(objetivos)} movimientos:', '']
+    for r in resultados:
+        if r.get('error'):
+            lineas.append(f'⚠️ #{r["id"]}: {r["error"]}')
+        else:
+            lineas.append(movimientos.describir(r['movimiento']))
+    db.bitacora(
+        cx,
+        'editar_lote',
+        usuario_id=_usuario_de(cx, chat),
+        payload={'ids': ids, 'cambios': cambios},
+        ok=all(not r.get('error') for r in resultados),
+    )
+    cx.commit()
+    telegram.enviar(chat, SALTO.join(lineas))
 
 
 def _usuario_de(cx, chat):
@@ -777,30 +915,212 @@ def cmd_listo(cx, chat, _texto=''):
     telegram.enviar(chat, '\n'.join(lineas))
 
 
+# Cuantas categorias por pagina en la lista completa. El menu ofrecia OCHO de
+# setenta y una, y para las otras 63 no habia camino salvo escribir el nombre
+# exacto.
+POR_PAGINA = 10
+
+
 def _menu_movimiento(cx, chat, tx_id, mensaje_id=None):
-    """El menu de un movimiento de Firefly: categoria, confirmar o borrar."""
+    """Todo lo que se le puede cambiar a un movimiento, en un solo sitio.
+
+    Antes esto solo ofrecia categorias —y solo seis— y no habia forma de tocar
+    el presupuesto, las etiquetas ni el nombre del comercio sin entrar a
+    Firefly. El correo llega como «MERCADO PAGO*...» y el comercio de verdad
+    hay que poderlo escribir.
+    """
     m = movimientos.uno(str(tx_id))
     if m is None:
         telegram.enviar(chat, 'Ese movimiento ya no existe en Firefly.')
         return
-    cats = _categorias_para(cx, m['valor'])
-    botones = _botonera([(c, f'mc:{tx_id}:{i}') for i, c in enumerate(cats)])
-    ultima = [('✏️ otra cosa', f'mt:{tx_id}:0')]
+    sug = _categorias_para(cx, m['valor'])
+    botones = _botonera([(c, f'mc:{tx_id}:{i}') for i, c in enumerate(sug)])
+    botones.append(
+        [
+            ('📂 categorías', f'lc:{tx_id}:0'),
+            ('💰 presupuesto', f'pb:{tx_id}:0'),
+        ]
+    )
+    botones.append(
+        [
+            ('🏷 etiqueta', f'le:{tx_id}:0'),
+            ('🏪 comercio', f'nc:{tx_id}:0'),
+        ]
+    )
+    ultima = [('✏️ escribirlo', f'mt:{tx_id}:0')]
     if movimientos.SIN_CONFIRMAR in m['etiquetas']:
         ultima.append(('✅ está bien', f'mk:{tx_id}:0'))
     botones.append(ultima)
     botones.append([('🗑 borrar', f'mx:{tx_id}:0')])
 
-    texto = (
-        f'<b>{movimientos.describir(m)}</b>\n'
-        f'<i>{m["origen"]} → {m["destino"]}</i>\n\n'
-        f'¿Qué le cambio?'
-    )
+    texto = _ficha(m)
     if mensaje_id:
         telegram.editar(chat, mensaje_id, texto)
-        telegram.enviar(chat, 'Elige:', botones)
+        telegram.enviar(chat, '¿Qué le cambio?', botones)
     else:
         telegram.enviar(chat, texto, botones)
+
+
+def _ficha(m):
+    """La tarjeta del movimiento con TODO lo que tiene puesto.
+
+    Muestra presupuesto y etiquetas a proposito: sin verlos no habia forma de
+    saber que faltaba.
+    """
+    lineas = [f'<b>{_plata(m["valor"], m["moneda"])}</b>  {m["fecha"]}']
+    lineas.append(f'{m["origen"]} → <b>{m["destino"] or m["descripcion"]}</b>')
+    lineas.append(f'categoría: <b>{m["categoria"] or "—"}</b>')
+    lineas.append(f'presupuesto: <b>{m["presupuesto"] or "—"}</b>')
+    propias = [
+        e
+        for e in m['etiquetas']
+        if e.lower() not in movimientos.ETIQUETAS_DE_MAQUINA
+        and not e.lower().startswith('recon-')
+    ]
+    lineas.append(f'etiquetas: <b>{", ".join(propias) if propias else "—"}</b>')
+    if movimientos.SIN_CONFIRMAR in m['etiquetas']:
+        lineas.append('<i>sin confirmar contra extracto</i>')
+    return '\n'.join(lineas)
+
+
+def _pagina_de(items, pagina, plantilla_dato, volver_a):
+    """Una botonera paginada. `plantilla_dato` recibe el indice ABSOLUTO."""
+    total = max(1, (len(items) + POR_PAGINA - 1) // POR_PAGINA)
+    pagina = max(0, min(pagina, total - 1))
+    ini = pagina * POR_PAGINA
+    trozo = list(enumerate(items))[ini : ini + POR_PAGINA]
+    botones = _botonera([(c, plantilla_dato(i)) for i, c in trozo])
+    nav = []
+    if pagina > 0:
+        nav.append(('◀', volver_a(pagina - 1)))
+    nav.append((f'{pagina + 1}/{total}', volver_a(pagina)))
+    if pagina < total - 1:
+        nav.append(('▶', volver_a(pagina + 1)))
+    botones.append(nav)
+    return botones, pagina, total
+
+
+def _toque_lista_categorias(t):
+    """Las 71 categorias, paginadas. El indice del boton es absoluto."""
+    todas = movimientos.categorias()
+    botones, pagina, total = _pagina_de(
+        todas, t.idx, lambda i: f'mc:{t.pid}:{i}', lambda p: f'lc:{t.pid}:{p}'
+    )
+    botones.append([('« volver', f'mv:{t.pid}:0')])
+    t.aviso('')
+    t.reemplazar(f'<b>Categorías</b>  ({len(todas)} en total)')
+    telegram.enviar(t.chat, f'Página {pagina + 1} de {total}:', botones)
+
+
+def _toque_menu_presupuesto(t):
+    """Los presupuestos activos, y la opcion de fijarlo para la CATEGORIA."""
+    m = movimientos.uno(str(t.pid))
+    if m is None:
+        t.aviso('ese movimiento ya no existe')
+        return
+    nombres = presupuestos.nombres_activos()
+    botones = _botonera([(b, f'sb:{t.pid}:{i}') for i, b in enumerate(nombres)])
+    if m['categoria']:
+        botones.append(
+            [
+                (f'📌 {m["categoria"]} siempre va aquí', f'bp:{t.pid}:0'),
+            ]
+        )
+    botones.append([('« volver', f'mv:{t.pid}:0')])
+    t.aviso('')
+    telegram.enviar(
+        t.chat,
+        f'<b>Presupuesto</b> para {_plata(m["valor"], m["moneda"])} en '
+        f'{(m["destino"] or m["descripcion"])[:24]}\n'
+        f'ahora: <b>{m["presupuesto"] or "—"}</b>',
+        botones,
+    )
+
+
+def _toque_elegir_presupuesto(t):
+    nombres = presupuestos.nombres_activos()
+    if t.idx >= len(nombres):
+        t.aviso('esa opción ya no está')
+        return
+    _aplicar_edicion(
+        t.cx, t.chat, str(t.pid), {'presupuesto': nombres[t.idx]}, aviso=t.aviso
+    )
+
+
+def _toque_fijar_presupuesto_de_categoria(t):
+    """«Compras siempre va en Antojos»: la decision queda guardada.
+
+    El presupuesto se deducia del historico y solo cuando la categoria apuntaba
+    al mismo el 80% de las veces. Las repartidas de verdad —Compras 7 a 2,
+    Regalos 4 a 4— se quedaban SIN presupuesto para siempre y no habia forma de
+    zanjarlo desde el chat.
+    """
+    m = movimientos.uno(str(t.pid))
+    if m is None or not m['categoria'] or not m['presupuesto']:
+        t.aviso('primero ponle categoría y presupuesto')
+        return
+    _a(t.cx).fijar_presupuesto_de_categoria(m['categoria'], m['presupuesto'])
+    t.aviso('anotado')
+    telegram.enviar(
+        t.chat,
+        f'📌 De ahora en adelante <b>{m["categoria"]}</b> va a '
+        f'<b>{m["presupuesto"]}</b>, sin preguntar.\n'
+        f'<i>Esto gana sobre lo que diga el histórico. Para cambiarlo, '
+        f'vuelve a fijarlo con otro presupuesto.</i>',
+    )
+
+
+def _toque_menu_etiquetas(t):
+    """Las etiquetas que de verdad usas, paginadas, mas la de escribirla."""
+    todas = movimientos.etiquetas_mas_usadas()
+    botones, pagina, total = _pagina_de(
+        todas, t.idx, lambda i: f'se:{t.pid}:{i}', lambda p: f'le:{t.pid}:{p}'
+    )
+    botones.append([('✏️ otra etiqueta', f'ne:{t.pid}:0')])
+    botones.append([('« volver', f'mv:{t.pid}:0')])
+    t.aviso('')
+    telegram.enviar(
+        t.chat, f'<b>Etiquetas</b> — página {pagina + 1} de {total}', botones
+    )
+
+
+def _toque_elegir_etiqueta(t):
+    todas = movimientos.etiquetas_mas_usadas()
+    if t.idx >= len(todas):
+        t.aviso('esa opción ya no está')
+        return
+    _aplicar_edicion(
+        t.cx, t.chat, str(t.pid), {'etiquetas': [todas[t.idx]]}, aviso=t.aviso
+    )
+
+
+def _toque_pedir_etiqueta(t):
+    t.aviso('escríbela')
+    eco = telegram.enviar(
+        t.chat,
+        'Escribe la etiqueta, respondiendo a este mensaje.\n'
+        '<i>Se agrega a las que ya tiene, no las reemplaza.</i>',
+    )
+    _a(t.cx).abrir_edicion(
+        t.chat, str(t.pid), (eco or {}).get('message_id'), campo='etiquetas'
+    )
+
+
+def _toque_pedir_comercio(t):
+    """El correo llega como «MERCADO PAGO*...» y el comercio real hay que
+    poderlo escribir."""
+    m = movimientos.uno(str(t.pid))
+    t.aviso('escríbelo')
+    ahora = (m['destino'] or m['descripcion']) if m else '?'
+    eco = telegram.enviar(
+        t.chat,
+        f'¿Cómo se llama el comercio? Responde a este mensaje.\n'
+        f'ahora dice <b>{ahora}</b>\n'
+        f'<i>El banco manda el nombre de la pasarela, no el del negocio.</i>',
+    )
+    _a(t.cx).abrir_edicion(
+        t.chat, str(t.pid), (eco or {}).get('message_id'), campo='comercio'
+    )
 
 
 def _aplicar_edicion(cx, chat, tx_id, cambios, aviso=None):
@@ -827,7 +1147,16 @@ def _aplicar_edicion(cx, chat, tx_id, cambios, aviso=None):
     telegram.enviar(
         chat,
         f'✅ <i>{que}</i>\n<b>{movimientos.describir(m)}</b>',
-        [[('✏️ otra vez', f'mv:{tx_id}:0')]],
+        [
+            [
+                ('💰 presupuesto', f'pb:{tx_id}:0'),
+                ('🏷 etiqueta', f'le:{tx_id}:0'),
+            ],
+            [
+                ('🏪 comercio', f'nc:{tx_id}:0'),
+                ('⚙️ todo', f'mv:{tx_id}:0'),
+            ],
+        ],
     )
     return m
 
@@ -916,7 +1245,7 @@ def _toque_texto_movimiento(t):
 # --------------------------------------------------------- editar por texto
 
 
-def _editar_por_texto(cx, chat, texto, tx_id=None):
+def _editar_por_texto(cx, chat, texto, tx_id=None, campo=None):
     """«cambia la ultima a Mercado», «la de tierragro ponla en Gato».
 
     Encuentra el movimiento por lo que dice el texto —el comercio, el monto, o
@@ -936,9 +1265,26 @@ def _editar_por_texto(cx, chat, texto, tx_id=None):
     objetivo = None
     if tx_id is not None:
         objetivo = movimientos.uno(str(tx_id))
-    elif ed.la_ultima:
+        # Se pidio UN campo concreto: el texto es su valor, tal cual. Sin esto,
+        # escribir «Ropa» despues de tocar «etiqueta» se interpretaba como una
+        # categoria y la etiqueta nunca se ponia.
+        if objetivo is not None and campo:
+            valor = texto.strip()
+            cambio = {'etiquetas': [valor]} if campo == 'etiquetas' else {campo: valor}
+            _a(cx).cerrar_edicion(chat)
+            _aplicar_edicion(cx, chat, str(tx_id), cambio)
+            return
+    # VARIOS a la vez: «las ultimas 2 estan en compras, agregales la etiqueta
+    # Ropa». Todo este camino resolvia un solo objetivo, y una orden en plural
+    # acababa aplicada a uno o a ninguno.
+    objetivos = _objetivos_del_lote(ed, movs) if tx_id is None else []
+    if objetivos:
+        _aplicar_en_lote(cx, chat, texto, ed, objetivos)
+        return
+
+    if tx_id is None and ed.la_ultima:
         objetivo = movs[0]
-    else:
+    elif tx_id is None:
         g = intencion.hay_un_ganador(
             intencion.a_que_movimiento(texto, _para_puntuar(movs))
         )
@@ -976,6 +1322,7 @@ def _editar_por_texto(cx, chat, texto, tx_id=None):
         cambios['comercio'] = ed.comercio
     if ed.monto is not None:
         cambios['monto'] = ed.monto
+    cambios.update(_cambios_de_etiquetas_y_presupuesto(ed, texto))
 
     if not cambios:
         telegram.enviar(
@@ -1162,6 +1509,16 @@ TOQUES = {
     'mx': _toque_borrar_movimiento,
     'mB': _toque_borrar_confirmado,
     'mt': _toque_texto_movimiento,
+    # El menu ampliado, tambien sobre un movimiento de Firefly. Antes solo se
+    # podia cambiar la categoria, y solo entre seis de las setenta y una.
+    'lc': _toque_lista_categorias,
+    'pb': _toque_menu_presupuesto,
+    'sb': _toque_elegir_presupuesto,
+    'bp': _toque_fijar_presupuesto_de_categoria,
+    'le': _toque_menu_etiquetas,
+    'se': _toque_elegir_etiqueta,
+    'ne': _toque_pedir_etiqueta,
+    'nc': _toque_pedir_comercio,
     # Los que empiezan por 'f' trabajan contra el CATALOGO de productos, que
     # es un tercer espacio de nombres: ni la cola de pendientes ni Firefly.
     'fg': _toque_producto_grupo,
@@ -1351,7 +1708,9 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
         ed = _a(cx).edicion_en_curso(chat)
         if ed and ed['mensaje_id'] == respondiendo_a:
             _recordar_camino(chat, 'edicion')
-            _editar_por_texto(cx, chat, texto, tx_id=ed['firefly_id'])
+            _editar_por_texto(
+                cx, chat, texto, tx_id=ed['firefly_id'], campo=ed['campo']
+            )
             return
 
     # 2. una orden de cambio va contra Firefly, no contra la cola

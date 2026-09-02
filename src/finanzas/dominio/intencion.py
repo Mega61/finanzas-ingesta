@@ -268,6 +268,57 @@ _COMERCIO = re.compile(
 )
 
 
+# Verbos de etiquetar. Van aparte porque «agrega» y «etiqueta» no son cambios
+# de categoria: son otra operacion, y ademas son ADITIVAS. Poner una etiqueta
+# no puede borrar las que ya estan —`sin-confirmar` e `ingesta-automatica` las
+# usa la conciliacion— asi que se leen, se agrega, y se escriben.
+_ETIQUETAR = re.compile(
+    r'\b(agrega\w{0,5}|agregar|anade\w{0,5}|anadir|sumale|ponle|pon'
+    r'|etiqueta\w{0,5}|etiquetar|tagea\w{0,5}|marca\w{0,5})\b',
+    re.I,
+)
+_QUITAR_ETIQUETA = re.compile(
+    r'\b(quita\w{0,5}|quitar|saca\w{0,5}|sacar|borra\w{0,5}|elimina\w{0,5})\b'
+    r'.{0,20}\b(etiqueta|tag|label)\b',
+    re.I,
+)
+# El nombre de la etiqueta. Se corta en coma o fin de frase para no tragarse
+# «... la etiqueta Ropa a las ultimas dos».
+_NOMBRE_ETIQUETA = re.compile(
+    r'\b(?:etiquetas?|tags?|labels?)\s+(?:de\s+|como\s+)?'
+    r'([^\W\d_][\w -]{1,28}?)'
+    r'\s*(?:,|\.|$|\ba\s+la|\ba\s+los|\ba\s+las|\ben\s+la|\bde\s+la)',
+    re.I,
+)
+# «etiquetalas como Ropa», «marcalas como Ropa»
+_COMO = re.compile(
+    r'\b(?:etiqueta\w{0,5}|marca\w{0,5}|tagea\w{0,5})\s+como\s+'
+    r'([^\W\d_][\w -]{1,28}?)\s*(?:,|\.|$)',
+    re.I,
+)
+
+# Cuantos movimientos: «las ultimas 2», «las 2 ultimas», «las ultimas dos».
+_PALABRA_NUMERO = {
+    'un': 1,
+    'una': 1,
+    'uno': 1,
+    'dos': 2,
+    'tres': 3,
+    'cuatro': 4,
+    'cinco': 5,
+    'seis': 6,
+    'siete': 7,
+    'ocho': 8,
+    'nueve': 9,
+    'diez': 10,
+}
+_CUANTAS = re.compile(
+    r'\b(?:ultim\w+|primer\w+)\s+(\d{1,2}|' + '|'.join(_PALABRA_NUMERO) + r')\b'
+    r'|\b(\d{1,2}|' + '|'.join(_PALABRA_NUMERO) + r')\s+(?:ultim\w+|primer\w+)\b',
+    re.I,
+)
+
+
 @dataclass(frozen=True)
 class Edicion:
     """Lo que se entendio de una orden de cambio."""
@@ -277,6 +328,14 @@ class Edicion:
     la_ultima: bool = False
     comercio: str | None = None
     monto: float | None = None
+    # Las etiquetas son ADITIVAS: poner una no borra las que ya estan, porque
+    # `sin-confirmar` e `ingesta-automatica` las usa la conciliacion.
+    etiqueta_agregar: str | None = None
+    etiqueta_quitar: str | None = None
+    # «las ultimas 2», «las 2 ultimas». None = una sola.
+    cuantas: int | None = None
+    # «las que estan en compras»: filtra por categoria.
+    categoria_filtro: str | None = None
 
 
 def es_edicion(txt: str | None) -> Edicion:
@@ -292,9 +351,16 @@ def es_edicion(txt: str | None) -> Edicion:
     if not txt:
         return Edicion(False)
     t = _texto.sin_tildes(str(txt)).lower().strip()
-    borrar = bool(_BORRAR.search(t))
+
+    # Etiquetas primero: «agregales la etiqueta Ropa» pide un cambio aunque no
+    # lleve ninguno de los verbos de recategorizar.
+    quitar_etq = bool(_QUITAR_ETIQUETA.search(t))
+    nombre_etq = _nombre_de_etiqueta(txt)
+    pide_etq = bool(nombre_etq) and (quitar_etq or bool(_ETIQUETAR.search(t)))
+
+    borrar = bool(_BORRAR.search(t)) and not pide_etq
     cambiar = bool(_EDITAR.search(t))
-    if not (borrar or cambiar):
+    if not (borrar or cambiar or pide_etq):
         return Edicion(False)
 
     m = _COMERCIO.search(str(txt))
@@ -311,7 +377,68 @@ def es_edicion(txt: str | None) -> Edicion:
             if montos and re.search(r'\b(son|es|vale|valen|monto)\b', t)
             else None
         ),
+        etiqueta_agregar=nombre_etq if (pide_etq and not quitar_etq) else None,
+        etiqueta_quitar=nombre_etq if (pide_etq and quitar_etq) else None,
+        cuantas=cuantas_pide(txt),
+        categoria_filtro=_categoria_mencionada(txt),
     )
+
+
+def _nombre_de_etiqueta(txt: str) -> str | None:
+    """El nombre de la etiqueta que se nombra, o None.
+
+    Se corta en coma o fin de frase para no tragarse «... la etiqueta Ropa a
+    las ultimas dos».
+    """
+    for patron in (_COMO, _NOMBRE_ETIQUETA):
+        m = patron.search(str(txt))
+        if m:
+            nombre = m.group(1).strip(' .,;:')
+            if nombre and _texto.sin_tildes(nombre).lower() not in (
+                'de',
+                'la',
+                'el',
+                'los',
+                'las',
+                'a',
+                'y',
+            ):
+                return nombre
+    return None
+
+
+def cuantas_pide(txt: str | None) -> int | None:
+    """«las ultimas 2» -> 2. «la ultima» -> None (una sola).
+
+    Existe porque una orden puede ser sobre VARIOS movimientos —«las ultimas 2
+    estan en compras, agregales la etiqueta Ropa»— y todo el camino de edicion
+    resolvia un solo objetivo.
+    """
+    if not txt:
+        return None
+    t = _texto.sin_tildes(str(txt)).lower()
+    m = _CUANTAS.search(t)
+    if not m:
+        return None
+    crudo = m.group(1) or m.group(2)
+    if crudo is None:
+        return None
+    n = int(crudo) if crudo.isdigit() else _PALABRA_NUMERO.get(crudo, 0)
+    return n if 2 <= n <= 20 else None
+
+
+# «las que estan en compras», «las de mercado»
+_EN_CATEGORIA = re.compile(
+    r'\b(?:estan?\s+en|en\s+la\s+categoria|categoria|categorizadas?\s+(?:en|como)'
+    r'|de\s+la\s+categoria)\s+([^\W\d_][\w ]{2,28}?)'
+    r'\s*(?:,|\.|$|\by\b|\bagrega|\bponle|\betiqueta)',
+    re.I,
+)
+
+
+def _categoria_mencionada(txt: str) -> str | None:
+    m = _EN_CATEGORIA.search(str(txt))
+    return m.group(1).strip(' .,') if m else None
 
 
 # --------------------------------------------------- seguir la conversacion

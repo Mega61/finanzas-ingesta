@@ -623,6 +623,44 @@ class Almacen:
             'SELECT * FROM propuestas WHERE pendiente_id = ?', (pendiente_id,)
         ).fetchone()
 
+    # ----------------------------------- categoria -> presupuesto, a mano
+
+    def fijar_presupuesto_de_categoria(self, categoria: str, presupuesto: str) -> None:
+        """La decision del usuario, que gana sobre lo que diga el historico."""
+        self.cx.execute(
+            """INSERT INTO presupuesto_por_categoria (categoria, presupuesto)
+               VALUES (?, ?)
+               ON CONFLICT (categoria) DO UPDATE SET
+                  presupuesto = excluded.presupuesto,
+                  puesto_en   = datetime('now')""",
+            (categoria.strip(), presupuesto.strip()),
+        )
+        self.cx.commit()
+
+    def presupuesto_fijado(self, categoria: str) -> str | None:
+        if not categoria:
+            return None
+        r = self.cx.execute(
+            'SELECT presupuesto FROM presupuesto_por_categoria WHERE categoria = ?',
+            (categoria.strip(),),
+        ).fetchone()
+        return r['presupuesto'] if r else None
+
+    def presupuestos_fijados(self) -> dict[str, str]:
+        return {
+            r['categoria']: r['presupuesto']
+            for r in self.cx.execute(
+                'SELECT categoria, presupuesto FROM presupuesto_por_categoria'
+            )
+        }
+
+    def olvidar_presupuesto_de_categoria(self, categoria: str) -> None:
+        self.cx.execute(
+            'DELETE FROM presupuesto_por_categoria WHERE categoria = ?',
+            (categoria.strip(),),
+        )
+        self.cx.commit()
+
     def usuario_por_chat(self, chat_id: str) -> sqlite3.Row | None:
         return self.cx.execute(
             'SELECT * FROM usuarios WHERE telegram_chat_id = ?', (str(chat_id),)
@@ -631,17 +669,27 @@ class Almacen:
     # ------------------------------------------- edicion de un movimiento
 
     def abrir_edicion(
-        self, chat_id: str, firefly_id: str, mensaje_id: int | None = None
+        self,
+        chat_id: str,
+        firefly_id: str,
+        mensaje_id: int | None = None,
+        campo: str | None = None,
     ) -> None:
-        """Anota que este chat esta editando ese movimiento de Firefly."""
+        """Anota que este chat esta editando ese movimiento de Firefly.
+
+        `campo` dice QUE se esta pidiendo. Sin eso, escribir «Ropa» despues de
+        tocar «etiqueta» se interpretaba como una categoria.
+        """
         self.cx.execute(
-            """INSERT INTO edicion_en_curso (chat_id, firefly_id, mensaje_id)
-               VALUES (?, ?, ?)
+            """INSERT INTO edicion_en_curso
+                  (chat_id, firefly_id, mensaje_id, campo)
+               VALUES (?, ?, ?, ?)
                ON CONFLICT (chat_id) DO UPDATE SET
                   firefly_id = excluded.firefly_id,
                   mensaje_id = excluded.mensaje_id,
+                  campo      = excluded.campo,
                   creado_en  = datetime('now')""",
-            (str(chat_id), str(firefly_id), mensaje_id),
+            (str(chat_id), str(firefly_id), mensaje_id, campo),
         )
         self.cx.commit()
 

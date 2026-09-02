@@ -270,3 +270,75 @@ class TestSeguirLaConversacion:
             'explicame mas',
         ):
             assert not intencion.es_edicion(txt).pide_cambio, txt
+
+
+class TestEtiquetasYLote:
+    """«las ultimas 2 estan en compras, agregales la etiqueta Ropa».
+
+    No se podia. Las etiquetas no eran editables —`CAMBIABLES` no las incluia—,
+    los verbos de etiquetar no se reconocian, y todo el camino de edicion
+    resolvia UN objetivo, asi que una orden en plural acababa aplicada a uno o
+    a ninguno.
+    """
+
+    def test_la_frase_completa_se_entiende(self):
+        e = intencion.es_edicion(
+            'las ultimas 2 estan en compras, agregales la etiqueta Ropa'
+        )
+        assert e.pide_cambio
+        assert e.etiqueta_agregar == 'Ropa'
+        assert e.cuantas == 2
+        assert e.categoria_filtro.lower() == 'compras'
+        assert not e.borrar, 'agregar no es borrar'
+
+    @pytest.mark.parametrize(
+        ('txt', 'etq'),
+        [
+            ('ponle el tag Ropa', 'Ropa'),
+            ('agrega la etiqueta Viaje', 'Viaje'),
+            ('etiquetalas como Ropa', 'Ropa'),
+            ('marcalas como reembolsable', 'reembolsable'),
+            ('ponles la etiqueta Comida Gata', 'Comida Gata'),
+        ],
+    )
+    def test_saca_el_nombre_de_la_etiqueta(self, txt, etq):
+        assert intencion.es_edicion(txt).etiqueta_agregar == etq
+
+    def test_quitar_una_etiqueta_es_lo_contrario(self):
+        e = intencion.es_edicion('quita la etiqueta Ropa')
+        assert e.etiqueta_quitar == 'Ropa'
+        assert e.etiqueta_agregar is None
+        assert not e.borrar, 'quitar una etiqueta no borra el movimiento'
+
+    def test_el_nombre_no_se_traga_lo_que_sigue(self):
+        """«la etiqueta Ropa a las ultimas dos»: el nombre se corta en «a las»."""
+        assert (
+            intencion.es_edicion(
+                'agrega la etiqueta Ropa a las ultimas dos'
+            ).etiqueta_agregar
+            == 'Ropa'
+        )
+
+    @pytest.mark.parametrize(
+        ('txt', 'n'),
+        [
+            ('las ultimas 2', 2),
+            ('las 2 ultimas', 2),
+            ('las ultimas dos', 2),
+            ('a las 3 ultimas', 3),
+            ('las ultimas cinco', 5),
+            ('la ultima', None),
+            ('cambiala', None),
+        ],
+    )
+    def test_cuantas_pide(self, txt, n):
+        assert intencion.cuantas_pide(txt) == n
+
+    def test_un_numero_absurdo_no_cuenta(self):
+        """«las ultimas 500» no es una orden razonable; se trata como una sola
+        para no editar media contabilidad por un dedazo."""
+        assert intencion.cuantas_pide('las ultimas 500') is None
+
+    def test_borrar_sigue_siendo_borrar(self):
+        e = intencion.es_edicion('borra la ultima')
+        assert e.borrar and e.etiqueta_agregar is None

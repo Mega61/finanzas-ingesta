@@ -218,6 +218,22 @@ CREATE INDEX IF NOT EXISTS ix_preguntas_pendiente
 -- callback: Telegram admite 64 bytes ahi.
 --
 -- Es uno por chat a proposito: solo importa el ultimo.
+-- Categoria -> presupuesto, dicho por el usuario.
+--
+-- El presupuesto se deducia del historico: si una categoria apunta al mismo
+-- presupuesto el 80% de las veces o mas, se usa. El problema son las que estan
+-- repartidas de verdad: 'Compras' esta 7 a 2 entre Antojos e Imprevistos (78%,
+-- justo por debajo) y 'Regalos' esta 4 a 4. Esas se quedaban SIN presupuesto,
+-- y no habia forma de zanjarlo salvo editar la lista fija del codigo.
+--
+-- Esto gana sobre el historico: es una decision, no una estadistica.
+CREATE TABLE IF NOT EXISTS presupuesto_por_categoria (
+  categoria   TEXT PRIMARY KEY,
+  presupuesto TEXT NOT NULL,
+  puesto_en   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+
 -- Que movimiento de FIREFLY se esta editando desde el chat.
 --
 -- No se puede reusar `preguntas_enviadas` ni `sugerencias`: las dos tienen
@@ -228,6 +244,11 @@ CREATE TABLE IF NOT EXISTS edicion_en_curso (
   chat_id    TEXT PRIMARY KEY,
   firefly_id TEXT NOT NULL,
   mensaje_id INTEGER,
+  -- Que se esta pidiendo: 'etiquetas', 'comercio', o NULL para interpretar el
+  -- texto libremente. Sin esto, escribir «Ropa» despues de tocar «etiqueta» se
+  -- interpretaba como una categoria.
+  campo      TEXT CHECK (campo IN ('etiquetas', 'comercio', 'categoria',
+                                   'presupuesto', 'descripcion')),
   creado_en  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

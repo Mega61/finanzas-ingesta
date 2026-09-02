@@ -374,3 +374,159 @@ class TestListo:
         """Un comando que nadie sabe que existe no sirve."""
         assert '/listo' in bot.AYUDA
         assert '/ultimos' in bot.AYUDA
+
+
+class TestMenuCompleto:
+    """El menu de un movimiento ofrecia SEIS categorias de setenta y una, y
+    nada mas: ni presupuesto, ni etiquetas, ni el nombre del comercio.
+
+    «los botones del bot ya se quedan cortos».
+    """
+
+    def test_el_menu_ofrece_las_cuatro_cosas(self, entorno):
+        alm, tg, _e, _u = entorno
+        bot.manejar_update(alm.cx, _cb('mv:1455:0'))
+        datos = tg.datos_de_botones()
+        assert any(d.startswith('lc:1455') for d in datos), 'lista completa'
+        assert 'pb:1455:0' in datos, 'presupuesto'
+        assert 'le:1455:0' in datos, 'etiquetas'
+        assert 'nc:1455:0' in datos, 'comercio'
+
+    def test_la_ficha_muestra_lo_que_falta(self, entorno):
+        """Sin ver el presupuesto no habia forma de notar que estaba vacio."""
+        alm, tg, _e, _u = entorno
+        bot.manejar_update(alm.cx, _cb('mv:1455:0'))
+        assert 'presupuesto:' in tg.todo
+        assert 'etiquetas:' in tg.todo
+
+    def test_las_categorias_van_paginadas(self, entorno, monkeypatch):
+        monkeypatch.setattr(
+            movimientos, 'categorias', lambda d=None: [f'C{i}' for i in range(71)]
+        )
+        alm, tg, _e, _u = entorno
+        bot.manejar_update(alm.cx, _cb('lc:1455:0'))
+        datos = tg.datos_de_botones()
+        assert any(d == 'lc:1455:1' for d in datos), 'boton de siguiente pagina'
+        assert 'mv:1455:0' in datos, 'boton de volver'
+
+    def test_el_indice_de_la_pagina_es_absoluto(self, entorno, monkeypatch):
+        """Si el indice fuera relativo a la pagina, elegir en la pagina 3
+        aplicaria la categoria de la pagina 1."""
+        monkeypatch.setattr(
+            movimientos, 'categorias', lambda d=None: [f'C{i}' for i in range(71)]
+        )
+        alm, tg, _e, _u = entorno
+        bot.manejar_update(alm.cx, _cb('lc:1455:2'))
+        indices = [
+            int(d.split(':')[2]) for d in tg.datos_de_botones() if d.startswith('mc:')
+        ]
+        assert min(indices) >= 20, f'la pagina 3 empieza en 20, no en {min(indices)}'
+
+    def test_elegir_un_presupuesto_lo_aplica(self, entorno, monkeypatch):
+        monkeypatch.setattr(
+            bot.presupuestos,
+            'nombres_activos',
+            lambda: ['Esencial', 'Vivir', 'Antojos'],
+        )
+        alm, _tg, estado, _u = entorno
+        bot.manejar_update(alm.cx, _cb('sb:1455:2'))
+        _, payload = estado['puts'][-1]
+        assert payload['transactions'][0]['budget_name'] == 'Antojos'
+
+    def test_fijar_el_presupuesto_de_la_categoria_lo_recuerda(self, entorno):
+        """«Compras siempre va en Antojos». El presupuesto se deducia del
+        historico y solo con 80% de acuerdo; las repartidas de verdad —Compras
+        7 a 2, Regalos 4 a 4— se quedaban sin presupuesto para siempre."""
+        alm, tg, estado, _u = entorno
+        for t in estado['txs']:
+            if t['id'] == '1455':
+                t['attributes']['transactions'][0]['budget_name'] = 'Antojos'
+        bot.manejar_update(alm.cx, _cb('bp:1455:0'))
+        assert alm.presupuesto_fijado('Compras Casa') == 'Antojos'
+        assert 'de ahora' in tg.todo.lower()
+
+    def test_no_fija_nada_si_falta_el_presupuesto(self, entorno):
+        alm, tg, _e, _u = entorno
+        bot.manejar_update(alm.cx, _cb('bp:1455:0'))
+        assert alm.presupuestos_fijados() == {}
+        assert any('primero' in a for a in tg.avisos)
+
+
+class TestEtiquetasDesdeElChat:
+    def test_elegir_una_etiqueta_la_agrega_sin_borrar_las_otras(
+        self, entorno, monkeypatch
+    ):
+        """La API reemplaza `tags` completo. Si se mandara solo la nueva se
+        perderia `sin-confirmar`, que es lo que la conciliacion usa para saber
+        que falta cruzar contra el extracto."""
+        monkeypatch.setattr(
+            movimientos, 'etiquetas_mas_usadas', lambda limite=24: ['Ropa', 'Uber']
+        )
+        alm, _tg, estado, _u = entorno
+        bot.manejar_update(alm.cx, _cb('se:1455:0'))
+        _, payload = estado['puts'][-1]
+        tags = payload['transactions'][0]['tags']
+        assert 'Ropa' in tags
+        assert 'sin-confirmar' in tags, 'no puede borrar las que ya estaban'
+
+    def test_pedir_la_etiqueta_por_texto_recuerda_el_campo(self, entorno):
+        """Sin recordar QUE se pidio, escribir «Ropa» se interpretaba como una
+        categoria y la etiqueta nunca se ponia."""
+        alm, _tg, _e, _u = entorno
+        bot.manejar_update(alm.cx, _cb('ne:1455:0'))
+        ed = alm.edicion_en_curso('555')
+        assert ed['firefly_id'] == '1455'
+        assert ed['campo'] == 'etiquetas'
+
+    def test_y_el_texto_se_aplica_como_etiqueta(self, entorno):
+        alm, _tg, estado, _u = entorno
+        bot.manejar_update(alm.cx, _cb('ne:1455:0'))
+        mid = alm.edicion_en_curso('555')['mensaje_id']
+        bot.manejar_update(alm.cx, _msg('Ropa', responde_a=mid))
+        _, payload = estado['puts'][-1]
+        assert 'Ropa' in payload['transactions'][0]['tags']
+
+    def test_el_comercio_por_texto_va_al_destino(self, entorno):
+        """El correo llega como «MERCADO PAGO*...» y el comercio real hay que
+        poderlo escribir."""
+        alm, _tg, estado, _u = entorno
+        bot.manejar_update(alm.cx, _cb('nc:1455:0'))
+        mid = alm.edicion_en_curso('555')['mensaje_id']
+        bot.manejar_update(alm.cx, _msg('Etre Ropa', responde_a=mid))
+        _, payload = estado['puts'][-1]
+        assert payload['transactions'][0]['destination_name'] == 'Etre Ropa'
+
+
+class TestVariasDeUnaVez:
+    def test_etiqueta_las_dos_ultimas(self, entorno):
+        """La orden textual del reclamo."""
+        alm, _tg, estado, _u = entorno
+        bot.manejar_update(
+            alm.cx, _msg('las ultimas 2 estan en compras, agregales la etiqueta Ropa')
+        )
+        tocados = {tid for tid, _ in estado['puts']}
+        assert tocados == {'1456', '1455'}, 'las dos, no una'
+        for _tid, payload in estado['puts']:
+            assert 'Ropa' in payload['transactions'][0]['tags']
+
+    def test_mueve_varias_de_presupuesto(self, entorno, monkeypatch):
+        monkeypatch.setattr(
+            bot.presupuestos,
+            'nombres_activos',
+            lambda: ['Esencial', 'Vivir', 'Antojos'],
+        )
+        alm, _tg, estado, _u = entorno
+        bot.manejar_update(alm.cx, _msg('las ultimas 2 ponlas en Antojos'))
+        assert len(estado['puts']) == 2
+        for _tid, payload in estado['puts']:
+            assert payload['transactions'][0]['budget_name'] == 'Antojos'
+
+    def test_una_sola_sigue_funcionando(self, entorno):
+        alm, _tg, estado, _u = entorno
+        bot.manejar_update(alm.cx, _msg('cambia la ultima a Gato'))
+        assert len(estado['puts']) == 1
+
+    def test_reporta_cada_uno(self, entorno):
+        alm, tg, _e, _u = entorno
+        bot.manejar_update(alm.cx, _msg('las ultimas 2 etiquetalas como Ropa'))
+        assert '2 movimientos' in tg.todo

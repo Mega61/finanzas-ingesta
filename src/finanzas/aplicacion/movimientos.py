@@ -14,6 +14,7 @@ que es la fuente de verdad de lo que ya esta registrado.
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -141,7 +142,16 @@ def uno(tx_id: str) -> dict | None:
 # Lo que se puede cambiar, y como se llama en la API de Firefly. `comercio` se
 # traduce segun el signo: en un gasto es la cuenta de DESTINO y en un ingreso la
 # de ORIGEN. Mandarlo al lado equivocado mueve la plata de cuenta.
-CAMBIABLES = ('categoria', 'presupuesto', 'comercio', 'descripcion', 'notas')
+CAMBIABLES = (
+    'categoria',
+    'presupuesto',
+    'comercio',
+    'descripcion',
+    'notas',
+    # Aditivas: agregar una no borra las que ya estan.
+    'etiquetas',
+    'quitar_etiquetas',
+)
 
 
 def editar(tx_id: str, **cambios: Any) -> dict[str, Any]:
@@ -180,6 +190,19 @@ def editar(tx_id: str, **cambios: Any) -> dict[str, Any]:
 
     if campos:
         firefly.actualizar_split(str(tx_id), **campos)
+    # Las etiquetas van aparte porque son aditivas: la API reemplaza `tags`
+    # completo, asi que agregar una tiene que leer las que ya estan. Perderlas
+    # borraria `sin-confirmar`, que es lo que la conciliacion usa para saber que
+    # falta cruzar contra el extracto.
+    if cambios.get('etiquetas'):
+        etqs = cambios['etiquetas']
+        firefly.agregar_etiqueta(
+            str(tx_id), *(etqs if isinstance(etqs, (list, tuple)) else [etqs])
+        )
+    if cambios.get('quitar_etiquetas'):
+        etqs = cambios['quitar_etiquetas']
+        for e in etqs if isinstance(etqs, (list, tuple)) else [etqs]:
+            firefly.quitar_etiqueta(str(tx_id), e)
     if cambios.get('monto') is not None:
         firefly.cambiar_monto(
             str(tx_id),
@@ -187,6 +210,22 @@ def editar(tx_id: str, **cambios: Any) -> dict[str, Any]:
             nota_extra='monto corregido desde el bot',
         )
     return uno(tx_id) or actual
+
+
+def editar_varios(tx_ids: list[str], **cambios: Any) -> list[dict]:
+    """Los mismos cambios en varios movimientos. Devuelve (id, resultado|error).
+
+    No se detiene en el primer fallo: si uno tiene varias partes y no se puede
+    editar, los demas si se aplican y se reporta cual quedo fuera. Fallar todo
+    por uno seria peor.
+    """
+    fuera = []
+    for tid in tx_ids:
+        try:
+            fuera.append({'id': str(tid), 'movimiento': editar(str(tid), **cambios)})
+        except Exception as ex:  # se quiere reportar cualquier fallo, no abortar
+            fuera.append({'id': str(tid), 'error': str(ex)[:160]})
+    return fuera
 
 
 def borrar(tx_id: str) -> bool:
@@ -215,6 +254,10 @@ def describir(m: dict, con_id: bool = False) -> str:
     partes = [m['fecha'], plata, (m['destino'] or m['descripcion'])[:26]]
     if m['categoria']:
         partes.append(f'[{m["categoria"]}]')
+    # El presupuesto se ve: sin verlo no habia forma de notar que faltaba, que
+    # es justo lo que hizo falta ponerle a mano a varios movimientos.
+    if m['presupuesto']:
+        partes.append(f'· {m["presupuesto"]}')
     if SIN_CONFIRMAR in m['etiquetas']:
         partes.append('· sin confirmar')
     if con_id:
@@ -233,3 +276,71 @@ def en_texto(movs: list[dict], titulo: str = 'ULTIMOS MOVIMIENTOS') -> str:
     lineas = [titulo]
     lineas += [f'  {describir(m, con_id=True)}' for m in movs]
     return '\n'.join(lineas)
+
+
+# --------------------------------------------------- catalogos para el chat
+
+# Las que pone la maquina: no se ofrecen como sugerencia porque no son
+# decisiones del usuario.
+ETIQUETAS_DE_MAQUINA = ('sin-confirmar', 'ingesta-automatica')
+
+_cache_catalogo: dict[str, tuple[float, list]] = {}
+MINUTOS_DE_CACHE = 30
+
+
+def _cacheado(llave, calcular):
+    """Los catalogos se leen de Firefly y se piden en cada menu del bot, asi que
+    no pueden releerse cada vez."""
+    if llave in _cache_catalogo:
+        cuando, guardado = _cache_catalogo[llave]
+        if time.time() - cuando < MINUTOS_DE_CACHE * 60:
+            return guardado
+    valor = calcular()
+    _cache_catalogo[llave] = (time.time(), valor)
+    return valor
+
+
+def olvidar_catalogos():
+    """Para las pruebas y para forzar una relectura."""
+    _cache_catalogo.clear()
+
+
+def categorias(direccion: str | None = None) -> list[str]:
+    """Todas las categorias de Firefly, ordenadas.
+
+    El menu del bot ofrecia ocho de setenta y una y no habia forma de llegar al
+    resto salvo escribiendo el nombre exacto.
+    """
+
+    def leer():
+        return sorted(
+            c['attributes']['name']
+            for c in firefly.get_all('/api/v1/categories')
+            if c.get('attributes', {}).get('name')
+        )
+
+    del direccion  # se filtra en la capa de arriba, que conoce el historico
+    return _cacheado('categorias', leer)
+
+
+def etiquetas_mas_usadas(limite: int = 24) -> list[str]:
+    """Las etiquetas que de verdad usas, de mas a menos.
+
+    Se excluyen las de la maquina y las de conciliacion (`recon-...`): son
+    ruido, no decisiones.
+    """
+
+    def leer():
+        cuenta: dict[str, int] = {}
+        desde = fechas.hoy() - timedelta(days=400)
+        ruta = f'/api/v1/transactions?start={desde}&end={fechas.hoy()}'
+        for t in firefly.get_all(ruta):
+            for s in t.get('attributes', {}).get('transactions', []):
+                for e in s.get('tags') or []:
+                    bajo = e.lower()
+                    if bajo in ETIQUETAS_DE_MAQUINA or bajo.startswith('recon-'):
+                        continue
+                    cuenta[e] = cuenta.get(e, 0) + 1
+        return [e for e, _ in sorted(cuenta.items(), key=lambda x: -x[1])]
+
+    return _cacheado('etiquetas', leer)[:limite]
