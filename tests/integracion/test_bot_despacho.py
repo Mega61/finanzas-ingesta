@@ -314,3 +314,79 @@ class TestPedirTexto:
         bot.manejar_update(alm.cx, _toque(f't:{b}:0'))
         assert alm.pendiente_de_mensaje('555', 1001) == a
         assert alm.pendiente_de_mensaje('555', 1002) == b
+
+
+class TestUnBotonForjado:
+    """Telegram solo manda los callback que el bot genero, pero el `data` viaja
+    por el cliente: hay que tratarlo como entrada de fuera."""
+
+    @pytest.mark.parametrize(
+        'dato',
+        [
+            'mc:1441:-1',
+            'sc:1441:-1',
+            'sb:1441:-1',
+            'se:1441:-1',
+            'c:1:-1',
+            'fg:1:-1',
+        ],
+    )
+    def test_un_indice_negativo_no_escribe_nada(self, entorno, dato):
+        """`lista[-1]` es el ULTIMO elemento: con los guardas de un solo lado
+        el bot aplicaba una opcion que nadie eligio y contestaba «listo»."""
+        bot, alm, tg, *_ = entorno
+        bot.manejar_update(alm.cx, _toque(dato))
+        assert tg.enviados == [], f'{dato} no puede aplicar nada'
+        assert tg.avisos, 'pero el callback SIEMPRE se contesta'
+
+    def test_el_callback_se_contesta_aunque_el_manejador_reviente(
+        self, entorno, monkeypatch
+    ):
+        """Si no, el botoncito se queda girando en Telegram para siempre y no
+        hay ninguna senal de que algo fallo."""
+        bot, alm, tg, *_ = entorno
+
+        def revienta(_t):
+            raise RuntimeError('a proposito')
+
+        monkeypatch.setitem(bot.TOQUES, 'mv', revienta)
+        with pytest.raises(RuntimeError):
+            bot.manejar_update(alm.cx, _toque('mv:1441:0'))
+        assert tg.avisos
+
+
+class TestElHtmlNoTumbaElMensaje:
+    """Telegram rechaza el mensaje COMPLETO si el HTML esta mal, y el bot se
+    queda mudo sin decir por que. Y con un nombre asi guardado en Firefly,
+    TODA pantalla que lo muestre queda irrenderizable -- incluidas las que
+    servirian para corregirlo."""
+
+    def test_un_comando_que_no_existe_con_html_se_escapa(self, entorno):
+        bot, alm, tg, *_ = entorno
+        bot.manejar_update(alm.cx, _mensaje('/hola<3'))
+        assert tg.enviados, 'tiene que contestar algo'
+        assert '<3' not in tg.enviados[0][1]
+        assert '&lt;3' in tg.enviados[0][1]
+
+    def test_el_ampersand_de_un_comercio_se_escapa(self):
+        from finanzas.aplicacion import movimientos
+
+        m = {
+            'id': '1',
+            'fecha': '2026-09-02',
+            'valor': -20000.0,
+            'moneda': 'COP',
+            'descripcion': 'x',
+            'categoria': None,
+            'presupuesto': None,
+            'origen': 'VISA',
+            'destino': 'Cafe & Bar <3',
+            'etiquetas': [],
+            'tipo': 'withdrawal',
+            'notas': '',
+            'partes': 1,
+        }
+        linea = movimientos.describir_html(m)
+        assert 'Cafe &amp; Bar &lt;3' in linea
+        # y el crudo se queda crudo, porque esa salida va al MODELO
+        assert 'Cafe & Bar <3' in movimientos.describir(m)

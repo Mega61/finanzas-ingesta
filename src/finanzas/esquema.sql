@@ -277,6 +277,13 @@ CREATE TABLE IF NOT EXISTS edicion_en_curso (
 CREATE TABLE IF NOT EXISTS textos_en_espera (
   chat_id   TEXT PRIMARY KEY,
   texto     TEXT NOT NULL,
+  -- El plan que se le MOSTRO, como JSON. Al confirmar se ejecuta este y no se
+  -- le vuelve a preguntar al modelo: preguntando otra vez el plan cambiaba
+  -- entre lo que se confirmo y lo que se aplico ("toca 8 movimientos" ->
+  -- "toca 7"), y como el umbral de confirmacion se recalculaba sobre el plan
+  -- nuevo, una orden de mas de cuatro movimientos no se aplicaba NUNCA: cada
+  -- toque volvia a pedir confirmacion y quemaba una llamada al modelo.
+  plan      TEXT,
   creado_en TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -54,10 +54,10 @@ def describir(p):
     partes = [f'<b>{_plata(p["valor"], p["moneda"])}</b>']
     partes.append(f'{p["fecha"]}' + (f' {p["hora"]}' if p['hora'] else ''))
     if p['contraparte']:
-        partes.append(f'<b>{p["contraparte"]}</b>')
+        partes.append(f'<b>{_escapar(p["contraparte"])}</b>')
     if p['cuenta_firefly']:
         flecha = '→' if p['valor'] < 0 else '←'
-        partes.append(f'{p["cuenta_firefly"]} {flecha}')
+        partes.append(f'{_escapar(p["cuenta_firefly"])} {flecha}')
     return '\n'.join(partes)
 
 
@@ -167,7 +167,7 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
         texto = (
             '¿Qué es esto?\n\n'
             + describir(p)
-            + f'\n\n<i>{p["descripcion"] or ""}</i>'
+            + f'\n\n<i>{_escapar(p["descripcion"])}</i>'
             # Los botones son el atajo, no la unica via. Decirlo importa: sin
             # esto la unica forma visible de contestar eran ocho categorias de
             # setenta y una, y para todo lo demas —presupuesto, etiqueta,
@@ -475,7 +475,7 @@ def cmd_sinconfirmar(cx, chat):
     for p in filas:
         lineas.append(
             f'{p["fecha"]} {_plata(p["valor"], p["moneda"])} '
-            f'— {(p["contraparte"] or "")[:28]}'
+            f'— {_escapar(p["contraparte"])[:28]}'
         )
     n_sosp = _a(cx).contar_sospechosos()
     if n_sosp:
@@ -505,6 +505,14 @@ class Toque:
         self.mid = cq['message']['message_id']
         self.accion, pid, idx = (cq.get('data') or '').split(':')
         self.pid, self.idx = int(pid), int(idx)
+        # Un indice negativo no lo genera nunca el bot, asi que solo llega
+        # forjado -- y era peligroso: los guardas eran de un solo lado
+        # (`idx < len(lista)`), asi que `lista[-1]` devolvia el ULTIMO elemento
+        # y el bot escribia una categoria, un presupuesto o una etiqueta que
+        # nadie eligio, contestando «listo». Se rechaza aqui, una vez, en vez
+        # de en los ocho sitios que indexan.
+        if self.idx < 0:
+            raise ValueError(f'indice negativo: {self.idx}')
 
     def aviso(self, texto):
         """El globito de confirmacion sobre el boton."""
@@ -661,7 +669,7 @@ def _toque_mover(t):
         t.aviso('ya no tengo ese mensaje, escribelo de nuevo')
         return
     t.aviso('lo muevo')
-    t.reemplazar(f'Movido: «{txt[:60]}»')
+    t.reemplazar(f'Movido: «{_escapar(txt[:60])}»')
     _responder_con_texto(t.cx, t.chat, t.pid, txt)
 
 
@@ -778,7 +786,7 @@ def _aplicar_en_lote(cx, chat, texto, ed, objetivos):
         if r.get('error'):
             lineas.append(f'⚠️ #{r["id"]}: {r["error"]}')
         else:
-            lineas.append(movimientos.describir(r['movimiento']))
+            lineas.append(movimientos.describir_html(r['movimiento']))
     db.bitacora(
         cx,
         'editar_lote',
@@ -876,7 +884,7 @@ def cmd_ultimos(cx, chat, texto=''):
 
     encabezado = f'<b>Movimientos{" · " + consulta if consulta else ""}</b>'
     lineas = [encabezado, '']
-    lineas += [movimientos.describir(m) for m in movs]
+    lineas += [movimientos.describir_html(m) for m in movs]
     lineas.append('\nToca uno para cambiarlo.')
     telegram.enviar(
         chat,
@@ -996,7 +1004,7 @@ def _ficha(m):
     saber que faltaba.
     """
     lineas = [f'<b>{_plata(m["valor"], m["moneda"])}</b>  {m["fecha"]}']
-    lineas.append(f'{m["origen"]} → <b>{m["destino"] or m["descripcion"]}</b>')
+    lineas.append(f'{_escapar(m["origen"])} → <b>{_escapar(m["destino"] or m["descripcion"])}</b>')
     lineas.append(f'categoría: <b>{m["categoria"] or "—"}</b>')
     lineas.append(f'presupuesto: <b>{m["presupuesto"] or "—"}</b>')
     propias = [
@@ -1068,7 +1076,7 @@ def _toque_menu_presupuesto(t):
     telegram.enviar(
         t.chat,
         f'<b>Presupuesto</b> para {_plata(m["valor"], m["moneda"])} en '
-        f'{(m["destino"] or m["descripcion"])[:24]}\n'
+        f'{_escapar((m["destino"] or m["descripcion"])[:24])}\n'
         f'ahora: <b>{m["presupuesto"] or "—"}</b>',
         botones,
     )
@@ -1183,7 +1191,7 @@ def _aplicar_edicion(cx, chat, tx_id, cambios, aviso=None):
     que = ', '.join(f'{k}: {v}' for k, v in cambios.items())
     telegram.enviar(
         chat,
-        f'✅ <i>{que}</i>\n<b>{movimientos.describir(m)}</b>',
+        f'✅ <i>{que}</i>\n<b>{movimientos.describir_html(m)}</b>',
         [
             [
                 ('💰 presupuesto', f'pb:{tx_id}:0'),
@@ -1255,7 +1263,7 @@ def _toque_borrar_movimiento(t):
     t.aviso('¿seguro?')
     telegram.enviar(
         t.chat,
-        f'Vas a BORRAR de Firefly:\n<b>{movimientos.describir(m)}</b>\n\n'
+        f'Vas a BORRAR de Firefly:\n<b>{movimientos.describir_html(m)}</b>\n\n'
         f'No se puede deshacer.',
         [[('🗑 sí, bórralo', f'mB:{t.pid}:0'), ('cancelar', f'mv:{t.pid}:0')]],
     )
@@ -1351,7 +1359,7 @@ def _editar_por_texto(cx, chat, texto, tx_id=None, campo=None):
         telegram.enviar(
             chat,
             f'Vas a BORRAR de Firefly:\n'
-            f'<b>{movimientos.describir(objetivo)}</b>\n\nNo se puede deshacer.',
+            f'<b>{movimientos.describir_html(objetivo)}</b>\n\nNo se puede deshacer.',
             [
                 [
                     ('🗑 sí, bórralo', f'mB:{objetivo["id"]}:0'),
@@ -1379,7 +1387,7 @@ def _editar_por_texto(cx, chat, texto, tx_id=None, campo=None):
         telegram.enviar(
             chat,
             f'Entendí que hablas de:\n'
-            f'<b>{movimientos.describir(objetivo)}</b>\n\n'
+            f'<b>{movimientos.describir_html(objetivo)}</b>\n\n'
             f'Pero no entendí qué cambiarle.',
         )
         _menu_movimiento(cx, chat, objetivo['id'])
@@ -1416,7 +1424,7 @@ def _texto_producto(p):
     cuantas = 'una vez' if veces == 1 else f'{veces} veces'
     return (
         '🛒 <b>¿Qué es esto?</b>\n\n'
-        f'<b>{p["descripcion"] or p["codigo"]}</b>\n'
+        f'<b>{_escapar(p["descripcion"] or p["codigo"])}</b>\n'
         f'comprado {cuantas} · {plata}\n\n'
         '<i>El nombre viene cortado por el almacén. '
         'Lo que respondas queda para siempre.</i>'
@@ -1490,7 +1498,7 @@ def _toque_producto_grupo(t):
     telegram.editar(
         t.chat,
         t.mid,
-        f'🛒 <b>{p["descripcion"] or p["codigo"]}</b>\n'
+        f'🛒 <b>{_escapar(p["descripcion"] or p["codigo"])}</b>\n'
         f'Grupo: <b>{grupo}</b>\n\n¿Qué tipo?',
         botones,
     )
@@ -1527,7 +1535,7 @@ def _toque_producto_volver(t):
 
 
 def _texto_producto_simple(p):
-    return f'🛒 <b>¿Qué es esto?</b>\n\n<b>{p["descripcion"] or p["codigo"]}</b>'
+    return f'🛒 <b>¿Qué es esto?</b>\n\n<b>{_escapar(p["descripcion"] or p["codigo"])}</b>'
 
 
 def _toque_producto_saltar(t):
@@ -1544,7 +1552,7 @@ def _guardar_producto(t, p, grupo, categoria):
     arrastre = f'\n<i>Se aplicó a las {n} compras anteriores.</i>' if n > 1 else ''
     t.aviso(f'{grupo} · {categoria}')
     t.reemplazar(
-        f'✅ <b>{p["descripcion"] or p["codigo"]}</b>\n'
+        f'✅ <b>{_escapar(p["descripcion"] or p["codigo"])}</b>\n'
         f'{tipo} · {grupo} · {categoria}{arrastre}'
     )
 
@@ -1686,8 +1694,13 @@ def _cerrar_preguntas(cx, ids, cambios, abiertas):
     return cerradas
 
 
-def _ejecutar_plan(cx, chat, texto, plan, abiertas):
-    """Hace lo que el plan dice. Devuelve True si lo atendio."""
+def _ejecutar_plan(cx, chat, texto, plan, abiertas, ya_confirmado=False):
+    """Hace lo que el plan dice. Devuelve True si lo atendio.
+
+    `ya_confirmado` es para el toque de «si, hazlo»: sin eso el umbral de
+    confirmacion se vuelve a evaluar y el plan queda pidiendo permiso para
+    siempre.
+    """
     accion = plan.get('accion')
     confianza = float(plan.get('confianza') or 0)
     ids = [str(i) for i in (plan.get('movimientos') or [])]
@@ -1729,7 +1742,7 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas):
             return False
         telegram.enviar(
             chat,
-            f'Vas a BORRAR de Firefly:\n<b>{movimientos.describir(m)}</b>\n\n'
+            f'Vas a BORRAR de Firefly:\n<b>{movimientos.describir_html(m)}</b>\n\n'
             f'No se puede deshacer.',
             [[('🗑 sí, bórralo', f'mB:{ids[0]}:0'), ('cancelar', f'mv:{ids[0]}:0')]],
         )
@@ -1772,9 +1785,10 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas):
     # edicion que toca MUCHOS movimientos de un golpe se confirma aunque la
     # confianza sea alta: «cambia todas a mercado» reescribia los diez -- el
     # ingreso incluido, que quedaba con categoria de gasto -- sin preguntar.
-    masiva = len(ids) > MAXIMO_SIN_CONFIRMAR
-    if confianza < CONFIANZA_PARA_APLICAR or masiva:
-        _guardar_texto_en_espera(cx, chat, texto)
+    masiva = not ya_confirmado and len(ids) > MAXIMO_SIN_CONFIRMAR
+    if not ya_confirmado and (confianza < CONFIANZA_PARA_APLICAR or masiva):
+        # Se guarda el plan EXACTO que se muestra. Al confirmar se ejecuta ese.
+        _guardar_texto_en_espera(cx, chat, texto, plan)
         objetivo = ids[0]
         encabezado = (
             f'Eso toca <b>{len(ids)} movimientos</b>. Confírmame antes:'
@@ -1801,7 +1815,7 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas):
                 lineas.append(f'⚠️ #{r["id"]}: {r["error"]}')
                 hubo_error = True
             else:
-                lineas.append(movimientos.describir(r['movimiento']))
+                lineas.append(movimientos.describir_html(r['movimiento']))
         # Si era la RESPUESTA a algo que el bot pregunto, tambien se cierra la
         # pregunta: si no, seguiria preguntando por algo ya resuelto.
         if accion == 'responder':
@@ -1865,7 +1879,7 @@ def _responder_producto(cx, chat, catalogo_id, texto):
     if grupo == 'Sin clasificar':
         telegram.enviar(
             chat,
-            f'No supe en qué grupo va «{texto[:40]}». Usa los botones del '
+            f'No supe en qué grupo va «{_escapar(texto[:40])}». Usa los botones del '
             f'mensaje, que son los grupos que existen.',
         )
         return
@@ -1876,7 +1890,7 @@ def _responder_producto(cx, chat, catalogo_id, texto):
             'producto_id': str(catalogo_id),
             'producto_grupo': grupo,
             'producto_categoria': cat,
-            'explicacion': f'por lo que escribiste: «{texto[:40]}»',
+            'explicacion': f'por lo que escribiste: «{_escapar(texto[:40])}»',
         },
     )
 
@@ -1932,7 +1946,7 @@ def _clasificar_producto_del_plan(cx, chat, plan, confianza=1.0):
         combinado = catalogo.GRUPOS.index(grupo) * 100 + list(validas).index(cat)
         msg = telegram.enviar(
             chat,
-            f'¿<b>{p["descripcion"] or p["codigo"]}</b> es '
+            f'¿<b>{_escapar(p["descripcion"] or p["codigo"])}</b> es '
             f'<b>{grupo} · {cat}</b>?{SALTO}'
             f'<i>{plan.get("explicacion") or ""}</i>',
             [
@@ -1961,7 +1975,7 @@ def _clasificar_producto_del_plan(cx, chat, plan, confianza=1.0):
     )
     telegram.enviar(
         chat,
-        f'✅ <b>{p["descripcion"] or p["codigo"]}</b>{SALTO}'
+        f'✅ <b>{_escapar(p["descripcion"] or p["codigo"])}</b>{SALTO}'
         f'{tipo} · {grupo} · {cat}{arrastre}{nota}{SALTO}'
         f'<i>{plan.get("explicacion") or ""}</i>',
     )
@@ -1999,18 +2013,32 @@ def _resumen_de_lotes(lotes):
 
 
 def _toque_confirmar_plan(t):
-    """«si, hazlo» sobre un plan que el modelo no dio por seguro."""
+    """«si, hazlo» sobre un plan que el modelo no dio por seguro.
+
+    Ejecuta el plan GUARDADO, el mismo que se le mostro. Antes le volvia a
+    preguntar al modelo con el texto, y eso traia dos problemas: el plan nuevo
+    podia ser otro -- se confirmaba «toca 8 movimientos» y se aplicaba otra
+    cosa -- y como el umbral de confirmacion se recalcula sobre el plan, una
+    orden de mas de cuatro movimientos no se aplicaba NUNCA: cada toque volvia
+    a pedir confirmacion y quemaba una llamada al modelo.
+    """
     txt = _texto_en_espera(t.cx, t.chat)
     if not txt:
         t.aviso('ya no tengo ese mensaje')
         return
     t.aviso('va')
-    plan = _plan_de_ia(t.cx, t.chat, txt, abiertas_del_chat(t.cx, t.chat))
+    plan = _a(t.cx).plan_en_espera(t.chat)
+    if not plan:
+        # Solo se le vuelve a preguntar si no hay plan guardado: pasa con los
+        # planes que quedaron en espera antes de que esto existiera.
+        plan = _plan_de_ia(t.cx, t.chat, txt, abiertas_del_chat(t.cx, t.chat))
     if not plan:
         t.reemplazar('No pude entenderlo de nuevo. Tócalo y te lo cambio a mano.')
         return
     plan['confianza'] = 1.0
-    _ejecutar_plan(t.cx, t.chat, txt, plan, abiertas_del_chat(t.cx, t.chat))
+    _ejecutar_plan(
+        t.cx, t.chat, txt, plan, abiertas_del_chat(t.cx, t.chat), ya_confirmado=True
+    )
 
 
 def _toque_presupuesto_a_los_viejos(t):
@@ -2030,7 +2058,7 @@ def _toque_presupuesto_a_los_viejos(t):
             continue
         try:
             movimientos.editar(str(m['id']), presupuesto=pres)
-            arreglados.append(f'{movimientos.describir(m)} → {pres}')
+            arreglados.append(f'{movimientos.describir_html(m)} → {pres}')
         except Exception as ex:
             arreglados.append(f'⚠️ #{m["id"]}: {str(ex)[:80]}')
     if not arreglados:
@@ -2269,15 +2297,20 @@ def manejar_update(cx, u):
 # bien: el asesor arma el contexto financiero de cero en cada pregunta, el
 # historial solo sirve para que se entiendan los "y si mejor...".
 HISTORIAL = {}
-MAX_HISTORIAL = 10
+# Entradas, no turnos: cada turno son dos (lo que dijo el usuario y lo que
+# contesto el bot). Con 10 se olvidaba a los cinco turnos, y una deliberacion
+# -- «quiero comprar una bici de 2 millones», cinco preguntas, «y entonces la
+# bici si o no» -- perdia el precio de la bici, que es justo la conversacion de
+# varios turnos que tiene sentido tener.
+MAX_HISTORIAL = 24
 
 
 def _guardar_mensaje(cx, chat, mensaje_id, pendiente_id):
     _a(cx).guardar_mensaje(chat, mensaje_id, pendiente_id)
 
 
-def _guardar_texto_en_espera(cx, chat, txt):
-    _a(cx).guardar_texto_en_espera(chat, txt)
+def _guardar_texto_en_espera(cx, chat, txt, plan=None):
+    _a(cx).guardar_texto_en_espera(chat, txt, plan)
 
 
 def _texto_en_espera(cx, chat):
@@ -2450,7 +2483,7 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
         )
         telegram.enviar(
             chat,
-            f'¿«{texto[:60]}» es sobre un producto del mercado o sobre una '
+            f'¿«{_escapar(texto[:60])}» es sobre un producto del mercado o sobre una '
             f'transacción? No quiero apuntarle al equivocado.',
             botones,
         )
@@ -2471,7 +2504,7 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
             chat,
             f'Entiendo que hablas del de '
             f'<b>{_plata(elegido["valor"], elegido["moneda"])}</b> en '
-            f'{(elegido["contraparte"] or "")[:28]}'
+            f'{_escapar(elegido["contraparte"])[:28]}'
             f'\n<i>({", ".join(ganador.razones)})</i>',
         )
         _responder_con_texto(cx, chat, ganador.id, texto)
@@ -2502,7 +2535,7 @@ def _aplicar_a_la_ultima(cx, chat, abiertas, texto):
     lineas = [
         f'Lo tomo como respuesta al de '
         f'<b>{_plata(ultima["valor"], ultima["moneda"])}</b> en '
-        f'{(ultima["contraparte"] or "")[:28]}, que es el ultimo que te pregunte.',
+        f'{_escapar(ultima["contraparte"])[:28]}, que es el ultimo que te pregunte.',
         '',
         'Si era otro, tocalo:',
     ]
@@ -2615,7 +2648,7 @@ def _pedir_categoria_a_mano(cx, chat, p, texto):
     if not sug:
         telegram.enviar(
             chat,
-            f'No entendí «{texto[:40]}» y no tengo categorías que sugerirte. '
+            f'No entendí «{_escapar(texto[:40])}» y no tengo categorías que sugerirte. '
             f'Dime el nombre exacto de la categoría.',
         )
         return

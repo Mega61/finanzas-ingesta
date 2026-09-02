@@ -14,6 +14,7 @@ que es la fuente de verdad de lo que ya esta registrado.
 
 from __future__ import annotations
 
+import html
 import time
 from datetime import timedelta
 from typing import Any
@@ -278,6 +279,17 @@ def describir(m: dict, con_id: bool = False) -> str:
     if con_id:
         partes.append(f'#{m["id"]}')
     return '  '.join(partes)
+
+
+def describir_html(m: dict, con_id: bool = False) -> str:
+    """Lo mismo pero listo para meter en un mensaje de Telegram.
+
+    `describir` se queda crudo porque su salida tambien va al MODELO, y ahi un
+    `&amp;` en vez de un `&` es basura. Pero en un mensaje con formato, un
+    comercio llamado «Cafe & Bar <3» hace que Telegram rechace el mensaje
+    COMPLETO y el bot se queda mudo.
+    """
+    return html.escape(describir(m, con_id=con_id), quote=False)
 
 
 def en_texto(movs: list[dict], titulo: str = 'ULTIMOS MOVIMIENTOS') -> str:

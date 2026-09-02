@@ -4,6 +4,17 @@
     python herramientas/simular_chat.py --sin-ia "cambia la ultima a Mercado"
     python herramientas/simular_chat.py --guion casos.txt
 
+Cada argumento es un mensaje, y varios en un comando son UNA conversacion con
+memoria. Hay tres formas:
+
+    es el costo del domicilio    un mensaje normal
+    !mv:1441:0                   toca ese boton
+    >9002 es una galleta         RESPONDE al mensaje 9002
+
+El numero de mensaje lo imprime el propio simulador debajo de cada respuesta.
+El `!` solo cuenta si lo que sigue tiene forma de callback, asi que «!!!» se
+manda como texto.
+
 Existe para poder buscar bugs sin escribirle al bot de verdad. Telegram y
 Firefly son dobles: se ve lo que el bot RESPONDERIA y lo que ESCRIBIRIA, pero
 no se manda ni se guarda nada. Gemini SI es real, porque justamente lo que hay
@@ -86,6 +97,36 @@ def _sin_html(t):
     return re.sub(r'<[^>]+>', '', t or '')
 
 
+# Las que Telegram acepta en modo HTML. Cualquier otra cosa entre < > hace que
+# rechace el mensaje COMPLETO y el bot se queda mudo.
+_PERMITIDAS = ('b', 'i', 'u', 's', 'a', 'code', 'pre', 'tg-spoiler', 'blockquote')
+
+
+def _html_malo(texto):
+    """Por que Telegram rechazaria este mensaje, o None si esta bien.
+
+    El simulador limpiaba el marcado antes de imprimir, asi que este bug --
+    el peor de los de mudez -- era invisible con la herramienta.
+    """
+    pila = []
+    for m in re.finditer(r'<(/?)([^\s>/]*)([^>]*)>', texto or ''):
+        cierra, nombre = m.group(1), m.group(2).lower()
+        if nombre not in _PERMITIDAS:
+            return f'etiqueta que Telegram no conoce: <{cierra}{nombre}>'
+        if cierra:
+            if not pila or pila.pop() != nombre:
+                return f'</{nombre}> sin abrir'
+        elif nombre != 'br':
+            pila.append(nombre)
+    if pila:
+        return f'<{pila[-1]}> sin cerrar'
+    # Un < suelto que no forma etiqueta: «Cafe & Bar <3» es el caso real.
+    suelto = re.sub(r'<[^>]*>', '', texto or '')
+    if '<' in suelto:
+        return 'hay un « < » sin escapar (¿un nombre con <3?)'
+    return None
+
+
 def montar(reg, con_ia=True):
     """La base, Firefly y Telegram de mentiras. Devuelve la conexion."""
     cx = sqlite3.connect(':memory:')
@@ -152,6 +193,10 @@ def montar(reg, con_ia=True):
         return m
 
     def borrar(tx_id):
+        # Firefly contesta 404 con un id que no existe. Devolver True siempre
+        # hacia que un doble toque en «borrar» dijera «Borrado» dos veces.
+        if str(tx_id) not in tx:
+            raise ValueError(f'el movimiento {tx_id} no existe en Firefly')
         reg.borrados.append(str(tx_id))
         tx.pop(str(tx_id), None)
         return True
@@ -184,10 +229,25 @@ def montar(reg, con_ia=True):
          'pct': 40.0} for b in PRESUPUESTOS
     ]
     presupuestos.revienta = lambda *a, **k: None
-    bot.firefly.actualizar_split = lambda tx_id, **c: True
+    # Registra: `aplicar_respuesta` publica por aqui, no por `movimientos`, y
+    # sin esto esas escrituras eran INVISIBLES en la salida.
+    def split_falso(tx_id, **campos):
+        reg.escribio.append({'id': str(tx_id), 'cambios': dict(campos),
+                             'via': 'split'})
+        return True
+
+    bot.firefly.actualizar_split = split_falso
+    # Los comercios salen de aqui. Devolviendo [] siempre iban vacios, que es
+    # justo el caso que ocultaba un esquema invalido.
     bot.firefly.get_all = lambda ruta: (
         [{'attributes': {'name': c}} for c in CATEGORIAS]
-        if '/categories' in ruta else []
+        if '/categories' in ruta
+        else [
+            {'attributes': {'name': m[2]}}
+            for m in MOVIMIENTOS
+        ]
+        if '/accounts' in ruta
+        else []
     )
 
     # ------------------------------------------------------------ Telegram
@@ -199,6 +259,8 @@ def montar(reg, con_ia=True):
             TelegramFalso._id += 1
             reg.dijo.append({
                 'texto': _sin_html(texto),
+                'crudo': texto,
+                'html_malo': _html_malo(texto),
                 'botones': [[t for t, _ in fila] for fila in (botones or [])],
                 'datos': [d for fila in (botones or []) for _, d in fila],
                 'mensaje_id': TelegramFalso._id,
@@ -206,7 +268,8 @@ def montar(reg, con_ia=True):
             return {'message_id': TelegramFalso._id}
 
         def editar(self, chat, message_id, texto, modo='HTML'):
-            reg.dijo.append({'texto': _sin_html(texto), 'botones': [],
+            reg.dijo.append({'texto': _sin_html(texto), 'crudo': texto,
+                             'html_malo': _html_malo(texto), 'botones': [],
                              'datos': [], 'editado': message_id})
             return {'message_id': message_id}
 
@@ -223,7 +286,14 @@ def montar(reg, con_ia=True):
     # El asesor de verdad necesita saldos de Firefly; se simula su respuesta
     # para que se pueda ver A DONDE fue el mensaje sin depender de la red.
     def asesor_falso(cx_, chat, txt):
-        reg.dijo.append({'texto': f'[ASESOR] {txt}', 'botones': [], 'datos': []})
+        reg.dijo.append({'texto': f'[ASESOR] {txt}', 'botones': [], 'datos': [],
+                         'html_malo': None})
+        # El historial lo llena el asesor de verdad. Sin esto el plan del
+        # modelo se probaba SIEMPRE sin historial de conversacion.
+        hist = bot.HISTORIAL.setdefault(str(chat), [])
+        hist.append(('usuario', txt))
+        hist.append(('asesor', '[respuesta simulada del asesor]'))
+        del hist[: -bot.MAX_HISTORIAL]
 
     bot._consultar_asesor = asesor_falso
 
@@ -232,33 +302,61 @@ def montar(reg, con_ia=True):
     return cx
 
 
+def _update(msg):
+    """El update de Telegram que corresponde a esa linea del guion.
+
+      !accion:pid:idx   toca un boton
+      >123 texto        responde AL MENSAJE 123 (es un camino aparte del bot)
+      cualquier otra    un mensaje normal
+
+    El `!` solo cuenta si lo que sigue tiene forma de callback: antes
+    «!!!» -- que es algo que un usuario escribe -- se interpretaba como un
+    boton y no habia forma de probarlo.
+    """
+    if re.match(r'^![a-zA-Z]{1,3}:-?\d+:-?\d+$', msg):
+        return {
+            'callback_query': {
+                'id': 'q',
+                'data': msg[1:],
+                'message': {'message_id': 1, 'chat': {'id': CHAT}},
+            }
+        }
+    m = re.match(r'^>(\d+)\s+(.*)$', msg, re.S)
+    cuerpo = {'message_id': 5, 'chat': {'id': CHAT}, 'text': m.group(2) if m else msg}
+    if m:
+        cuerpo['reply_to_message'] = {'message_id': int(m.group(1))}
+    return {'message': cuerpo}
+
+
 def correr(mensajes, con_ia=True, como_json=False):
     reg = Registro()
     cx = montar(reg, con_ia=con_ia)
     salida = []
     for msg in mensajes:
         antes_dijo, antes_esc = len(reg.dijo), len(reg.escribio)
+        antes_av = len(reg.avisos)
         paso = {'tu': msg}
         try:
-            if msg.startswith('!'):
-                # !accion:pid:idx simula tocar un boton
-                bot.manejar_update(cx, {'callback_query': {
-                    'id': 'q', 'data': msg[1:],
-                    'message': {'message_id': 1, 'chat': {'id': CHAT}}}})
-            else:
-                bot.manejar_update(cx, {'message': {
-                    'message_id': 5, 'chat': {'id': CHAT}, 'text': msg}})
+            bot.manejar_update(cx, _update(msg))
         except Exception as ex:
             paso['EXCEPCION'] = f'{type(ex).__name__}: {ex}'
             reg.errores.append(paso['EXCEPCION'])
-        paso['bot'] = [d['texto'] for d in reg.dijo[antes_dijo:]]
-        paso['botones'] = [d['datos'] for d in reg.dijo[antes_dijo:] if d['datos']]
+        nuevos = reg.dijo[antes_dijo:]
+        paso['bot'] = [d['texto'] for d in nuevos]
+        paso['botones'] = [d['datos'] for d in nuevos if d['datos']]
         paso['escribio'] = reg.escribio[antes_esc:]
+        # Los avisos son los globitos de los botones. Sin mostrarlos, un toque
+        # que solo contesta el globito salia como «no respondio nada», y eso
+        # eran falsos positivos.
+        paso['avisos'] = [a for a in reg.avisos[antes_av:] if a]
+        paso['html_malo'] = [d['html_malo'] for d in nuevos if d.get('html_malo')]
+        paso['ids'] = [d['mensaje_id'] for d in nuevos if d.get('mensaje_id')]
         salida.append(paso)
 
     if como_json:
         print(json.dumps({'pasos': salida, 'borrados': reg.borrados,
-                          'errores': reg.errores}, ensure_ascii=False, indent=1))
+                          'errores': reg.errores, 'avisos': reg.avisos},
+                         ensure_ascii=False, indent=1))
         return salida
 
     for paso in salida:
@@ -270,9 +368,18 @@ def correr(mensajes, con_ia=True, como_json=False):
             print('BOT> ' + t.replace('\n', '\n     '))
         for b in paso['botones']:
             print('     botones: ' + ' '.join(b))
+        for d in paso.get('ids') or []:
+            print(f'     (mensaje #{d} — respóndele con «>{d} tu texto»)')
+        for a in paso['avisos']:
+            print(f'     (globito: {a})')
+        for m in paso['html_malo']:
+            print(f'  *** HTML QUE TELEGRAM RECHAZARIA: {m}')
         for e in paso['escribio']:
-            print(f'  >> FIREFLY {e["id"]}: {e["cambios"]}')
-        if not paso['bot'] and not paso.get('EXCEPCION'):
+            via = f' [{e["via"]}]' if e.get('via') else ''
+            print(f'  >> FIREFLY {e["id"]}{via}: {e["cambios"]}')
+        # Un globito SI es una respuesta. Contarlo como silencio daba falsos
+        # positivos en la mayoria de los botones invalidos.
+        if not paso['bot'] and not paso['avisos'] and not paso.get('EXCEPCION'):
             print('  *** EL BOT NO RESPONDIO NADA')
         print()
     if reg.borrados:

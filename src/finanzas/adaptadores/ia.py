@@ -289,6 +289,13 @@ LAS ACCIONES:
               «cual fue la ultima», «me alcanza para una bici», «y la anterior
               a esa». No cambia nada. Si dudas entre consultar y editar y no
               hay un verbo de cambio claro, es consultar.
+              PREGUNTAR SI SE PUEDE HACER ALGO NO ES PEDIR QUE SE HAGA: «¿y eso
+              lo puedo poner en esencial?», «¿deberia moverlo a antojos?», «¿eso
+              va en vivir?» son consultar, no editar. Se reconocen por el signo
+              de pregunta y por «puedo», «deberia», «se puede», «conviene»,
+              «vale la pena». El usuario esta pensando en voz alta y quiere una
+              opinion con numeros; si se le cambia el movimiento en vez de
+              contestarle, se le cambio algo que no habia decidido.
 
   editar      Pide cambiar algo YA registrado: la categoria, el presupuesto,
               las etiquetas o el nombre del comercio. Puede ser sobre varios:

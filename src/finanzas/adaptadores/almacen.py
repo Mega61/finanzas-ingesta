@@ -728,15 +728,22 @@ class Almacen:
         self.cx.commit()
         return cur.rowcount
 
-    def guardar_texto_en_espera(self, chat_id: str, txt: str) -> None:
+    def guardar_texto_en_espera(
+        self, chat_id: str, txt: str, plan: Any = None
+    ) -> None:
         """El texto libre que el bot resolvio por su cuenta, para que siga vivo
-        si el usuario toca «era otro»."""
+        si el usuario toca «era otro».
+
+        Con el PLAN que se le mostro, si habia: al confirmar se ejecuta ese y
+        no se le vuelve a preguntar al modelo. Ver la nota en el esquema.
+        """
         self.cx.execute(
-            """INSERT INTO textos_en_espera (chat_id, texto)
-               VALUES (?, ?)
+            """INSERT INTO textos_en_espera (chat_id, texto, plan)
+               VALUES (?, ?, ?)
                ON CONFLICT (chat_id) DO UPDATE SET
-                  texto = excluded.texto, creado_en = datetime('now')""",
-            (str(chat_id), txt),
+                  texto = excluded.texto, plan = excluded.plan,
+                  creado_en = datetime('now')""",
+            (str(chat_id), txt, _a_json(plan) if plan is not None else None),
         )
         self.cx.commit()
 
@@ -745,6 +752,17 @@ class Almacen:
             'SELECT texto FROM textos_en_espera WHERE chat_id = ?', (str(chat_id),)
         ).fetchone()
         return r['texto'] if r else None
+
+    def plan_en_espera(self, chat_id: str) -> dict[str, Any] | None:
+        r = self.cx.execute(
+            'SELECT plan FROM textos_en_espera WHERE chat_id = ?', (str(chat_id),)
+        ).fetchone()
+        if not r or not r['plan']:
+            return None
+        try:
+            return json.loads(r['plan'])
+        except (TypeError, ValueError):
+            return None
 
     def olvidar_texto_en_espera(self, chat_id: str) -> None:
         self.cx.execute(
