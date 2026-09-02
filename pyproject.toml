@@ -28,6 +28,9 @@ finanzas = "finanzas.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/finanzas"]
+# esquema.sql viaja DENTRO del paquete: es la definicion de la base, no un
+# archivo de configuracion que el usuario monte. Se lee con importlib.resources.
+artifacts = ["src/finanzas/esquema.sql"]
 
 
 # ----------------------------------------------------------------- pytest
@@ -73,32 +76,33 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# los CLI y las herramientas si imprimen, es su trabajo
+# La capa de entrada son los CLI: imprimen porque esa es su interfaz.
 "src/finanzas/cli.py" = ["T20"]
-# Las herramientas de un solo uso: son CLI de diagnostico, imprimen, y
-# hacen os.path porque corren fuera del contenedor.
+# registro.py es EL modulo cuyo trabajo es escribir a stdout: es el unico
+# sitio del paquete donde print() es lo correcto, y por eso existe.
+"src/finanzas/registro.py" = ["T20"]
+# Las herramientas de un solo uso: CLI de diagnostico que corren fuera del
+# contenedor.
 "herramientas/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
 # Las pruebas de fechas construyen datetime naive A PROPOSITO, para
 # verificar que a_instante los convierta a aware.
 "tests/*" = ["T20", "ARG"]
 "tests/unidad/test_fechas.py" = ["T20", "ARG", "DTZ001"]
 
-# Los modulos planos de la raiz todavia no se han movido a src/. Se revisan con
-# las mismas reglas menos estas cuatro, que son deuda conocida y mecanica:
+# Deuda conocida del codigo que se acaba de mover a src/, declarada aqui a la
+# vista y no escondida en un `# noqa` por linea:
 #
-#   T20     son CLI: imprimen porque es su interfaz
-#   PLC0415 quedan tres imports diferidos a proposito (msal, pdfplumber) y los
-#           de los bloques __main__
-#   PTH     os.path -> pathlib: ~90 cambios mecanicos, sin efecto en el
-#           comportamiento. Se hacen al mover cada modulo a src/
+#   PLC0415 imports diferidos a proposito (msal, pdfplumber: pesados y de un
+#           solo camino) y los de los bloques __main__
+#   PTH     os.path -> pathlib: ~80 cambios mecanicos, sin efecto en el
+#           comportamiento
 #   ARG001  parametros que se conservan para no romper firmas de llamadas
 #
-# La lista esta aqui, y no en un `# noqa` por linea, para que se vea cuanto
-# falta. Todo lo demas SI falla el CI.
-"*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
-"parsers/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
-"ingesta/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
-"pruebas/*.py" = ["T20", "PLC0415", "PTH", "ARG001", "ARG002"]
+# Todo lo demas SI falla el CI, en todo el arbol.
+"src/finanzas/adaptadores/*.py" = ["PLC0415", "PTH", "ARG001"]
+"src/finanzas/aplicacion/*.py" = ["PLC0415", "PTH", "ARG001"]
+"src/finanzas/entrada/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
+"src/finanzas/parsers/*.py" = ["T20", "PLC0415", "PTH", "ARG001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["finanzas"]
@@ -123,9 +127,18 @@ exclude_lines = [
     '^\s*\.\.\.$',
 ]
 
-# El umbral esta en 90 y hoy va en 93. No es un numero decorativo: de los ocho
-# bugs que llegaron a produccion, siete estaban en modulos sin una sola prueba.
-# Si baja de 90, el CI falla; subirlo es bienvenido, aflojarlo se discute.
-fail_under = 90
+# DOS puertas, y las dos dicen la verdad.
+#
+# Esta es la del TOTAL, y es un trinquete: solo puede subir. Hoy va en 32%.
+#
+# Ese numero no es una caida: antes decia 93% porque solo medía `dominio/` y
+# `almacen.py` — el resto del codigo estaba fuera de src/ y no se contaba. Al
+# entrar todo al paquete, el 32% es lo que siempre fue verdad. El nucleo sigue
+# donde estaba (dominio 87-95%, almacen 93%, el parser 91%) y eso lo cuida la
+# segunda puerta, que el CI corre aparte con --cov-fail-under=90.
+#
+# De los ocho bugs que llegaron a produccion, siete estaban en modulos sin una
+# sola prueba. Los que siguen sin cubrir son justo `aplicacion/` y `entrada/`.
+fail_under = 30
 show_missing = true
 skip_covered = true

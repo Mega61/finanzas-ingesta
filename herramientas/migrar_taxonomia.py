@@ -1,7 +1,7 @@
 """Convierte categorias que en realidad son atributos en etiquetas.
 
-    python migrar_taxonomia.py                 # SECO, muestra que haria
-    python migrar_taxonomia.py --en-serio      # lo aplica
+    python herramientas/migrar_taxonomia.py                 # SECO, muestra que haria
+    python herramientas/migrar_taxonomia.py --en-serio      # lo aplica
 
 La regla: **categoria = QUE compraste, etiqueta = POR QUE o PARA QUIEN.**
 
@@ -14,15 +14,11 @@ pena: lo que importa es que de aqui en adelante quede bien, y mover el pasado
 rompe los reportes que ya existen.
 """
 import argparse
-import os
 import sys
 from datetime import timedelta
 
 # la raiz del repo: estos scripts viven un nivel abajo
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import firefly
-
+from finanzas.adaptadores import firefly
 from finanzas.dominio import fechas
 
 # Cuanto hacia atras se toca. Mas viejo que esto se deja quieto.

@@ -55,25 +55,34 @@ manda al final.
 
 ## 2. Las capas, y quién puede llamar a quién
 
-La regla es una sola y la verifica `tests/test_arquitectura.py`: **las flechas
-solo bajan.** El dominio no puede importar nada que hable con el mundo. (Están
-las llamadas principales, no las 60 aristas del grafo completo; `taxonomia` y
-`config` los lee casi todo el mundo y no se dibujan para que se pueda leer.)
+Cada caja es una carpeta de verdad dentro de `src/finanzas/`, y la regla es una
+sola, verificada por `tests/test_arquitectura.py`: **las flechas solo bajan.**
+Una capa depende de las de abajo, nunca de las de arriba, y el dominio no puede
+importar nada que hable con el mundo.
+
+(Están las llamadas principales, no las 60 aristas del grafo completo:
+`config`, `registro` y `taxonomia` los lee casi todo el mundo y no se dibujan
+para que el diagrama se pueda leer.)
 
 No hay un solo ciclo de importación: el grafo es un DAG. Por eso los 25 imports
 que estaban dentro de funciones «por si hay ciclos» subieron al tope — un import
 adentro solo logra que una dependencia faltante explote a las 3am en el
 contenedor en vez de al arrancar.
 
+Tampoco queda un solo `sys.path.insert`. Los había en catorce archivos, y eran
+el síntoma de que la mitad del código eran archivos sueltos que se buscaban
+entre sí a mano en vez de ser un paquete instalado.
+
 ```mermaid
 flowchart TD
-    subgraph E["entrada"]
+    subgraph E["entrada/ + cli.py"]
+        CLI[cli.py<br/>el comando finanzas]
         SERV[servicio.py<br/>el proceso del contenedor]
-        DEM[demonio.py<br/>acciones por CLI]
-        HERR[herramientas/<br/>a mano]
+        DEM[demonio.py<br/>acciones sueltas]
+        HERR[herramientas/<br/>diagnostico a mano]
     end
 
-    subgraph A["aplicación · casos de uso"]
+    subgraph A["aplicacion/ · casos de uso"]
         BOT[bot.py]
         CLA[clasificador.py]
         PUBL[publicador.py]
@@ -83,7 +92,7 @@ flowchart TD
         PRES[presupuestos.py]
     end
 
-    subgraph AD["adaptadores · el mundo de afuera"]
+    subgraph AD["adaptadores/ · el mundo de afuera"]
         ALM[almacen.py<br/>TODO el SQL]
         FIRE[firefly.py]
         TELE[telegram.py]
@@ -91,13 +100,19 @@ flowchart TD
         GRAPH[ingesta/graph.py]
     end
 
-    subgraph D["dominio · lógica pura, cero I/O"]
+    subgraph P["parsers/ · el formato del banco"]
+        ALER[bancolombia_alertas.py]
+        EXTR[extracto_tarjeta.py]
+    end
+
+    subgraph D["dominio/ · logica pura, cero I/O"]
         DIN[dinero]
         FEC[fechas]
         TEX[texto]
         RECO[conciliacion]
     end
 
+    CLI --> SERV & DEM & BOT & CONC
     SERV --> BOT & CLA & PUBL & CONC
     DEM --> CLA & PUBL & CONC
     HERR --> FIRE
@@ -112,12 +127,18 @@ flowchart TD
     PRES --> FIRE
     BOT --> TELE & ALM & IA
 
+    DEM --> ALER
+    CONC --> EXTR
+    ALER --> DIN & FEC
+    EXTR --> DIN & FEC
+
     CLA --> TEX
     PUBL --> DIN & FEC
     CONC --> RECO & DIN & FEC
     INTE --> TEX
 
     style D fill:#1f3d4e,color:#fff
+    style P fill:#1f3d4e,color:#fff
     style ALM fill:#4e3d1f,color:#fff
 ```
 
@@ -131,6 +152,8 @@ Lo que **no** puede pasar, y falla el CI si pasa:
 | El dominio no importa `sqlite3`, `db`, `firefly`, `telegram`, `requests`, `config` | La lógica de conciliación llevaba dos años sin una prueba porque hacía falta un Firefly andando para ejecutarla |
 | Nadie ejecuta SQL fuera de `almacen.py` | 69 consultas en siete archivos, varias con la misma lógica escrita distinto |
 | Nadie crea tablas en tiempo de ejecución | `bot.py` creaba tres con `CREATE TABLE IF NOT EXISTS`, así que `esquema.sql` no era la fuente de verdad |
+| Ninguna capa importa de una de arriba | sin esto el grafo se vuelve una maraña y nada se puede probar por separado |
+| No queda ningún `sys.path.insert` | catorce archivos remendaban el path para encontrarse entre sí |
 
 ---
 
@@ -187,13 +210,13 @@ que solo admite un consumidor: HTTP 409 permanente.
 ```mermaid
 flowchart TB
     subgraph C["contenedor finanzas-ingesta"]
-        LOOP[servicio.py<br/>bucle único]
+        LOOP["finanzas servicio<br/>bucle unico"]
         LOOP --> T1["cada INGESTA_INTERVALO_MIN (15 por defecto):<br/>bajar · parsear · clasificar · publicar"]
         LOOP --> T2["long polling de Telegram<br/>(un solo consumidor)"]
         LOOP --> T3["a la hora de RESUMEN_HORA (21:00):<br/>resumen diario + presupuestos"]
     end
 
-    VOL[("volumen /datos<br/>finanzas.db · token de Graph")]
+    VOL[("volumen /datos<br/>finanzas.db · token de Graph<br/>FINANZAS_DATOS")]
     LOOP <--> VOL
 
     T1 -->|HTTPS| MS[Microsoft Graph]
@@ -210,6 +233,15 @@ flowchart TB
 
 La base y el token viven en el volumen, nunca en la imagen. El contenedor corre
 con un usuario sin privilegios: lee correo y tiene el token de Firefly.
+
+No monta ningún archivo de configuración: **todo** entra por variables de
+entorno, incluido `productos.csv`, que viaja como `PRODUCTOS_CSV` en una sola
+línea. Eso es a propósito — un stack de repositorio no puede montar archivos
+que el repo no tiene, y los secretos no están en el repo.
+
+`docker exec -it finanzas_ingesta finanzas estado` es la forma rápida de ver qué
+está pasando; `finanzas config` dice qué variables llegaron y a qué carpetas
+está apuntando.
 
 **Por qué la imagen se construye en el CI y no en el servidor.** Construir en el
 servidor depende de que tenga salida a internet, memoria y disco justo en ese

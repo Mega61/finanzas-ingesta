@@ -1,7 +1,7 @@
 """Diagnostico de categorias y etiquetas. NO cambia nada.
 
-    python diagnostico_taxonomia.py            # tabla en consola
-    python diagnostico_taxonomia.py --json     # para generar el informe
+    python herramientas/diagnostico_taxonomia.py            # tabla en consola
+    python herramientas/diagnostico_taxonomia.py --json     # para generar el informe
 
 Saca, por cada categoria: cuantas veces se uso, cuanta plata movio, en que
 presupuestos cayo, desde y hasta cuando se uso, y una propuesta de fusion
@@ -12,17 +12,13 @@ que el usuario apruebe o corrija cada una antes de tocar el libro.
 """
 import argparse
 import collections
-import json
-import os
-import sys
 
 # la raiz del repo: estos scripts viven un nivel abajo
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import contextlib
+import json
+import sys
 
-import firefly
-
+from finanzas.adaptadores import firefly
 from finanzas.dominio import dinero as _dinero
 
 # Debajo de este uso se considera cola larga y se propone fusion.

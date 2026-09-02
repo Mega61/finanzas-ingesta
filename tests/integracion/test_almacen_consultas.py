@@ -9,13 +9,15 @@ y el diagnostico, y varias tenian un filtro sutil que ya se equivoco una vez.
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
 
+from finanzas.adaptadores import db
 from finanzas.adaptadores.almacen import Almacen
 
-ESQUEMA = Path(__file__).resolve().parent.parent.parent / 'esquema.sql'
+# La ruta la sabe db, que es su dueño: recalcularla aqui es lo que se
+# rompio cuando el esquema paso a ser un dato del paquete.
+ESQUEMA = db.ESQUEMA
 
 
 @pytest.fixture
@@ -346,7 +348,7 @@ class TestBitacora:
     def test_el_payload_se_guarda_como_json_legible(self, alm, usuario, correo):
         """Es lo unico que queda cuando Firefly rechaza algo, asi que tiene que
         poder leerse tal cual para reproducir la llamada."""
-        import json
+        import json  # noqa: PLC0415
 
         pid = _mov(alm, usuario, correo)
         alm.anotar(

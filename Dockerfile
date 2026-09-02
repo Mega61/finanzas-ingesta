@@ -12,29 +12,36 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends tzdata ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# El paquete `finanzas` (src/) se INSTALA, no se copia y se reza. Copiar solo
-# lo que define el paquete antes del resto del codigo aprovecha la cache de
-# capas: si no cambian las dependencias, esta capa no se reconstruye.
+# Todo el codigo es un paquete y se INSTALA. Antes esto eran dos pasos —
+# instalar src/ y ademas copiar los modulos sueltos de la raiz, con un
+# PYTHONPATH apuntandoles— porque la mitad del codigo no era paquete. Ya no
+# hay modulos sueltos, asi que se instala y se acaba.
 #
-# Esto no estaba y el contenedor arrancaba con ModuleNotFoundError: finanzas.
-# Lo detecto la comprobacion de arranque del CI, antes de llegar al servidor.
+# Copiar solo lo que define el paquete antes de nada mas aprovecha la cache:
+# si no cambian las dependencias, esta capa no se reconstruye.
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 RUN pip install --no-cache-dir .
 
-# El commit con el que se construyo, para que /version lo pueda reportar. Asi
-# se sabe de una si el contenedor esta corriendo codigo viejo.
+# El commit con el que se construyo, para que `finanzas version` lo reporte.
+# Asi se sabe de una si el contenedor esta corriendo codigo viejo.
 ARG GIT_SHA=desconocido
 ARG BUILD_FECHA=desconocida
 ENV GIT_SHA=$GIT_SHA BUILD_FECHA=$BUILD_FECHA
 
-# Los modulos planos (todavia sin migrar) van aparte y se encuentran por
-# PYTHONPATH. A medida que se muevan a src/ esta linea se puede quitar.
-COPY . /app/automatizacion/
-ENV PYTHONPATH=/app/automatizacion
-
-# La base de la cola y el token de Graph viven en un volumen, no en la imagen.
-ENV FINANZAS_DATOS=/datos
+# Las tres carpetas, explicitas. El paquete instalado vive en site-packages,
+# asi que ya no puede deducirlas de su propia ubicacion.
+#
+#   DATOS      el volumen: la cola, el token de Graph, el offset de Telegram.
+#   PERSONAL   apunta al volumen a proposito: aqui no hay extractos, pero si
+#              alguna vez se copian ahi, `finanzas conciliar` los encuentra sin
+#              pasarle --carpeta.
+#   PROYECTO   /app, donde quedo el pyproject. En el contenedor no hay .env ni
+#              productos.csv: TODA la configuracion entra por variables de
+#              entorno (PRODUCTOS_CSV trae el CSV en una sola linea).
+ENV FINANZAS_DATOS=/datos \
+    FINANZAS_PERSONAL=/datos \
+    FINANZAS_PROYECTO=/app
 VOLUME ["/datos"]
 
 # Usuario sin privilegios: este contenedor lee correo y tiene el token de Firefly.
@@ -48,6 +55,6 @@ p=os.path.join(os.environ['FINANZAS_DATOS'],'finanzas.db'); \
 sys.exit(0) if not os.path.exists(p) else sqlite3.connect(p).execute('select 1')"
 
 # Un solo proceso: ingesta con horario + bot de Telegram. Se entra por el
-# comando `finanzas`, que el paquete instala, para que dentro del contenedor
-# valga tambien `docker exec ... finanzas estado`.
+# comando `finanzas`, que el paquete instala, asi que dentro del contenedor
+# tambien vale `docker exec ... finanzas estado`.
 CMD ["finanzas", "servicio"]

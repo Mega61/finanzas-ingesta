@@ -1,7 +1,7 @@
 """Auditoria de Firefly. NO cambia nada, solo busca lo que no cuadra.
 
-    python auditar_firefly.py
-    python auditar_firefly.py --saldo "Bancolombia=3893214.60"
+    python herramientas/auditar_firefly.py
+    python herramientas/auditar_firefly.py --saldo "Bancolombia=3893214.60"
 
 Busca seis clases de problema:
 
@@ -19,14 +19,10 @@ ultimos movimientos con saldo corrido para ubicar donde se separo.
 """
 import argparse
 import collections
-import os
 import sys
 
 # la raiz del repo: estos scripts viven un nivel abajo
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import firefly
-
+from finanzas.adaptadores import firefly
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import fechas
 

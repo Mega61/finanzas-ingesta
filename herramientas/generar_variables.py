@@ -1,6 +1,6 @@
 """Genera el bloque de variables de entorno para pegar en Portainer.
 
-    python generar_variables.py
+    python herramientas/generar_variables.py
 
 Escribe `portainer-variables.txt` en la carpeta de arriba (fuera del repo,
 porque lleva los tokens).
@@ -17,12 +17,11 @@ import os
 import sys
 
 # la raiz del repo: estos scripts viven un nivel abajo
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import config
+from finanzas import config
+from finanzas.adaptadores import graph
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
-SALIDA = os.path.join(config.RAIZ, 'portainer-variables.txt')
+SALIDA = config.ruta_personal('portainer-variables.txt')
 
 # Estas hay que confirmarlas contra la instalacion de cada uno.
 POR_CONFIRMAR = {
@@ -36,9 +35,7 @@ SECRETO = ('TOKEN', 'CLAVE', 'PASSWORD', 'SECRET')
 def refresh_token_de_graph():
     """Lo saca del cache de MSAL, para que el contenedor no tenga que hacer el
     device flow (nadie veria el codigo)."""
-    ruta = os.path.join(config.DATOS, '.cache_graph.json')
-    if not os.path.exists(ruta):
-        ruta = os.path.join(AQUI, '.cache_graph.json')
+    ruta = graph.CACHE
     if not os.path.exists(ruta):
         return None
     with open(ruta, encoding='utf-8') as fh:

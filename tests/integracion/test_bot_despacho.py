@@ -16,10 +16,14 @@ from pathlib import Path
 
 import pytest
 
+from finanzas.adaptadores import db
+from finanzas.adaptadores.almacen import Almacen
+from finanzas.entrada import bot
+
 RAIZ = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ))
 
-ESQUEMA = RAIZ / 'esquema.sql'
+ESQUEMA = db.ESQUEMA
 
 
 class TelegramFalso:
@@ -55,10 +59,6 @@ class TelegramFalso:
 @pytest.fixture
 def entorno(monkeypatch, tmp_path):
     """El bot con la base en memoria y Telegram de mentiras."""
-    import bot
-    import db
-
-    from finanzas.adaptadores.almacen import Almacen
 
     cx = sqlite3.connect(':memory:')
     cx.row_factory = sqlite3.Row

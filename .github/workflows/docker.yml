@@ -28,28 +28,33 @@ jobs:
       - name: Pruebas
         run: |
           python -m pip install --quiet -e ".[dev]"
-          # Las unitarias del dominio, mas la que verifica que TODO archivo
-          # compile y TODO modulo importe. Esa ultima existe porque un
-          # reemplazo por regex dejo un archivo roto y llego a main.
-          # Con piso de cobertura: 90%. De los ocho bugs que llegaron a
-          # produccion, siete estaban en modulos sin una sola prueba.
+          # Una sola carpeta de pruebas. Antes habia dos (tests/ y pruebas/)
+          # y las de pruebas/ solo corrian aqui, asi que sus guardianes no
+          # protegian mientras se editaba en local.
+          #
+          # Cubre: las unitarias del dominio, que TODO archivo compile y TODO
+          # modulo importe (un reemplazo por regex dejo un archivo roto y llego
+          # a main), el parser contra los 863 correos reales (se salta si no
+          # estan, que es el caso aqui), y que toda variable que el codigo lee
+          # llegue al contenedor.
+          #
+          # Dos puertas de cobertura, y las dos dicen la verdad:
+          #
+          #   1. El NUCLEO (dominio + almacen + el parser de alertas) al 90%.
+          #      Ahi vive la logica y no hay excusa. Hoy va en 92%.
+          #   2. El TOTAL como trinquete: solo puede subir. Hoy va en 32%.
+          #
+          # El 32% no es una caida. Antes decia 93% porque solo se medía el
+          # nucleo: el resto del codigo estaba fuera de src/ y no se contaba.
+          python -m pytest tests -q             --cov=src/finanzas/dominio             --cov=src/finanzas/adaptadores/almacen.py             --cov=src/finanzas/parsers/bancolombia_alertas.py             --cov-fail-under=90 --cov-report=term
           python -m pytest tests -q --cov=src/finanzas --cov-report=term
-          # el parser contra el archivo real de correos; si no esta, corre solo
-          # las unitarias y no falla
-          python pruebas/test_alertas.py
-          # que toda variable que el codigo lee llegue al contenedor
-          python pruebas/test_config.py
 
       - name: Lint
         run: |
-          # Ya cubre TODO el codigo, no solo src/. La deuda que queda esta
-          # declarada como per-file-ignores en pyproject.toml, a la vista, y
-          # cualquier cosa fuera de esa lista falla el CI.
-          #
-          # Extenderlo aqui encontro de una un `fechas` sin importar en
-          # asesor.py y presupuestos.py: /asesor se caia al llamarlo, y ningun
-          # import ni prueba lo veia porque estaba dentro de una funcion.
-          python -m ruff check src tests *.py herramientas parsers ingesta pruebas
+          # Cubre TODO el codigo: ya no hay modulos sueltos en la raiz. La
+          # deuda que queda esta declarada como per-file-ignores en
+          # pyproject.toml, a la vista, y lo que no este ahi falla el CI.
+          python -m ruff check src tests herramientas
           python -m ruff format --check src tests
 
       - uses: docker/setup-buildx-action@v3
@@ -90,10 +95,27 @@ jobs:
 
       - name: Comprobar que la imagen arranca
         run: |
-          # El CMD del contenedor es `finanzas servicio`, asi que si el comando
-          # no existe el contenedor no levanta. Se comprueba aqui.
-          docker run --rm ${{ steps.img.outputs.ref }}:latest finanzas version
-          docker run --rm ${{ steps.img.outputs.ref }}:latest finanzas estado
-          docker run --rm -e FINANZAS_DATOS=/datos \
-            ${{ steps.img.outputs.ref }}:latest \
-            python -c "import sys; sys.path.insert(0,'/app/automatizacion'); import finanzas.dominio.conciliacion, finanzas.dominio.dinero, finanzas.dominio.fechas, finanzas.dominio.texto; from finanzas.adaptadores.almacen import Almacen; import config, db, firefly, clasificador, publicador, conciliador, bot, telegram, ia, interprete, asesor, presupuestos, taxonomia, demonio, servicio; print('paquete + modulos planos: todo importa')"
+          # El CMD del contenedor es `finanzas servicio`: si el comando no
+          # existe, el contenedor no levanta. Eso ya paso — llego a produccion
+          # una imagen sin el paquete instalado.
+          IMG=${{ steps.img.outputs.ref }}:latest
+          docker run --rm "$IMG" finanzas version
+          docker run --rm "$IMG" finanzas config
+          docker run --rm "$IMG" finanzas estado
+          # Las cinco capas, sin PYTHONPATH ni rutas: el paquete se instala.
+          # -i es obligatorio: sin stdin conectado, python no lee el
+          # heredoc, no ejecuta nada y el paso pasa en verde sin comprobar.
+          docker run --rm -i "$IMG" python - <<'PY'
+          import finanzas.cli, finanzas.config, finanzas.registro
+          from finanzas.adaptadores import almacen, db, firefly, graph, ia, telegram
+          from finanzas.aplicacion import (asesor, clasificador, conciliador,
+                                           interprete, presupuestos, publicador,
+                                           taxonomia)
+          from finanzas.dominio import conciliacion, dinero, fechas, texto
+          from finanzas.entrada import bot, demonio, servicio, verificar
+          from finanzas.parsers import bancolombia_alertas, extracto_tarjeta
+          print("las 5 capas importan")
+          a = almacen.Almacen.abrir(":memory:", db.ESQUEMA)
+          n = len(list(a.cx.execute("SELECT name FROM sqlite_master WHERE type='table'")))
+          print(f"esquema.sql viaja en el paquete ({n} tablas): {db.ESQUEMA}")
+          PY

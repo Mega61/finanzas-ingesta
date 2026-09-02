@@ -15,13 +15,15 @@ from pathlib import Path
 
 import pytest
 
+from finanzas.adaptadores import telegram
+from finanzas.entrada import bot
+
 RAIZ = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ))
 
 
 @pytest.fixture
 def tg(monkeypatch):
-    import telegram
 
     monkeypatch.setattr(telegram, '_token', lambda: 'ficticio')
     return telegram
@@ -117,7 +119,6 @@ class TestMenuDeComandos:
         monkeypatch.setattr(
             tg, 'call', lambda m, payload=None, timeout=60: visto.update(payload) or {}
         )
-        import bot
 
         tg.poner_comandos(list(bot.DESCRIPCIONES))
         enviados = {c['command'] for c in visto['commands']}

@@ -111,12 +111,13 @@ camino fácil en un lado distinto (verificado a mediados de 2026).
 
 ## El parser
 
-`parsers/bancolombia_alertas.py` — probado contra un archivo de **863 correos
+`src/finanzas/parsers/bancolombia_alertas.py` — probado contra un archivo de
+**863 correos
 reales: 100% clasificados, 0 sin reconocer.** Las 71 plantillas distintas del
 banco se reducen a 13 familias.
 
 ```bash
-python pruebas/test_alertas.py
+pytest tests/integracion/test_alertas.py -s
 ```
 
 | Familia | Qué es |
@@ -218,25 +219,29 @@ pares propios.
 ## Puesta en marcha
 
 ```bash
-cp .env.ejemplo .env                      # y llenarlo
-cp productos.ejemplo.csv productos.csv    # y poner tus tarjetas
-pip install -r requirements.txt
-python verificar.py                       # revisa cada credencial por separado
+pip install -e .                                  # instala el paquete
+cp despliegue/.env.ejemplo .env                   # y llenarlo
+cp despliegue/productos.ejemplo.csv productos.csv # y poner tus tarjetas
+finanzas revisar                                  # ¿sirven las credenciales?
 ```
 
-`verificar.py` prueba Firefly, Graph, Gmail y Telegram por separado: si una falla
-las demás siguen. Para Graph hace el device code flow una vez.
+`finanzas revisar` prueba Firefly, Graph, Gmail y Telegram por separado: si una
+falla las demás siguen. Para Graph hace el device code flow una vez.
+
+El `.env` y `productos.csv` van en la raíz del repo, no en `despliegue/`: ahí
+están los ejemplos, no tus datos. `finanzas config` dice dónde los está
+buscando.
 
 ```bash
-python -m demonio estado         # qué hay en la cola
-python -m demonio sembrar        # aprender del histórico de Firefly
-python -m demonio bajar          # traer correo nuevo
-python -m demonio procesar       # parsear y clasificar
-python -m demonio publicar       # SECO por defecto
-python -m demonio publicar --en-serio
-python -m demonio conciliar      # cruzar extractos
-python -m demonio ciclo          # todo lo anterior
-python bot.py escuchar           # el bot de Telegram
+finanzas estado                # qué hay en la cola
+finanzas sembrar               # aprender del histórico de Firefly
+finanzas bajar                 # traer correo nuevo
+finanzas procesar              # parsear y clasificar
+finanzas publicar              # SECO por defecto
+finanzas publicar --en-serio
+finanzas conciliar             # cruzar extractos
+finanzas ciclo                 # todo lo anterior
+finanzas bot escuchar          # el bot de Telegram
 ```
 
 ### La marca de agua
@@ -277,12 +282,13 @@ docker exec -it finanzas-ingesta finanzas estado
 docker exec -it finanzas-ingesta finanzas version
 ```
 
-Cada módulo sigue corriéndose suelto (`python demonio.py estado`): el comando
+Cada módulo sigue corriéndose suelto (`finanzas estado`): el comando
 solo enruta, no reimplementa nada.
 
 ### Despliegue
 
-`stack.portainer.yml` es una plantilla. Hay que ajustar el nombre de la red y de
+`despliegue/stack.portainer.yml` es una plantilla. En Portainer, el campo
+**Compose path** tiene que decir `despliegue/stack.portainer.yml`. Hay que ajustar el nombre de la red y de
 la URL de Firefly a tu instalación; van como variables, no en el código. El
 servicio no publica puertos: nadie tiene que entrarle de afuera.
 
@@ -297,44 +303,67 @@ Los diagramas están en [`docs/arquitectura.md`](docs/arquitectura.md): el
 recorrido de un movimiento, las capas y quién puede llamar a quién, los
 estados de un pendiente, y lo que corre en el contenedor.
 
-Dos capas, con una regla que se verifica en las pruebas: **el dominio no sabe de
-red ni de base de datos.**
+**Todo el código es un paquete.** La raíz solo tiene lo que tiene que estar ahí:
+
+```
+pyproject.toml   README.md   LICENSE   Dockerfile   .gitignore
+src/finanzas/    el paquete
+tests/           las pruebas — UNA sola carpeta
+herramientas/    diagnóstico y migraciones, se corren a mano
+docs/            arquitectura y puesta en marcha
+despliegue/      el stack de Portainer y los .ejemplo
+```
+
+Cuatro capas, y una regla que verifican las pruebas: **las flechas solo bajan.**
 
 ```
 src/finanzas/
-  dominio/          lógica pura, sin I/O
+  config.py         las tres carpetas, y los secretos
+  registro.py       el único sitio del paquete donde print() es correcto
+  cli.py            el comando `finanzas`: enruta, no reimplementa
+  esquema.sql       la definición de la base, como dato del paquete
+
+  dominio/          lógica pura, cero I/O — se prueba sin montar nada
     dinero.py         parsear y formatear plata (Decimal, no float)
     fechas.py         todo en hora de Bogotá; nada de datetime naive
     texto.py          normalizar nombres de comercio
     conciliacion.py   emparejar libro contra extracto
-  adaptadores/
+
+  adaptadores/      el mundo de afuera
     almacen.py        TODO el SQL, un método con nombre por consulta
-  cli.py            el comando `finanzas`: enruta, no reimplementa
+    db.py             capa delgada sobre el almacén, por compatibilidad
+    firefly.py  telegram.py  ia.py  graph.py
 
-<raíz>/             módulos de aplicación, todavía planos
-  servicio.py         el proceso del contenedor: ingesta con horario + bot
-  demonio.py          las acciones sueltas por CLI
-  bot.py              Telegram: pregunta, aprende y responde
-  clasificador.py     cuenta, categoría y presupuesto
-  publicador.py       escribe en Firefly, idempotente por external_id
-  conciliador.py      cruza extractos y cierra movimientos
-  interprete.py       entiende «fue la comida de la gata en Tierragro»
-  asesor.py           responde «¿me alcanza para esto?» con tus números
-  presupuestos.py     estado de los presupuestos y categoría → presupuesto
-  taxonomia.py        qué es categoría y qué es etiqueta
-  firefly.py · telegram.py · ia.py · config.py    los cuatro de afuera
-  db.py               capa delgada sobre el almacén, por compatibilidad
-  esquema.sql         la fuente de verdad del esquema
+  aplicacion/       casos de uso
+    clasificador.py   cuenta, categoría y presupuesto
+    publicador.py     escribe en Firefly, idempotente por external_id
+    conciliador.py    cruza extractos y cierra movimientos
+    interprete.py     entiende «fue la comida de la gata en Tierragro»
+    asesor.py         responde «¿me alcanza para esto?» con tus números
+    presupuestos.py   estado de los presupuestos y categoría → presupuesto
+    taxonomia.py      qué es categoría y qué es etiqueta
 
-parsers/            correo y PDF → movimiento
-ingesta/            Microsoft Graph
-herramientas/       diagnóstico y migraciones, se corren a mano
-tests/              unidad (dominio), integración (SQLite real), arquitectura
+  entrada/          los puntos de entrada
+    servicio.py       el proceso del contenedor: ingesta con horario + bot
+    demonio.py        las acciones sueltas
+    bot.py            Telegram: pregunta, aprende y responde
+    verificar.py      ¿sirven las credenciales?
+
+  parsers/          correo y PDF del banco → movimiento
 ```
 
-El dominio se prueba sin montar nada. Los adaptadores se prueban contra SQLite
-en memoria con el esquema real. Los de afuera (Firefly, Telegram, Gemini) se
-reemplazan por dobles.
+### Las tres carpetas
+
+`config.py` resuelve tres rutas distintas, y las tres se pueden fijar por
+entorno. Antes eran dos variables (`AQUI` y `RAIZ`) cargando tres significados,
+y `RAIZ` quería decir «la carpeta arriba del código» — que daba lo correcto solo
+porque el código estaba justo debajo. `finanzas config` las muestra resueltas.
+
+| | Qué hay ahí | Variable |
+|---|---|---|
+| `PROYECTO` | el repo: `.env`, `productos.csv` | `FINANZAS_PROYECTO` |
+| `PERSONAL` | tus datos, **fuera** del repo: extractos, correos | `FINANZAS_PERSONAL` |
+| `DATOS` | el volumen: `finanzas.db`, el token de Graph | `FINANZAS_DATOS` |
 
 ### Por qué esta forma
 
@@ -346,6 +375,12 @@ módulo con pruebas de verdad no produjo ninguno.
 Sacar la lógica pura a `dominio/` es lo que hizo posible escribirlas. Cada
 prueba rara que hay ahí documenta el bug del que salió.
 
+Y mientras la mitad del código eran archivos sueltos en la raíz, cada módulo
+remendaba `sys.path` para encontrar a los demás, el `.env` se buscaba «un nivel
+arriba de mí», y el resto de los archivos —el esquema, los `.md`, el stack— no
+tenían más sitio donde vivir que al lado. Ahora se instala, y una prueba falla
+si vuelve a aparecer un `sys.path.insert`.
+
 ---
 
 ## Correr las pruebas
@@ -353,25 +388,38 @@ prueba rara que hay ahí documenta el bug del que salió.
 ```bash
 pip install -e ".[dev]"
 
-pytest tests                       # 305 pruebas, ~1 segundo
-pytest tests --cov=src/finanzas    # el CI exige 90%, hoy va en 93%
-python pruebas/test_alertas.py     # el parser contra los correos reales
-python pruebas/test_config.py      # que toda variable llegue al contenedor
+pytest tests                       # 409 pruebas, ~3 segundos
+pytest tests --cov=src/finanzas    # cobertura por archivo
 
-ruff check src tests *.py herramientas parsers ingesta pruebas
+ruff check src tests herramientas
 ruff format --check src tests
 ```
 
-Tres pruebas cuidan la estructura, y valen la pena entenderlas:
+Una sola carpeta. Antes había dos (`tests/` y `pruebas/`) y las de `pruebas/`
+solo corrían en CI, así que sus guardianes no protegían mientras se editaba —
+y eso dejó pasar un `TELEGRAM_BOT_TOKEN` inventado.
+
+`tests/test_arquitectura.py` cuida la estructura, y vale la pena entenderlo:
 
 - **`test_el_sql_solo_vive_en_el_almacen`** — había 69 consultas repartidas en
   siete archivos, varias con la misma lógica escrita distinto. Cambiar el
   esquema obligaba a cazarlas todas y siempre se escapaba una.
+- **`test_las_flechas_solo_bajan`** — una capa puede depender de las de abajo,
+  nunca de las de arriba.
 - **`test_el_dominio_no_sabe_de_sqlite`** — si el dominio importa la base, deja
   de poderse probar sin montar una, y ahí es donde se acumularon los bugs.
 - **`test_nadie_crea_tablas_en_tiempo_de_ejecucion`** — `bot.py` creaba tres
   tablas al vuelo con `CREATE TABLE IF NOT EXISTS`, así que `esquema.sql` no era
   la fuente de verdad y las pruebas veían un esquema distinto al de producción.
+- **`test_no_quedan_remiendos_de_sys_path`** — cada `sys.path.insert` era el
+  síntoma de que los módulos eran archivos sueltos y no un paquete.
+- **`test_la_frontera_esta_anotada`** — los cuatro módulos que hablan con el
+  mundo son contratos; equivocarse en la forma de lo que devuelven no da error,
+  da `None` en silencio.
+
+Ninguna de esas listas se escribe a mano: recorren el paquete. Cuando estaban
+escritas a mano quedaron obsoletas el día que los módulos cambiaron de sitio, y
+pasaron a verificar archivos que ya no existían.
 
 El CI construye la imagen y comprueba que arranque. Eso también existe por un
 motivo: el contenedor llegó a producción sin el paquete `finanzas` instalado.
@@ -382,14 +430,22 @@ motivo: el contenedor llegó a producción sin el paquete `finanzas` instalado.
 
 Funciona de punta a punta y corre solo: baja correo, parsea, clasifica, publica,
 concilia, pregunta lo que no sabe y manda el resumen diario. Un único proceso
-(`servicio.py`) hace la ingesta con horario y atiende el bot.
+(`finanzas servicio`) hace la ingesta con horario y atiende el bot.
 
 - parser: 100% de 863 correos reales
 - clasificador: ~70% sin preguntar, o sea unas 28 preguntas al mes
-- cobertura del paquete: 93%
+- pruebas: 409
 
-Falta el segundo usuario por Gmail, y terminar de mover los módulos planos a
-`src/`.
+**Cobertura: el núcleo en 92%, el total en 32%.** El CI exige las dos cosas: 90%
+en `dominio/` + `almacen.py` + el parser de alertas, y el total como trinquete
+que solo puede subir.
+
+Ese 32% no es una caída. Antes decía 93% porque solo se medía el núcleo — el
+resto del código vivía fuera de `src/` y no se contaba. Al entrar todo al
+paquete, el número por fin mide todo, y dice la verdad: `aplicacion/` y
+`entrada/` están entre 7% y 30%. Es lo que sigue.
+
+Falta también el segundo usuario por Gmail.
 
 ## Licencia
 

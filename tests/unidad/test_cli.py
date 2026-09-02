@@ -8,9 +8,13 @@ modulo correcto con los argumentos intactos — sin ejecutar nada de verdad.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from finanzas import cli
+from finanzas.aplicacion import conciliador
+from finanzas.entrada import bot, demonio, servicio, verificar
 
 
 @pytest.fixture
@@ -25,11 +29,6 @@ def enrutado(monkeypatch):
             return 0
 
         return _main
-
-    import conciliador
-    import demonio
-    import servicio
-    import verificar
 
     for mod, nombre in (
         (demonio, 'demonio'),
@@ -87,10 +86,14 @@ class TestNoHayAmbiguedad:
 
     def test_todo_grupo_apunta_a_un_modulo_con_main(self):
         for grupo, (modulo, _, _) in cli.GRUPOS.items():
-            mod = __import__(modulo)
+            mod = importlib.import_module(modulo)
             assert callable(getattr(mod, 'main', None)), (
                 f'{grupo} apunta a {modulo}, que no tiene main()'
             )
+
+    def test_el_demonio_tambien_existe_y_tiene_main(self):
+        mod = importlib.import_module(cli.DEMONIO)
+        assert callable(mod.main)
 
     def test_todo_grupo_tiene_descripcion_y_ejemplos(self):
         for grupo, (_, desc, ejemplos) in cli.GRUPOS.items():
@@ -119,8 +122,6 @@ class TestEnrutamiento:
     )
     def test_cada_grupo_llega_a_su_modulo(self, enrutado, monkeypatch, comando, modulo):
         if modulo == 'bot':
-            import bot
-
             monkeypatch.setattr(
                 bot,
                 'main',
@@ -153,14 +154,12 @@ class TestEnrutamiento:
     def test_devuelve_el_codigo_de_salida_del_modulo(self, monkeypatch):
         """Si el modulo falla, el CLI tiene que fallar tambien: de eso depende
         que el contenedor se reinicie y que el CI se ponga rojo."""
-        import demonio
 
         monkeypatch.setattr(demonio, 'main', lambda argv=None: 3)
         assert cli.main(['estado']) == 3
 
     def test_un_modulo_que_no_devuelve_nada_cuenta_como_exito(self, monkeypatch):
         """Varios main() terminan sin `return`, o sea devuelven None."""
-        import demonio
 
         monkeypatch.setattr(demonio, 'main', lambda argv=None: None)
         assert cli.main(['estado']) == 0
