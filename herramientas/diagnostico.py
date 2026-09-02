@@ -16,10 +16,12 @@ No modifican nada: leen y muestran.
 """
 
 import sys
+from collections import Counter
 
 from finanzas import config
-from finanzas.adaptadores import db, graph, ia
+from finanzas.adaptadores import db, firefly, graph, ia
 from finanzas.aplicacion import asesor, clasificador, interprete, presupuestos
+from finanzas.dominio import fechas
 from finanzas.parsers import extracto_tarjeta
 
 
@@ -227,6 +229,58 @@ def pasarelas(args):
     cx.close()
 
 
+def sin_presupuesto(args):
+    """Gastos ya en Firefly sin presupuesto, y cuales se pueden llenar solos.
+
+    Con --en-serio les pone el presupuesto que tu propio historico apunta el
+    80% o mas de las veces. Los que estan repartidos no se tocan: ahi es un
+    juicio de verdad y adivinar seria peor.
+    """
+    mapa = presupuestos.mapa_categoria()
+    desde = args[0] if args and args[0][:2] == '20' else '2026-06-01'
+    ruta = (f'/api/v1/transactions?type=withdrawal'
+            f'&start={desde}&end={fechas.hoy()}')
+
+    claros, dudosos = [], []
+    for t in firefly.get_all(ruta):
+        for s in t['attributes']['transactions']:
+            if s.get('budget_name'):
+                continue
+            cat = (s.get('category_name') or '').strip()
+            seguro = presupuestos.presupuesto_seguro(cat, mapa)
+            fila = (t['id'], s['date'][:10], float(s['amount']), cat,
+                    s.get('destination_name') or s.get('description'), seguro)
+            (claros if seguro else dudosos).append(fila)
+
+    print(f'desde {desde}: {len(claros) + len(dudosos)} gastos sin presupuesto')
+    print()
+    if claros:
+        print(f'{len(claros)} con presupuesto claro segun tu historico:')
+        for tid, f, monto, cat, quien, seg in sorted(claros, key=lambda x: x[1]):
+            print(f'  #{tid:5} {f} {monto:>12,.0f} {cat:22} '
+                  f'{str(quien)[:20]:20} -> {seg}')
+    if dudosos:
+        print()
+        print(f'{len(dudosos)} donde el historico esta repartido; NO se tocan:')
+        for cat, n in Counter(x[3] or '(sin categoria)' for x in dudosos).most_common():
+            info = mapa.get(cat)
+            reparto = info['reparto'] if info else 'sin historico'
+            print(f'  {cat or "(sin categoria)":24} {n:3}  {reparto}')
+
+    if '--en-serio' not in args:
+        print()
+        print('SECO: no cambie nada. Corre con --en-serio para ponerle el')
+        print('presupuesto a los que estan claros.')
+        return
+    print()
+    for tid, _f, _m, _c, _q, seg in claros:
+        try:
+            firefly.actualizar_split(str(tid), budget_name=seg)
+            print(f'  #{tid} -> {seg}')
+        except Exception as ex:
+            print(f'  #{tid} FALLO: {str(ex)[:110]}')
+
+
 DIAGNOSTICOS = {
     'rutas': rutas,
     'base': base,
@@ -238,6 +292,7 @@ DIAGNOSTICOS = {
     'asesor': contexto,
     'extractos': extractos,
     'pasarelas': pasarelas,
+    'sin-presupuesto': sin_presupuesto,
 }
 
 

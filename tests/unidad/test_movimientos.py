@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from finanzas.aplicacion import movimientos
+from finanzas.aplicacion import movimientos, presupuestos
 
 
 def _tx(tx_id, fecha, monto, tipo='withdrawal', **extra):
@@ -248,3 +248,47 @@ class TestDescribir:
 
     def test_sin_movimientos_lo_dice(self):
         assert 'ninguno' in movimientos.en_texto([])
+
+
+class TestPresupuestoSeguro:
+    """De donde sale el presupuesto de un gasto que se clasifica solo.
+
+    El reclamo: «porque la transaccion de D1 no se ingreso en el budget de
+    esencial? me toco agregarlo a mano».
+
+    El clasificador sacaba el presupuesto de dos sitios —una lista escrita a
+    mano en taxonomia, con UNA entrada, y lo que trajera la regla aprendida— y
+    nunca consultaba el mapa categoria->presupuesto del historico. Un gasto con
+    categoria Mercado, que en el historico apunta a Esencial 49 de 49 veces,
+    entraba a Firefly SIN presupuesto.
+    """
+
+    @pytest.fixture
+    def mapa(self):
+        return {
+            'Mercado': {
+                'presupuesto': 'Esencial',
+                'seguro': True,
+                'reparto': {'Esencial': 49},
+            },
+            'Restaurante': {
+                'presupuesto': 'Vivir',
+                'seguro': False,
+                'reparto': {'Vivir': 10, 'Antojos': 3},
+            },
+        }
+
+    def test_una_categoria_que_decide_sola_da_su_presupuesto(self, mapa):
+        assert presupuestos.presupuesto_seguro('Mercado', mapa) == 'Esencial'
+
+    def test_una_repartida_no_se_adivina(self, mapa):
+        """'Restaurante' entre Vivir y Antojos es un juicio de verdad: se
+        pregunta, no se inventa."""
+        assert presupuestos.presupuesto_seguro('Restaurante', mapa) is None
+
+    def test_una_categoria_sin_historico_da_none(self, mapa):
+        assert presupuestos.presupuesto_seguro('GBS Infra', mapa) is None
+
+    @pytest.mark.parametrize('cat', [None, '', 'X'])
+    def test_sin_categoria_no_hay_presupuesto(self, mapa, cat):
+        assert presupuestos.presupuesto_seguro(cat, mapa) is None

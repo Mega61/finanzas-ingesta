@@ -741,3 +741,269 @@ class Almacen:
             ),
         )
         self.cx.commit()
+
+    # ------------------------------------------------- facturas de mercado
+
+    def guardar_factura_cruda(self, correo_id: int, archivo: str, xml: str) -> int:
+        """El XML tal como venia. Devuelve el id; si ya estaba, el que habia."""
+        fila = self.cx.execute(
+            'SELECT id FROM facturas_crudas WHERE correo_id = ? AND archivo = ?',
+            (correo_id, archivo),
+        ).fetchone()
+        if fila:
+            return fila['id']
+        cur = self.cx.execute(
+            'INSERT INTO facturas_crudas (correo_id, archivo, xml) VALUES (?, ?, ?)',
+            (correo_id, archivo, xml),
+        )
+        self.cx.commit()
+        return int(cur.lastrowid)
+
+    def facturas_sin_parsear(self, limite: int = 500) -> list:
+        return self.cx.execute(
+            'SELECT * FROM facturas_crudas WHERE parseado_en IS NULL '
+            'ORDER BY id LIMIT ?',
+            (limite,),
+        ).fetchall()
+
+    def marcar_factura_parseada(self, cruda_id: int) -> None:
+        self.cx.execute(
+            "UPDATE facturas_crudas SET parseado_en = datetime('now') WHERE id = ?",
+            (cruda_id,),
+        )
+        self.cx.commit()
+
+    def guardar_factura(self, cruda_id: int | None, f, lineas) -> bool:
+        """Cabecera + lineas. Devuelve False si el CUFE ya estaba.
+
+        El dedupe es por CUFE y no por Message-ID a proposito: la DIAN
+        reenvia la misma factura y el correo repetido trae otro Message-ID.
+        """
+        if not f.cufe:
+            return False
+        if self.cx.execute(
+            'SELECT 1 FROM facturas WHERE cufe = ?', (f.cufe,)
+        ).fetchone():
+            return False
+        self.cx.execute(
+            """INSERT INTO facturas (cufe, cruda_id, nit, proveedor, numero, tipo,
+                  signo, fecha, hora, sede, moneda, subtotal, descuento, total,
+                  medios_pago, puntos_redimidos, ahorro, pagada_con_puntos)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                f.cufe,
+                cruda_id,
+                f.nit,
+                f.proveedor,
+                f.numero,
+                f.tipo,
+                f.signo,
+                f.fecha,
+                f.hora,
+                f.sede,
+                f.moneda,
+                f.subtotal,
+                f.descuento,
+                f.total,
+                '|'.join(f.medios_pago),
+                f.puntos_redimidos,
+                f.ahorro,
+                1 if f.pagada_con_puntos else 0,
+            ),
+        )
+        self.cx.executemany(
+            """INSERT INTO factura_lineas (cufe, n, nit, codigo, descripcion,
+                  cantidad, unidad, precio_unitario, descuento, iva_pct, total,
+                  fecha) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [
+                (
+                    f.cufe,
+                    ln.n,
+                    f.nit,
+                    ln.codigo,
+                    ln.descripcion,
+                    ln.cantidad,
+                    ln.unidad,
+                    ln.precio_unitario,
+                    ln.descuento,
+                    ln.iva_pct,
+                    ln.total,
+                    f.fecha,
+                )
+                for ln in lineas
+            ],
+        )
+        self.cx.commit()
+        return True
+
+    def catalogo_ver(self, nit: str, codigo: str):
+        return self.cx.execute(
+            'SELECT * FROM catalogo WHERE nit = ? AND codigo = ?', (nit, codigo)
+        ).fetchone()
+
+    def catalogo_upsert(
+        self, nit, codigo, descripcion, tipo, grupo, categoria, origen
+    ) -> None:
+        """Guarda la clasificacion de un producto.
+
+        Nunca pisa un `origen = 'usuario'`: esa es una respuesta tuya por
+        Telegram, y una regla automatica no tiene por que ganarle. Sin esto,
+        la siguiente pasada del clasificador borraba lo que acababas de
+        contestar.
+        """
+        self.cx.execute(
+            """INSERT INTO catalogo (nit, codigo, descripcion, tipo, grupo,
+                  categoria, origen, veces, actualizado_en)
+               VALUES (?,?,?,?,?,?,?,1,datetime('now'))
+               ON CONFLICT (nit, codigo) DO UPDATE SET
+                  descripcion = CASE
+                      WHEN length(excluded.descripcion) > length(catalogo.descripcion)
+                      THEN excluded.descripcion ELSE catalogo.descripcion END,
+                  tipo       = CASE WHEN catalogo.origen = 'usuario'
+                                    THEN catalogo.tipo ELSE excluded.tipo END,
+                  grupo      = CASE WHEN catalogo.origen = 'usuario'
+                                    THEN catalogo.grupo ELSE excluded.grupo END,
+                  categoria  = CASE WHEN catalogo.origen = 'usuario'
+                                    THEN catalogo.categoria ELSE excluded.categoria END,
+                  origen     = CASE WHEN catalogo.origen = 'usuario'
+                                    THEN 'usuario' ELSE excluded.origen END,
+                  veces      = catalogo.veces + 1,
+                  actualizado_en = datetime('now')""",
+            (nit, codigo, descripcion, tipo, grupo, categoria, origen),
+        )
+        self.cx.commit()
+
+    def catalogo_por_preguntar(self, limite: int = 5) -> list:
+        return self.cx.execute(
+            'SELECT * FROM v_catalogo_por_preguntar LIMIT ?', (limite,)
+        ).fetchall()
+
+    def catalogo_marcar_preguntado(self, nit: str, codigo: str) -> None:
+        self.cx.execute(
+            "UPDATE catalogo SET preguntado_en = datetime('now') "
+            'WHERE nit = ? AND codigo = ?',
+            (nit, codigo),
+        )
+        self.cx.commit()
+
+    def facturas_sin_sincronizar(self, limite: int = 500) -> list:
+        return self.cx.execute(
+            'SELECT * FROM facturas WHERE sincronizado_en IS NULL '
+            'ORDER BY fecha LIMIT ?',
+            (limite,),
+        ).fetchall()
+
+    def resumen_facturas(self) -> dict:
+        f = self.cx.execute(
+            'SELECT COUNT(*) n, COALESCE(SUM(total * signo), 0) total, '
+            'MIN(fecha) desde, MAX(fecha) hasta FROM facturas'
+        ).fetchone()
+        c = self.cx.execute(
+            "SELECT COUNT(*) n, SUM(grupo = 'Sin clasificar') sin FROM catalogo"
+        ).fetchone()
+        return {
+            'facturas': f['n'],
+            'total': f['total'],
+            'desde': f['desde'],
+            'hasta': f['hasta'],
+            'productos': c['n'],
+            'sin_clasificar': c['sin'] or 0,
+        }
+
+    def productos_de_lineas(self) -> list:
+        """Cada (nit, codigo) que aparece en las lineas, con su mejor nombre.
+
+        La descripcion es la MAS LARGA vista y no `MAX()`: los almacenes
+        truncan el nombre y el corte varia entre facturas. `MAX()` da el
+        maximo lexicografico — cualquiera —, y con un nombre mas corto se
+        pierden justo las palabras que la regla necesita para clasificar.
+        """
+        return self.cx.execute(
+            """SELECT l.nit, l.codigo,
+                      (SELECT d.descripcion FROM factura_lineas d
+                        WHERE d.nit = l.nit AND d.codigo = l.codigo
+                        ORDER BY length(d.descripcion) DESC LIMIT 1) AS descripcion,
+                      MAX(l.iva_pct) AS iva
+               FROM factura_lineas l
+               GROUP BY l.nit, l.codigo"""
+        ).fetchall()
+
+    def catalogo_responder(
+        self, nit: str, codigo: str, tipo: str, grupo: str, categoria: str
+    ) -> None:
+        """La respuesta del usuario por Telegram. Queda con origen 'usuario',
+        que ninguna regla automatica vuelve a pisar."""
+        self.cx.execute(
+            """INSERT INTO catalogo (nit, codigo, descripcion, tipo, grupo,
+                  categoria, origen, actualizado_en)
+               VALUES (?, ?,
+                       (SELECT descripcion FROM catalogo
+                         WHERE nit = ? AND codigo = ?),
+                       ?, ?, ?, 'usuario', datetime('now'))
+               ON CONFLICT (nit, codigo) DO UPDATE SET
+                  tipo = excluded.tipo, grupo = excluded.grupo,
+                  categoria = excluded.categoria, origen = 'usuario',
+                  actualizado_en = datetime('now')""",
+            (nit, codigo, nit, codigo, tipo, grupo, categoria),
+        )
+        self.cx.commit()
+
+    def facturas_todas(self) -> list:
+        return self.cx.execute('SELECT * FROM facturas ORDER BY fecha').fetchall()
+
+    def lineas_todas(self) -> list:
+        return self.cx.execute(
+            """SELECT l.*, f.signo FROM factura_lineas l
+               JOIN facturas f ON f.cufe = l.cufe ORDER BY l.cufe, l.n"""
+        ).fetchall()
+
+    def catalogo_todo(self) -> list:
+        return self.cx.execute('SELECT * FROM catalogo ORDER BY nit, codigo').fetchall()
+
+    def primer_usuario(self) -> int | None:
+        fila = self.cx.execute('SELECT id FROM usuarios ORDER BY id LIMIT 1').fetchone()
+        return fila['id'] if fila else None
+
+    def catalogo_por_id(self, cat_id: int):
+        """Un producto del catalogo por su rowid, que es lo que viaja en el
+        callback de Telegram."""
+        return self.cx.execute(
+            'SELECT rowid AS id, * FROM catalogo WHERE rowid = ?', (cat_id,)
+        ).fetchone()
+
+    def catalogo_responder_id(
+        self, cat_id: int, tipo: str, grupo: str, categoria: str
+    ) -> None:
+        self.cx.execute(
+            """UPDATE catalogo
+                  SET tipo = ?, grupo = ?, categoria = ?, origen = 'usuario',
+                      actualizado_en = datetime('now')
+                WHERE rowid = ?""",
+            (tipo, grupo, categoria, cat_id),
+        )
+        self.cx.commit()
+
+    def catalogo_marcar_preguntado_id(self, cat_id: int) -> None:
+        self.cx.execute(
+            "UPDATE catalogo SET preguntado_en = datetime('now') WHERE rowid = ?",
+            (cat_id,),
+        )
+        self.cx.commit()
+
+    def catalogo_sin_clasificar(self, limite: int = 20) -> list:
+        """Todo lo que falta por clasificar, por plata. Ignora `preguntado_en`:
+        es para el comando /productos, que se pide a proposito."""
+        return self.cx.execute(
+            """SELECT c.rowid AS id, c.*,
+                      COALESCE(g.gasto, 0)   AS gasto,
+                      COALESCE(g.compras, 0) AS compras
+               FROM catalogo c
+               LEFT JOIN (SELECT nit, codigo, SUM(total) AS gasto,
+                                 COUNT(*) AS compras
+                          FROM factura_lineas GROUP BY nit, codigo) g
+                 ON g.nit = c.nit AND g.codigo = c.codigo
+               WHERE c.grupo = 'Sin clasificar'
+               ORDER BY COALESCE(g.gasto, 0) DESC
+               LIMIT ?""",
+            (limite,),
+        ).fetchall()

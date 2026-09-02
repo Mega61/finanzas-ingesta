@@ -102,6 +102,11 @@ services:
       # Nada anterior a esta fecha se publica. Si ya llevabas la contabilidad a
       # mano, sin esto se crean cientos de duplicados.
       INGESTA_DESDE: ${INGESTA_DESDE:-}
+      # Facturas de supermercado anteriores a esta fecha se descartan al
+      # parsear. El archivo del buzon llega hasta 2023 y para el dashboard de
+      # mercado lo viejo es ruido: precios de otra epoca y productos que ya no
+      # existen.
+      FACTURAS_DESDE: ${FACTURAS_DESDE:-2025-01-01}
 
     # Sin puertos publicados: nadie tiene que entrarle de afuera.
     security_opt:

@@ -31,6 +31,18 @@ REMITENTES = [
     'documentosbancolombia.com',
 ]
 
+# Las facturas electronicas NO se filtran por remitente, y es a proposito.
+# Exito manda desde efactura@exito.com, D1 desde Felectronica@d1.com.co y
+# Supervaquita desde siesafe@siesa.com, que es su proveedor de facturacion y
+# le factura a medio pais. Filtrar por dominio significa editar el codigo cada
+# vez que cambies de supermercado.
+#
+# Lo que si es estable es el asunto que exige la DIAN:
+#     NIT;RAZON SOCIAL;NUMERO;TIPO;NOMBRE COMERCIAL
+# Los 430 correos del archivo local lo cumplen, los tres proveedores incluidos.
+# Con esto un supermercado nuevo funciona el dia que le compres.
+ASUNTO_DIAN = re.compile(r'^\s*\d{6,12};[^;]+;[^;]+;\d{2};')
+
 
 class SinAutorizacion(Exception):
     """No hay token y no se puede pedir uno sin que el usuario intervenga."""
@@ -133,7 +145,45 @@ def _es_del_banco(msg):
     return any(d in frm.lower() for d in REMITENTES)
 
 
-CAMPOS = 'id,internetMessageId,subject,receivedDateTime,from,body,bodyPreview'
+def es_factura(msg):
+    """Una factura electronica: el asunto con formato DIAN y algo adjunto."""
+    asunto = msg.get('subject') or ''
+    return bool(ASUNTO_DIAN.match(asunto)) and bool(msg.get('hasAttachments'))
+
+
+def _nos_interesa(msg):
+    return _es_del_banco(msg) or es_factura(msg)
+
+
+CAMPOS = (
+    'id,internetMessageId,subject,receivedDateTime,from,body,bodyPreview,hasAttachments'
+)
+
+
+def adjuntos_zip(tok, mensaje_id):
+    """Los ZIP de un correo, como (nombre, bytes).
+
+    Graph devuelve el contenido en base64 dentro del mismo JSON mientras el
+    adjunto sea chico — los de factura pesan 40-70 KB, o sea que nunca hay que
+    pedir el stream aparte.
+    """
+    import base64
+
+    url = f'{GRAPH}/me/messages/{urllib.parse.quote(mensaje_id)}/attachments'
+    datos = _http(url, tok)
+    fuera = []
+    for a in datos.get('value', []):
+        nombre = a.get('name') or ''
+        contenido = a.get('contentBytes')
+        if not contenido:
+            continue
+        if not nombre.lower().endswith('.zip'):
+            continue
+        try:
+            fuera.append((nombre, base64.b64decode(contenido)))
+        except Exception as ex:  # adjunto corrupto: no tumba la pasada
+            registro.aviso(f'adjunto ilegible en {nombre}: {ex}')
+    return fuera
 
 
 def mensajes(tok, desde=None, tope=None):
@@ -158,7 +208,7 @@ def mensajes(tok, desde=None, tope=None):
     while url:
         datos = _http(url, tok)
         for m in datos.get('value', []):
-            if not _es_del_banco(m):
+            if not _nos_interesa(m):
                 continue
             yield m
             vistos += 1
@@ -181,14 +231,20 @@ def cuerpo_plano(msg):
 
 
 def bajar(cx, buzon_id, desde=None, tope=None, interactivo=False):
-    """Baja lo nuevo a correos_crudos. Devuelve (nuevos, repetidos)."""
+    """Baja lo nuevo a correos_crudos. Devuelve (nuevos, repetidos).
+
+    De las facturas electronicas guarda ademas el XML de adentro del ZIP, en
+    `facturas_crudas`. Se hace aqui y no en el parser porque el adjunto solo
+    se puede pedir mientras se tenga el id del mensaje en Graph: despues el
+    correo crudo ya no lo tiene.
+    """
 
     tok = token(interactivo=interactivo)
     nuevos = repetidos = 0
     for m in mensajes(tok, desde=desde, tope=tope):
         mid = m.get('internetMessageId') or m.get('id')
         frm = ((m.get('from') or {}).get('emailAddress') or {}).get('address', '')
-        _, era_nuevo = db.correo_guardar(
+        correo_id, era_nuevo = db.correo_guardar(
             cx,
             buzon_id,
             mid,
@@ -199,6 +255,27 @@ def bajar(cx, buzon_id, desde=None, tope=None, interactivo=False):
         )
         if era_nuevo:
             nuevos += 1
+            if es_factura(m):
+                _guardar_xml(cx, correo_id, tok, m)
         else:
             repetidos += 1
     return nuevos, repetidos
+
+
+def _guardar_xml(cx, correo_id, tok, msg):
+    """Saca los XML del ZIP adjunto y los deja en facturas_crudas."""
+    import io as _io
+    import zipfile
+
+    for nombre, crudo in adjuntos_zip(tok, msg['id']):
+        try:
+            z = zipfile.ZipFile(_io.BytesIO(crudo))
+        except zipfile.BadZipFile:
+            registro.aviso(f'ZIP ilegible: {nombre}')
+            continue
+        for interno in z.namelist():
+            if not interno.lower().endswith('.xml'):
+                continue
+            db.factura_cruda_guardar(
+                cx, correo_id, interno, z.read(interno).decode('utf-8', 'replace')
+            )

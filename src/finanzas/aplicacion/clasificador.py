@@ -17,7 +17,7 @@ import re
 from finanzas import config as _cfg
 from finanzas.adaptadores import db, firefly
 from finanzas.adaptadores.almacen import Almacen
-from finanzas.aplicacion import taxonomia
+from finanzas.aplicacion import presupuestos, taxonomia
 from finanzas.dominio import fechas as _fechas
 from finanzas.dominio import texto as _texto
 
@@ -486,7 +486,20 @@ def clasificar(cx, usuario_id, evento, indice=None):
         cat_final, etiqueta, preguntar = taxonomia.resolver(regla['categoria'])
         r['cuenta_destino'] = regla['cuenta_firefly']
         r['categoria'] = cat_final
-        r['presupuesto'] = taxonomia.presupuesto_de(cat_final) or regla['presupuesto']
+        # El presupuesto sale de tres sitios, en este orden:
+        #   1. la lista fija de taxonomia (hoy solo Suplementos -> Vivir)
+        #   2. lo que traiga la regla aprendida
+        #   3. el mapa categoria -> presupuesto del historico de Firefly
+        #
+        # El tercero faltaba, y por eso un gasto con categoria Mercado —que en
+        # el historico apunta a Esencial 49 de 49 veces— entraba a Firefly SIN
+        # presupuesto y habia que ponerselo a mano. El mapa esta cacheado por
+        # proceso: si no, cada movimiento releeria todo el historico.
+        r['presupuesto'] = (
+            taxonomia.presupuesto_de(cat_final)
+            or regla['presupuesto']
+            or presupuestos.presupuesto_seguro(cat_final)
+        )
         r['etiquetas'] = etiqueta
         r['confianza'] = 0.4 if preguntar else conf
         r['decidido_por'] = 'historico' if regla['origen'] == 'historico' else 'regla'

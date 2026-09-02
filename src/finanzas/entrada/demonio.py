@@ -379,6 +379,108 @@ def paso_publicar(cx, en_serio=False, desde=None):
 # ---------------------------------------------------------------------- main
 
 
+def paso_facturas(cx, carpeta=None, desde=None, reclasificar=False):
+    """El pipeline de facturas de supermercado, de punta a punta.
+
+    Con `carpeta` carga primero los .eml de disco: es como se sembraron los
+    dos anos de historia sin volver al buzon. Sin ella arranca de lo que ya
+    bajo Graph.
+    """
+    from finanzas.aplicacion import facturas
+
+    desde = desde or config.get('FACTURAS_DESDE', '2025-01-01')
+
+    if carpeta:
+        n = paso_importar_facturas(cx, carpeta)
+        print(f'  {n} XML nuevos desde disco')
+
+    r = facturas.parsear(cx, desde=desde)
+    print(
+        f'  parseadas: {r["nuevas"]} nuevas, {r["repetidas"]} repetidas, '
+        f'{r["viejas"]} anteriores a {desde}, {r["ilegibles"]} ilegibles'
+    )
+
+    c = facturas.clasificar(cx, solo_nuevos=not reclasificar)
+    print(
+        f'  catalogo: {c["clasificados"]} productos, {c["sin_resolver"]} sin resolver'
+    )
+
+    res = db.resumen_facturas(cx)
+    print(
+        f'  total: {res["facturas"]} facturas, COP {res["total"]:,.0f}, '
+        f'{res["desde"]} a {res["hasta"]}'
+    )
+    print(
+        f'  productos en catalogo: {res["productos"]}, '
+        f'sin clasificar: {res["sin_clasificar"]}'
+    )
+    return res
+
+
+def paso_importar_facturas(cx, carpeta):
+    """Los .eml de facturas de una carpeta -> correos_crudos + facturas_crudas.
+
+    Es el camino del historico: Graph solo trae los ultimos INGESTA_DIAS_INICIAL
+    dias, asi que los dos anos viejos entran por aqui, desde el archivo que
+    exportaste del buzon.
+    """
+    import glob
+
+    from finanzas.adaptadores import graph
+    from finanzas.aplicacion import facturas
+
+    if not os.path.isdir(carpeta):
+        print(f'  no existe {carpeta}')
+        return 0
+    b = db.almacen(cx).primer_buzon(db.primer_usuario(cx))
+    if not b:
+        print('  no hay buzon configurado')
+        return 0
+
+    n = 0
+    for ruta in sorted(glob.glob(os.path.join(carpeta, '**', '*.eml'), recursive=True)):
+        with open(ruta, 'rb') as fh:
+            msg = _email.message_from_binary_file(fh, policy=policy.default)
+        asunto = str(msg.get('subject') or '')
+        if not graph.ASUNTO_DIAN.match(asunto):
+            continue
+        mid = msg.get('message-id') or os.path.basename(ruta)
+        correo_id, _ = db.correo_guardar(
+            cx,
+            b['id'],
+            mid,
+            str(msg.get('from') or ''),
+            asunto,
+            str(msg.get('date') or ''),
+            asunto,
+        )
+        for parte in msg.walk():
+            if parte.get_content_type() != 'application/zip':
+                continue
+            for nombre, xml in facturas.xml_de_zip(parte.get_payload(decode=True)):
+                db.factura_cruda_guardar(cx, correo_id, nombre, xml)
+                n += 1
+    return n
+
+
+def paso_exportar_facturas(cx, carpeta=None):
+    from finanzas.aplicacion import facturas
+
+    carpeta = carpeta or config.ruta_datos('export')
+    cuenta = facturas.exportar(cx, carpeta)
+    print(f'  en {carpeta}:')
+    for nombre, n in cuenta.items():
+        print(f'    {nombre}: {n} filas')
+    print('\n  cargalos con:')
+    for nombre, tabla in (
+        ('producto.csv', 'finanzas.producto'),
+        ('factura.csv', 'finanzas.factura'),
+        ('factura_linea.csv', 'finanzas.factura_linea'),
+    ):
+        print(f'    python metabase/cargar_csv.py {carpeta}/{nombre} {tabla} ...')
+    return cuenta
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog='finanzas',
@@ -396,6 +498,8 @@ def main(argv=None):
             'reclasificar',
             'publicar',
             'conciliar',
+            'facturas',
+            'exportar-facturas',
             'ciclo',
         ],
     )
@@ -408,6 +512,11 @@ def main(argv=None):
     ap.add_argument('--dias', type=int, help='bajar los ultimos N dias')
     ap.add_argument('--desde', help='marca de agua YYYY-MM-DD')
     ap.add_argument('--carpeta', help='carpeta de .eml o de PDF de extracto')
+    ap.add_argument(
+        '--reclasificar',
+        action='store_true',
+        help='volver a clasificar TODO el catalogo con las reglas de hoy',
+    )
     ap.add_argument(
         '--interactivo',
         action='store_true',
@@ -434,6 +543,12 @@ def main(argv=None):
             paso_procesar(cx, uid)
         elif a.accion == 'reclasificar':
             paso_reclasificar(cx, uid)
+        elif a.accion == 'facturas':
+            paso_facturas(
+                cx, carpeta=a.carpeta, desde=a.desde, reclasificar=a.reclasificar
+            )
+        elif a.accion == 'exportar-facturas':
+            paso_exportar_facturas(cx, carpeta=a.carpeta)
         elif a.accion == 'conciliar':
             conciliador.correr(cx, carpeta=a.carpeta, dry_run=not a.en_serio)
         elif a.accion == 'publicar':
@@ -449,6 +564,8 @@ def main(argv=None):
             paso_procesar(cx, uid)
             print('publicando...')
             paso_publicar(cx, en_serio=a.en_serio, desde=a.desde)
+            print('facturas de mercado...')
+            paso_facturas(cx)
             print('\nestado final:')
             paso_estado(cx)
         return 0

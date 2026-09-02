@@ -19,6 +19,7 @@ from finanzas.adaptadores import db, firefly, ia, telegram
 from finanzas.adaptadores.almacen import Almacen
 from finanzas.aplicacion import (
     asesor,
+    catalogo,
     clasificador,
     interprete,
     movimientos,
@@ -391,6 +392,7 @@ DESCRIPCIONES = (
     ('/sinconfirmar', 'lo que está en Firefly sin confirmar'),
     ('/ultimos', 'los últimos movimientos, tocables para cambiarlos'),
     ('/listo', 'ya están bien, no me preguntes más'),
+    ('/productos', 'clasificar lo que compraste en el super'),
     ('/presupuestos', 'cómo van los cinco presupuestos del mes'),
     ('/version', 'qué código está corriendo'),
     ('/ayuda', 'esto'),
@@ -991,6 +993,158 @@ def _editar_por_texto(cx, chat, texto, tx_id=None):
 
 # La letra que viaja en callback_data. Es de un caracter porque el limite son
 # 64 bytes contando el id del pendiente y el indice de la opcion.
+
+# ------------------------------------------------ productos de supermercado
+# Preguntar por PRODUCTO y no por linea de factura: 1.925 lineas se reducen a
+# 683 productos distintos, y la categoria vive en el catalogo, no copiada en la
+# linea. O sea que contestar una vez reescribe TODAS las compras pasadas de ese
+# producto — las 30 veces que compraste tortillas desde 2025 — y no solo las
+# que vengan despues.
+#
+# La cola va ordenada por plata, no por fecha de llegada: preguntar en orden de
+# aparicion gasta los turnos en el producto que compraste una sola vez.
+
+# Su propio cupo, aparte de MAX_PREGUNTAS. Sin esto una semana clasificando
+# mercado tapa las alertas del banco, que son las que hay que mirar el mismo
+# dia.
+MAX_PRODUCTOS = 3
+
+
+def _texto_producto(p):
+    # Sin signo: en un movimiento el + o el - dice si entra o sale plata, pero
+    # una compra de supermercado siempre sale, y "+$6.059" se lee al reves.
+    plata = _dinero.formatear(p['gasto'] or 0, 'COP')
+    veces = p['compras'] or 0
+    cuantas = 'una vez' if veces == 1 else f'{veces} veces'
+    return (
+        '🛒 <b>¿Qué es esto?</b>\n\n'
+        f'<b>{p["descripcion"] or p["codigo"]}</b>\n'
+        f'comprado {cuantas} · {plata}\n\n'
+        '<i>El nombre viene cortado por el almacén. '
+        'Lo que respondas queda para siempre.</i>'
+    )
+
+
+def preguntar_productos(cx, limite=MAX_PRODUCTOS):
+    """Manda las preguntas de catalogo pendientes. Devuelve cuantas mando."""
+    chat = config.get('TELEGRAM_CHAT_ID_JUAN')
+    if not chat:
+        return 0
+    filas = _a(cx).catalogo_por_preguntar(limite)
+    mandadas = 0
+    for p in filas:
+        botones = _botonera(
+            [(g, f'fg:{p["id"]}:{i}') for i, g in enumerate(catalogo.GRUPOS)]
+        )
+        botones.append([('🤷 Saltar', f'fx:{p["id"]}:0')])
+        try:
+            telegram.enviar(chat, _texto_producto(p), botones)
+            db.catalogo_marcar_preguntado_id(cx, p['id'])
+            mandadas += 1
+        except telegram.TelegramError as ex:
+            print(f'  no pude preguntar por el producto #{p["id"]}: {ex}')
+    return mandadas
+
+
+def _toque_producto_grupo(t):
+    """Eligio el grupo. Si el grupo tiene una sola categoria, se cierra ya."""
+    p = db.catalogo_por_id(t.cx, t.pid)
+    if p is None:
+        t.aviso('ese producto ya no está')
+        return
+    if t.idx >= len(catalogo.GRUPOS):
+        t.aviso('esa opción ya no está')
+        return
+    grupo = catalogo.GRUPOS[t.idx]
+    cats = catalogo.CATEGORIAS.get(grupo, ())
+    if len(cats) <= 1:
+        _guardar_producto(t, p, grupo, cats[0] if cats else grupo)
+        return
+    # El indice de grupo viaja junto con el de categoria porque el callback de
+    # Telegram no aguanta mas de 64 bytes y no hay donde guardar el paso
+    # intermedio sin inventar otra tabla.
+    botones = _botonera(
+        [(c, f'fc:{p["id"]}:{t.idx * 100 + i}') for i, c in enumerate(cats)]
+    )
+    botones.append([('⬅️ Otro grupo', f'fv:{p["id"]}:0')])
+    telegram.editar(
+        t.chat,
+        t.mid,
+        f'🛒 <b>{p["descripcion"] or p["codigo"]}</b>\n'
+        f'Grupo: <b>{grupo}</b>\n\n¿Qué tipo?',
+        botones,
+    )
+    t.aviso(grupo)
+
+
+def _toque_producto_categoria(t):
+    p = db.catalogo_por_id(t.cx, t.pid)
+    if p is None:
+        t.aviso('ese producto ya no está')
+        return
+    gidx, cidx = divmod(t.idx, 100)
+    if gidx >= len(catalogo.GRUPOS):
+        t.aviso('esa opción ya no está')
+        return
+    grupo = catalogo.GRUPOS[gidx]
+    cats = catalogo.CATEGORIAS.get(grupo, ())
+    if cidx >= len(cats):
+        t.aviso('esa opción ya no está')
+        return
+    _guardar_producto(t, p, grupo, cats[cidx])
+
+
+def _toque_producto_volver(t):
+    p = db.catalogo_por_id(t.cx, t.pid)
+    if p is None:
+        t.aviso('ese producto ya no está')
+        return
+    botones = _botonera(
+        [(g, f'fg:{p["id"]}:{i}') for i, g in enumerate(catalogo.GRUPOS)]
+    )
+    botones.append([('🤷 Saltar', f'fx:{p["id"]}:0')])
+    telegram.editar(t.chat, t.mid, _texto_producto_simple(p), botones)
+
+
+def _texto_producto_simple(p):
+    return f'🛒 <b>¿Qué es esto?</b>\n\n<b>{p["descripcion"] or p["codigo"]}</b>'
+
+
+def _toque_producto_saltar(t):
+    """No se sabe. Queda marcado como preguntado y vuelve a la cola en 3 dias."""
+    db.catalogo_marcar_preguntado_id(t.cx, t.pid)
+    t.aviso('lo dejo para después')
+    t.reemplazar('🤷 Lo dejo para después.')
+
+
+def _guardar_producto(t, p, grupo, categoria):
+    tipo = catalogo.tipo_de(grupo)
+    db.catalogo_responder_id(t.cx, t.pid, tipo, grupo, categoria)
+    n = p['veces'] or 0
+    arrastre = f'\n<i>Se aplicó a las {n} compras anteriores.</i>' if n > 1 else ''
+    t.aviso(f'{grupo} · {categoria}')
+    t.reemplazar(
+        f'✅ <b>{p["descripcion"] or p["codigo"]}</b>\n'
+        f'{tipo} · {grupo} · {categoria}{arrastre}'
+    )
+
+
+def cmd_productos(cx, chat, _texto=''):
+    """Los productos que faltan por clasificar, con sus botones."""
+    filas = _a(cx).catalogo_sin_clasificar(20)
+    if not filas:
+        telegram.enviar(chat, '✅ No hay productos sin clasificar.')
+        return
+    total = sum(f['gasto'] or 0 for f in filas)
+    telegram.enviar(
+        chat,
+        f'🛒 <b>{len(filas)} productos sin clasificar</b> '
+        f'({_dinero.formatear(total, "COP")})\n'
+        'Te mando los más caros primero.',
+    )
+    preguntar_productos(cx, limite=MAX_PRODUCTOS)
+
+
 TOQUES = {
     'c': _toque_categoria,
     'x': _toque_descartar,
@@ -1008,6 +1162,12 @@ TOQUES = {
     'mx': _toque_borrar_movimiento,
     'mB': _toque_borrar_confirmado,
     'mt': _toque_texto_movimiento,
+    # Los que empiezan por 'f' trabajan contra el CATALOGO de productos, que
+    # es un tercer espacio de nombres: ni la cola de pendientes ni Firefly.
+    'fg': _toque_producto_grupo,
+    'fc': _toque_producto_categoria,
+    'fv': _toque_producto_volver,
+    'fx': _toque_producto_saltar,
 }
 
 
@@ -1049,6 +1209,10 @@ def _cmd_ultimos(cx, chat, texto):
     cmd_ultimos(cx, chat, texto)
 
 
+def _cmd_productos(cx, chat, _texto):
+    cmd_productos(cx, chat)
+
+
 def _cmd_listo(cx, chat, texto):
     cmd_listo(cx, chat, texto)
 
@@ -1067,6 +1231,7 @@ COMANDOS = {
     '/presupuestos': _cmd_presupuestos,
     '/ultimos': _cmd_ultimos,
     '/listo': _cmd_listo,
+    '/productos': _cmd_productos,
 }
 
 

@@ -77,12 +77,17 @@ def pasada(cx, uid):
     conteo = demonio.paso_publicar(cx, en_serio=EN_SERIO) or {}
     # lo que no se supo clasificar se pregunta de una
     mandadas = bot.preguntar_pendientes(cx)
-    if nuevos or conteo or mandadas:
+    # Las facturas de supermercado van despues y con su propio cupo: son
+    # menos urgentes que una alerta del banco y no deben taparla.
+    demonio.paso_facturas(cx)
+    productos = bot.preguntar_productos(cx)
+    if nuevos or conteo or mandadas or productos:
         log(
             'ingesta',
             f'correos={nuevos} publicado={conteo.get("creado", 0)} '
             f'duplicado={conteo.get("duplicado", 0)} '
-            f'seco={conteo.get("seco", 0)} preguntas={mandadas}',
+            f'seco={conteo.get("seco", 0)} preguntas={mandadas} '
+            f'productos={productos}',
         )
     return nuevos
 

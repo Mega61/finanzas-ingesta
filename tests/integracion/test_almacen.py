@@ -86,7 +86,12 @@ class TestEsquema:
             r[0]
             for r in alm.cx.execute("SELECT name FROM sqlite_master WHERE type='view'")
         }
-        assert vistas == {'v_por_preguntar', 'v_sin_conciliar', 'v_sospechosos'}
+        assert vistas == {
+            'v_por_preguntar',
+            'v_sin_conciliar',
+            'v_sospechosos',
+            'v_catalogo_por_preguntar',
+        }
 
 
 class TestIdempotencia:

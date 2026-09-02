@@ -176,3 +176,80 @@ def bitacora(
     Almacen(cx).anotar(
         accion, usuario_id, pendiente_id, firefly_id, payload, respuesta, ok
     )
+
+
+# ------------------------------------------------------ facturas de mercado
+
+
+def factura_cruda_guardar(cx, correo_id, archivo, xml):
+    return Almacen(cx).guardar_factura_cruda(correo_id, archivo, xml)
+
+
+def facturas_sin_parsear(cx, limite=500):
+    return Almacen(cx).facturas_sin_parsear(limite)
+
+
+def factura_marcar_parseada(cx, cruda_id):
+    Almacen(cx).marcar_factura_parseada(cruda_id)
+
+
+def factura_guardar(cx, cruda_id, f, lineas):
+    return Almacen(cx).guardar_factura(cruda_id, f, lineas)
+
+
+def catalogo_ver(cx, nit, codigo):
+    return Almacen(cx).catalogo_ver(nit, codigo)
+
+
+def catalogo_upsert(cx, nit, codigo, descripcion, tipo, grupo, categoria, origen):
+    Almacen(cx).catalogo_upsert(
+        nit, codigo, descripcion, tipo, grupo, categoria, origen
+    )
+
+
+def catalogo_por_preguntar(cx, limite=5):
+    return Almacen(cx).catalogo_por_preguntar(limite)
+
+
+def catalogo_marcar_preguntado(cx, nit, codigo):
+    Almacen(cx).catalogo_marcar_preguntado(nit, codigo)
+
+
+def resumen_facturas(cx):
+    return Almacen(cx).resumen_facturas()
+
+
+def productos_de_lineas(cx):
+    return Almacen(cx).productos_de_lineas()
+
+
+def catalogo_responder(cx, nit, codigo, tipo, grupo, categoria):
+    Almacen(cx).catalogo_responder(nit, codigo, tipo, grupo, categoria)
+
+
+def facturas_todas(cx):
+    return Almacen(cx).facturas_todas()
+
+
+def lineas_todas(cx):
+    return Almacen(cx).lineas_todas()
+
+
+def catalogo_todo(cx):
+    return Almacen(cx).catalogo_todo()
+
+
+def primer_usuario(cx):
+    return Almacen(cx).primer_usuario()
+
+
+def catalogo_por_id(cx, cat_id):
+    return Almacen(cx).catalogo_por_id(cat_id)
+
+
+def catalogo_responder_id(cx, cat_id, tipo, grupo, categoria):
+    Almacen(cx).catalogo_responder_id(cat_id, tipo, grupo, categoria)
+
+
+def catalogo_marcar_preguntado_id(cx, cat_id):
+    Almacen(cx).catalogo_marcar_preguntado_id(cat_id)

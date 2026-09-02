@@ -278,3 +278,119 @@ WHERE p.estado = 'publicado'
   AND p.visto_en IS NULL
   AND julianday('now') - julianday(p.fecha) > 45
 ORDER BY p.fecha;
+
+
+-- ------------------------------------------------------- facturas de mercado
+-- Facturas electronicas DIAN de supermercado. Van aparte de `pendientes` a
+-- proposito: una factura NO es un movimiento bancario. No se publica en
+-- Firefly, no tiene estado, no se concilia contra extracto. Meterla en la
+-- misma tabla habria obligado a que la maquina de estados aguantara dos cosas
+-- distintas.
+
+-- El XML crudo, tal como venia en el ZIP del correo. Nunca se borra: cuando
+-- el parser mejore se reprocesa todo sin volver al buzon. Es el mismo
+-- principio de `correos_crudos`, y por eso guarda texto y no el ZIP.
+CREATE TABLE IF NOT EXISTS facturas_crudas (
+  id         INTEGER PRIMARY KEY,
+  correo_id  INTEGER NOT NULL REFERENCES correos_crudos(id) ON DELETE CASCADE,
+  archivo    TEXT NOT NULL,           -- nombre del .xml dentro del ZIP
+  xml        TEXT NOT NULL,
+  bajado_en  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  parseado_en TEXT,
+  UNIQUE (correo_id, archivo)
+);
+
+CREATE INDEX IF NOT EXISTS ix_facturas_sin_parsear
+  ON facturas_crudas (parseado_en) WHERE parseado_en IS NULL;
+
+CREATE TABLE IF NOT EXISTS facturas (
+  cufe              TEXT PRIMARY KEY,   -- identidad DIAN. El dedupe va por
+                                        -- aqui y no por Message-ID: la DIAN
+                                        -- reenvia la misma factura.
+  cruda_id          INTEGER REFERENCES facturas_crudas(id) ON DELETE SET NULL,
+  nit               TEXT NOT NULL,
+  proveedor         TEXT,
+  numero            TEXT,
+  tipo              TEXT NOT NULL CHECK (tipo IN ('factura', 'nota_credito')),
+  signo             INTEGER NOT NULL DEFAULT 1,
+  fecha             TEXT NOT NULL,
+  hora              TEXT,
+  sede              TEXT,
+  moneda            TEXT NOT NULL DEFAULT 'COP',
+  subtotal          REAL,
+  descuento         REAL,
+  total             REAL,               -- PayableAmount: el unico confiable
+  medios_pago       TEXT,
+  puntos_redimidos  REAL DEFAULT 0,
+  ahorro            REAL DEFAULT 0,
+  pagada_con_puntos INTEGER DEFAULT 0,
+  sincronizado_en   TEXT                -- NULL = falta subirla a Postgres
+);
+
+CREATE INDEX IF NOT EXISTS ix_facturas_fecha ON facturas (fecha);
+CREATE INDEX IF NOT EXISTS ix_facturas_sync
+  ON facturas (sincronizado_en) WHERE sincronizado_en IS NULL;
+
+CREATE TABLE IF NOT EXISTS factura_lineas (
+  cufe            TEXT NOT NULL REFERENCES facturas(cufe) ON DELETE CASCADE,
+  n               INTEGER NOT NULL,
+  nit             TEXT NOT NULL,
+  codigo          TEXT NOT NULL,
+  descripcion     TEXT,
+  cantidad        REAL,
+  unidad          TEXT,
+  precio_unitario REAL,
+  descuento       REAL,   -- AllowanceCharge de linea. Por esto
+                          -- precio * cantidad casi nunca da total.
+  iva_pct         REAL,
+  total           REAL,
+  fecha           TEXT,
+  PRIMARY KEY (cufe, n)
+);
+
+CREATE INDEX IF NOT EXISTS ix_lineas_producto ON factura_lineas (nit, codigo);
+
+-- El catalogo. La llave es (nit, codigo) y no el codigo solo: Exito usa PLU
+-- interno y D1/Supervaquita usan EAN, y los dos espacios de numeracion chocan.
+--
+-- La categoria vive AQUI y nunca se copia a la linea. Por eso contestarle una
+-- pregunta al bot reescribe la historia completa de ese producto — las 30
+-- veces que compraste tortillas desde 2025 — y no solo lo que venga despues.
+CREATE TABLE IF NOT EXISTS catalogo (
+  nit         TEXT NOT NULL,
+  codigo      TEXT NOT NULL,
+  descripcion TEXT,
+  -- Consumible | No consumible. El corte de arriba: lo que se acaba y se
+  -- repone, contra la compra de una vez. Separar comida de aseo no servia:
+  -- los dos se acaban todos los meses y se comportan igual en el presupuesto.
+  tipo        TEXT NOT NULL DEFAULT 'Consumible',
+  grupo       TEXT NOT NULL,
+  categoria   TEXT NOT NULL,
+  -- iva8 | iva0 | override | palabra | usuario.
+  -- 'usuario' es la respuesta del bot y ninguna regla la vuelve a pisar.
+  origen      TEXT NOT NULL DEFAULT 'palabra',
+  veces       INTEGER NOT NULL DEFAULT 0,
+  preguntado_en TEXT,
+  actualizado_en TEXT,
+  PRIMARY KEY (nit, codigo)
+);
+
+-- La cola del bot: productos sin resolver, del que mas plata mueve al que
+-- menos. Preguntar por orden de llegada gasta las preguntas en el producto
+-- que compraste una vez.
+CREATE VIEW IF NOT EXISTS v_catalogo_por_preguntar AS
+SELECT c.rowid AS id,   -- el rowid implicito de SQLite. Hace falta un entero
+                        -- para el callback de Telegram: la llave de verdad es
+                        -- (nit, codigo) y el codigo es alfanumerico en D1 y
+                        -- Supervaquita, asi que no cabe en `accion:id:idx`.
+       c.*,
+       COALESCE(g.gasto, 0) AS gasto,
+       COALESCE(g.compras, 0) AS compras
+FROM catalogo c
+LEFT JOIN (SELECT nit, codigo, SUM(total) AS gasto, COUNT(*) AS compras
+           FROM factura_lineas GROUP BY nit, codigo) g
+  ON g.nit = c.nit AND g.codigo = c.codigo
+WHERE c.grupo = 'Sin clasificar'
+  AND (c.preguntado_en IS NULL
+       OR julianday('now') - julianday(c.preguntado_en) > 3.0)
+ORDER BY COALESCE(g.gasto, 0) DESC;

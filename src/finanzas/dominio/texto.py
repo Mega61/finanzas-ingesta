@@ -80,8 +80,17 @@ _RUIDO = re.compile(
     r'\b(COL|COLO|CO|BOGOTA|MEDELLIN|SAS|S\.A\.S|SA|LTDA|INC|COM)\b', re.I
 )
 
-# Numero de local o sucursal: 'CYCLE GEAR N169', 'DROGUERIA ALEMANA 47'
-_LOCAL = re.compile(r'\b[A-Z]?\d{1,5}\b')
+# Numero de local o sucursal: 'CYCLE GEAR N169', 'DROGUERIA ALEMANA 47'.
+#
+# El numero suelto se quita siempre; letra+numero solo cuando el numero tiene
+# DOS o mas digitos. Antes el patron era `[A-Z]?\d{1,5}` y se comia el «D1» de
+# TIENDA D1 SABANETA: una de las cadenas de supermercado mas grandes del pais
+# perdia su identidad y quedaba como 'TIENDA SABANETA', que no distingue nada
+# (TIENDA es una palabra vaga). Y 'Mercado D1' quedaba en 'MERCADO', peor aun.
+#
+# Medido contra los 1129 nombres distintos que hay en Firefly: cambian 8, todos
+# de D1, y en los 8 el resultado nuevo es el correcto.
+_LOCAL = re.compile(r'\b(?:\d{1,5}|[A-Z]\d{2,5})\b')
 
 # Palabras demasiado comunes para decidir una categoria o un comercio por si
 # solas. Sin esto, 'comida' cazaba con 'Comida de calle' y le ganaba a que el

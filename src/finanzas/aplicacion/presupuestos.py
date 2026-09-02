@@ -15,6 +15,7 @@ Tres cosas:
 """
 
 import contextlib
+import time
 
 from finanzas.adaptadores import firefly
 from finanzas.dominio import dinero as _dinero
@@ -84,13 +85,52 @@ def estado(cuando=None):
     return sorted(salida, key=lambda x: -(x['pct'] or 0))
 
 
-def mapa_categoria(solo_activos=True, desde=None):
+# El mapa se calcula leyendo TODOS los gastos de Firefly, asi que no puede
+# recalcularse por cada movimiento que se clasifica. Se guarda por proceso, con
+# caducidad: si cambias la relacion categoria -> presupuesto en Firefly, entra
+# sola en la siguiente media hora sin reiniciar el contenedor.
+MINUTOS_DE_CACHE = 30
+_cache_mapa: dict[tuple, tuple[float, dict]] = {}
+
+
+def olvidar_cache():
+    """Para las pruebas y para forzar una relectura."""
+    _cache_mapa.clear()
+
+
+def presupuesto_seguro(categoria, mapa=None):
+    """El presupuesto de esa categoria, SOLO si decide sola.
+
+    Devuelve None cuando el historico esta repartido: ahi es un juicio de verdad
+    ('Restaurante' entre Vivir y Antojos) y hay que preguntarlo, no adivinarlo.
+
+    Existe porque el clasificador no consultaba este mapa: sacaba el presupuesto
+    de una lista escrita a mano con una sola entrada y de lo que trajera la
+    regla aprendida. Un movimiento con categoria Mercado —que en el historico
+    apunta a Esencial 49 de 49 veces— entraba a Firefly SIN presupuesto, y habia
+    que ponerselo a mano.
+    """
+    if not categoria:
+        return None
+    info = (mapa if mapa is not None else mapa_categoria()).get(categoria)
+    if not info or not info['seguro']:
+        return None
+    return info['presupuesto']
+
+
+def mapa_categoria(solo_activos=True, desde=None, usar_cache=True):
     """{categoria: {'presupuesto', 'seguro', 'reparto'}}.
 
     `seguro` dice si esa categoria apunta siempre al mismo presupuesto. Cuando
     es False hay que preguntar: son juicios de verdad, como si una comida en
     restaurante fue 'Vivir' o 'Antojos'.
     """
+    llave = (solo_activos, desde)
+    if usar_cache and llave in _cache_mapa:
+        cuando, guardado = _cache_mapa[llave]
+        if time.time() - cuando < MINUTOS_DE_CACHE * 60:
+            return guardado
+
     act = set(nombres_activos()) if solo_activos else None
     cuenta = {}
     for t in firefly.get_all('/api/v1/transactions?type=withdrawal'):
@@ -115,6 +155,7 @@ def mapa_categoria(solo_activos=True, desde=None):
             'seguro': (reparto[top] / total) >= UMBRAL_DETERMINISTICO,
             'reparto': reparto,
         }
+    _cache_mapa[llave] = (time.time(), mapa)
     return mapa
 
 

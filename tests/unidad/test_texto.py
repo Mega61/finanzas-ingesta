@@ -185,3 +185,46 @@ class TestPasarelasSinAsterisco:
         """Lo que decide si se puede aprender una regla con ese patron. RAPPI da
         False a proposito: los domicilios de Rappi SI son un comercio."""
         assert texto.es_pasarela_pura(nombre) is es
+
+
+class TestElNumeroDeLocalNoSeComeLasMarcas:
+    r"""El patron era `[A-Z]?\d{1,5}` y se comia el «D1» de TIENDA D1 SABANETA.
+
+    D1 es una de las cadenas de supermercado mas grandes del pais: cada compra
+    perdia su identidad y quedaba como 'TIENDA SABANETA', que no distingue nada
+    porque TIENDA es una palabra vaga. Y «Mercado D1» quedaba en 'MERCADO',
+    peor todavia.
+
+    Medido contra los 1129 nombres distintos que hay en Firefly: cambian 8,
+    todos de D1, y en los 8 el resultado nuevo es el correcto.
+    """
+
+    @pytest.mark.parametrize(
+        ('crudo', 'limpio'),
+        [
+            ('TIENDA D1 SABANETA S', 'TIENDA D1 SABANETA S'),
+            ('Mercado D1', 'MERCADO D1'),
+            ('Mecato D1', 'MECATO D1'),
+            ('Compra en D1', 'COMPRA EN D1'),
+            ('Abastecimiento d1', 'ABASTECIMIENTO D1'),
+        ],
+    )
+    def test_la_marca_de_letra_y_un_digito_se_conserva(self, crudo, limpio):
+        assert texto.normalizar(crudo) == limpio
+
+    @pytest.mark.parametrize(
+        ('crudo', 'limpio'),
+        [
+            ('CYCLE GEAR N169', 'CYCLE GEAR'),
+            ('DROGUERIA ALEMANA 47', 'DROGUERIA ALEMANA'),
+            ('EXITO 1234', 'EXITO'),
+            ('FARMACIA A25', 'FARMACIA'),
+        ],
+    )
+    def test_el_numero_de_local_si_se_quita(self, crudo, limpio):
+        """Numero suelto siempre; letra+numero solo con DOS o mas digitos."""
+        assert texto.normalizar(crudo) == limpio
+
+    def test_un_numero_de_cuenta_sigue_intacto(self):
+        """En una transferencia a la cuenta '6985' el numero ES la identidad."""
+        assert texto.normalizar('6985') == '6985'
