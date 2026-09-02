@@ -40,14 +40,23 @@ jobs:
           #
           # Dos puertas de cobertura, y las dos dicen la verdad:
           #
-          #   1. El NUCLEO (dominio + almacen + el parser de alertas) al 90%.
-          #      Ahi vive la logica y no hay excusa. Hoy va en 92%.
-          #   2. El TOTAL como trinquete: solo puede subir. Hoy va en 32%.
+          #   1. El NUCLEO (dominio + almacen) al 90%. Ahi vive la logica y no
+          #      hay excusa. Va en 92.7%, igual con o sin el archivo de correos.
+          #   2. El TOTAL como trinquete: solo puede subir. Aqui va en 30.8%;
+          #      en local, con los 863 correos, en 32.1%.
           #
-          # El 32% no es una caida. Antes decia 93% porque solo se medía el
+          # Los nombres van con PUNTOS y no como rutas: con `--cov=src/...`
+          # coverage avisa «module was never imported» y mide solo la primera,
+          # asi que la puerta pasaba verificando menos de lo que decia.
+          #
+          # El parser de alertas NO esta en esta puerta: llega al 91% con la
+          # prueba de los 863 correos reales, que no estan en el repo y aqui se
+          # salta. Se verifica en local con `pytest tests/integracion/test_alertas.py`.
+          #
+          # El 30% no es una caida. Antes decia 93% porque solo se medía el
           # nucleo: el resto del codigo estaba fuera de src/ y no se contaba.
-          python -m pytest tests -q             --cov=src/finanzas/dominio             --cov=src/finanzas/adaptadores/almacen.py             --cov=src/finanzas/parsers/bancolombia_alertas.py             --cov-fail-under=90 --cov-report=term
-          python -m pytest tests -q --cov=src/finanzas --cov-report=term
+          python -m pytest tests -q             --cov=finanzas.dominio --cov=finanzas.adaptadores.almacen             --cov-fail-under=90 --cov-report=term
+          python -m pytest tests -q --cov=finanzas --cov-report=term
 
       - name: Lint
         run: |

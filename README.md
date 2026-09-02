@@ -436,9 +436,12 @@ concilia, pregunta lo que no sabe y manda el resumen diario. Un único proceso
 - clasificador: ~70% sin preguntar, o sea unas 28 preguntas al mes
 - pruebas: 409
 
-**Cobertura: el núcleo en 92%, el total en 32%.** El CI exige las dos cosas: 90%
-en `dominio/` + `almacen.py` + el parser de alertas, y el total como trinquete
-que solo puede subir.
+**Cobertura: el núcleo en 92.7%, el total en 32%.** El CI exige las dos: 90% en
+`dominio/` + `almacen.py`, y el total como trinquete que solo puede subir.
+
+El parser de alertas queda fuera de esa puerta a propósito: llega al 91% con la
+prueba de los 863 correos reales, que no están en el repo. Se verifica en local
+con `pytest tests/integracion/test_alertas.py -s`.
 
 Ese 32% no es una caída. Antes decía 93% porque solo se medía el núcleo — el
 resto del código vivía fuera de `src/` y no se contaba. Al entrar todo al
