@@ -298,6 +298,19 @@ WHERE p.pregunta IS NOT NULL
        OR julianday('now') - julianday(p.preguntado_en) > 1.0)
 ORDER BY p.fecha DESC, p.id DESC;
 
+-- Lo mismo pero SIN el filtro de tiempo, para cuando el usuario pide la lista
+-- el mismo dia con /pendientes. La de arriba existe para no repetir la misma
+-- pregunta en cada pasada del demonio; cuando la pide el usuario, ese cuidado
+-- no aplica: pedirla y que conteste «no tengo nada» teniendo preguntas
+-- abiertas lo deja sin forma de retomarlas.
+CREATE VIEW IF NOT EXISTS v_abiertos AS
+SELECT p.*, u.telegram_chat_id, u.nombre AS usuario
+FROM pendientes p JOIN usuarios u ON u.id = p.usuario_id
+WHERE p.pregunta IS NOT NULL
+  AND p.estado IN ('nuevo', 'publicado', 'error')
+  AND u.activo = 1
+ORDER BY p.fecha DESC, p.id DESC;
+
 -- El resumen diario: todo lo que sigue abierto.
 CREATE VIEW IF NOT EXISTS v_sin_conciliar AS
 SELECT usuario_id,

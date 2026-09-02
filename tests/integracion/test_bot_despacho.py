@@ -180,14 +180,70 @@ class TestAyuda:
             assert c in bot.AYUDA
 
 
-class TestStart:
-    def test_el_primer_start_vincula_el_chat(self, entorno):
+class TestSoloElDueno:
+    """El nombre de un bot de Telegram es publico: cualquiera que lo encuentre
+    le puede escribir. El bot atendia a quien fuera, asi que con un /ultimos se
+    leian todos los movimientos y saldos, y con tres toques se borraba un
+    movimiento de Firefly."""
+
+    def test_un_desconocido_no_recibe_nada(self, entorno):
         bot, alm, tg, *_ = entorno
+        bot.manejar_update(alm.cx, _mensaje('/ultimos', chat='666666'))
+        bot.manejar_update(alm.cx, _mensaje('cuanto llevo gastado', chat='666666'))
+        assert tg.enviados == [], 'ni una palabra a un chat que no es suyo'
+
+    def test_un_toque_de_un_desconocido_no_se_atiende(self, entorno):
+        bot, alm, tg, *_ = entorno
+        bot.manejar_update(
+            alm.cx,
+            {
+                'callback_query': {
+                    'id': 'q1',
+                    'data': 'mx:1440:0',
+                    'message': {'message_id': 9, 'chat': {'id': '666666'}},
+                }
+            },
+        )
+        assert tg.enviados == []
+
+    def test_sin_chats_configurados_no_atiende_a_nadie(self, entorno, monkeypatch):
+        """Un despliegue a medio configurar tiene que quedar MUDO, no publico."""
+        bot, alm, tg, *_ = entorno
+        monkeypatch.setattr(bot, 'chats_autorizados', set)
+        bot.manejar_update(alm.cx, _mensaje('/ultimos'))
+        assert tg.enviados == []
+
+    def test_el_dueno_si(self, entorno):
+        bot, alm, tg, *_ = entorno
+        bot.manejar_update(alm.cx, _mensaje('/ayuda'))
+        assert tg.enviados, 'a el si le contesta'
+
+
+class TestStart:
+    def test_el_primer_start_vincula_el_chat(self, entorno, monkeypatch):
+        """El /start vincula, pero solo desde un chat AUTORIZADO.
+
+        Antes vinculaba desde cualquiera, que es la vulnerabilidad en su forma
+        mas pura: un desconocido manda /start y a partir de ahi le llegan a el
+        todas las alertas de movimientos. Para dar acceso a alguien -- la
+        novia, el segundo usuario -- su chat_id va en TELEGRAM_CHAT_ID_NOVIA y
+        despues manda /start.
+        """
+        bot, alm, tg, *_ = entorno
+        monkeypatch.setattr(bot, 'chats_autorizados', lambda: {'999'})
         alm.cx.execute('UPDATE usuarios SET telegram_chat_id = NULL')
         alm.cx.commit()
         bot.manejar_update(alm.cx, _mensaje('/start', chat='999'))
         assert alm.usuario_por_nombre('Juan')['telegram_chat_id'] == '999'
         assert tg.enviados[0][1] == bot.AYUDA
+
+    def test_un_start_de_un_chat_sin_autorizar_no_vincula_nada(self, entorno):
+        bot, alm, tg, *_ = entorno
+        alm.cx.execute('UPDATE usuarios SET telegram_chat_id = NULL')
+        alm.cx.commit()
+        bot.manejar_update(alm.cx, _mensaje('/start', chat='999'))
+        assert alm.usuario_por_nombre('Juan')['telegram_chat_id'] is None
+        assert tg.enviados == []
 
     def test_un_segundo_start_de_otro_chat_no_roba_la_cuenta(self, entorno):
         """Si alguien mas encuentra el bot, no puede quedarse con las finanzas

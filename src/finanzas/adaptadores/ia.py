@@ -324,10 +324,25 @@ REGLAS DURAS:
 - «las que estan en X» es un FILTRO para saber a cuales se refiere, no una
   orden de ponerles X. Si dice «las ultimas 2 estan en compras, agregales la
   etiqueta Ropa», el unico cambio es la etiqueta: la categoria no se toca.
+- Si se te dice LO QUE SE ACABA DE CAMBIAR y el mensaje es una correccion
+  —«no espera, era el mercado», «me equivoque, era X», «no, mejor ponlo en»—
+  va sobre ESOS ids. Sin esto la correccion se le escribia a un movimiento que
+  el usuario nunca menciono.
 - «la ultima» es el PRIMERO de la lista, que viene del mas nuevo al mas viejo.
   «la anterior a esa» es el segundo. «las ultimas 2» son los dos primeros.
 - `categoria` y `presupuesto` solo pueden ser de los catalogos. Si el usuario
-  nombra algo que no esta, deja el campo vacio y dilo en `explicacion`.
+  nombra algo que no esta, deja el campo vacio y dilo en `explicacion`. Y NO lo
+  reemplaces por el parecido de OTRO catalogo: si pide «el presupuesto Viajes
+  Largos» y ese presupuesto no existe, no le pongas la CATEGORIA «Viajes». Eso
+  le borra la categoria que tenia por algo que nunca pidio.
+- Si el mensaje le pone valores DISTINTOS a movimientos distintos —«la de
+  tierragro ponla en gato y la de uber en salidas»— usa `lotes`: un lote por
+  cada grupo que recibe lo mismo, cada uno con sus propios ids y sus propios
+  campos. Los campos de arriba (`movimientos`, `categoria`, ...) son solo para
+  cuando TODOS reciben lo mismo. Si mandas tres ids arriba con una sola
+  categoria, los tres quedan con esa categoria, que no es lo que pidio.
+  Lo mismo aplica cuando contesta varias preguntas de un tiro: «tierragro es
+  comida de gato, zona fit es el gym y google es del trabajo» son tres lotes.
 - `comercio` SI es libre: el banco manda el nombre de la pasarela de pago
   («MERCADO PAGO*XX», «BOLD CO...») y el negocio real solo lo sabe el usuario.
   Llenalo cuando te de un nombre propio de negocio.
@@ -403,6 +418,34 @@ def _esquema_orden(
         'comercio': {'type': 'string'},
         'etiquetas_agregar': {'type': 'array', 'items': {'type': 'string'}},
         'etiquetas_quitar': {'type': 'array', 'items': {'type': 'string'}},
+        # Un mensaje puede darle valores distintos a movimientos distintos.
+        # Sin esto solo cabia UN juego de cambios para toda la lista, asi que
+        # «la de tierragro a gato y la de uber a salidas» le ponia lo mismo a
+        # las dos: el modelo lo explicaba bien y se escribia mal.
+        'lotes': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'movimientos': {
+                        'type': 'array',
+                        'items': enum(lista_ids) if lista_ids else {'type': 'string'},
+                    },
+                    **({'categoria': enum(categorias)} if categorias else {}),
+                    **({'presupuesto': enum(presupuestos)} if presupuestos else {}),
+                    'comercio': {'type': 'string'},
+                    'etiquetas_agregar': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                    },
+                    'etiquetas_quitar': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                    },
+                },
+                'required': ['movimientos'],
+            },
+        },
         **(
             {
                 'producto_id': enum(list(productos)[:40]),
@@ -428,6 +471,7 @@ def _esquema_orden(
         'comercio',
         'etiquetas_agregar',
         'etiquetas_quitar',
+        'lotes',
         'producto_id',
         'producto_grupo',
         'producto_categoria',
@@ -452,6 +496,7 @@ def entender_orden(
     historial: list[tuple[str, str]] | None = None,
     productos: list[Mapping[str, Any]] | None = None,
     grupos_producto: Mapping[str, Any] | None = None,
+    tocados: list[str] | None = None,
 ) -> dict[str, Any]:
     """Que quiere hacer el usuario, y sobre que movimientos.
 
@@ -466,6 +511,14 @@ def entender_orden(
     pueda caer al camino de regex.
     """
     lineas = [f'MENSAJE DEL USUARIO: {texto}', '']
+    if tocados:
+        lineas.append(
+            'LO QUE SE ACABA DE CAMBIAR (ids): '
+            + ', '.join(tocados)
+            + '. Si el mensaje corrige o rectifica —«no espera», «me equivoque»,'
+            ' «mejor ponlo en»— es SOBRE ESTOS, no sobre el mas reciente.'
+        )
+        lineas.append('')
     if historial:
         lineas.append('LA CONVERSACION HASTA AHORA (lo ultimo al final):')
         for rol, txt in historial[-6:]:

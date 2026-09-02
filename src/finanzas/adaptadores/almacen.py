@@ -345,6 +345,13 @@ class Almacen:
             'SELECT * FROM v_por_preguntar LIMIT ?', (limite,)
         ).fetchall()
 
+    def pendientes_abiertos(self, limite: int = 50) -> list[sqlite3.Row]:
+        """Todos los que tienen pregunta abierta, aunque se hayan preguntado
+        hace un rato. Es la lista que se muestra cuando el USUARIO la pide."""
+        return self.cx.execute(
+            'SELECT * FROM v_abiertos LIMIT ?', (limite,)
+        ).fetchall()
+
     def contar_por_preguntar(self) -> int:
         return self.cx.execute('SELECT count(*) FROM v_por_preguntar').fetchone()[0]
 

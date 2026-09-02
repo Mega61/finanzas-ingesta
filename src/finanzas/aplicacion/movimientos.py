@@ -106,7 +106,9 @@ def buscar(
         return todos[:limite]
 
     def puntaje(m: dict) -> int:
-        campos = f'{m["descripcion"]} {m["destino"] or ""} {m["categoria"] or ""}'
+        # `contraparte` y no `destino`: buscar «rappicard» tiene que encontrar
+        # el abono que ENTRO de la Rappicard, donde ese nombre esta en el origen.
+        campos = f'{m["descripcion"]} {contraparte(m)} {m["categoria"] or ""}'
         del_mov = _texto.tokens_distintivos(campos)
         n = len(palabras & del_mov)
         if n:
@@ -247,11 +249,24 @@ def confirmar(tx_id: str) -> bool:
 # ---------------------------------------------------------------- para el chat
 
 
+def contraparte(m: dict) -> str:
+    """Con quien fue el movimiento, desde el lado del usuario.
+
+    En un gasto es el destino; en un INGRESO es el origen. `describir` usaba
+    siempre el destino, asi que un abono de la Rappicard se leia «+$113.943
+    Bancolombia» -- el banco propio, no quien pago -- y el asesor repetia eso
+    cuando se le preguntaba de donde venia la plata. La regla correcta ya
+    estaba en `editar`, para saber que lado renombrar.
+    """
+    lado = m['destino'] if m['valor'] < 0 else m['origen']
+    return lado or m['descripcion'] or ''
+
+
 def describir(m: dict, con_id: bool = False) -> str:
     """Una linea legible. Es lo que se manda al chat y lo que ve el modelo."""
     signo = '' if m['valor'] < 0 else '+'
     plata = f'{signo}${abs(m["valor"]):,.0f}'.replace(',', '.')
-    partes = [m['fecha'], plata, (m['destino'] or m['descripcion'])[:26]]
+    partes = [m['fecha'], plata, contraparte(m)[:26]]
     if m['categoria']:
         partes.append(f'[{m["categoria"]}]')
     # El presupuesto se ve: sin verlo no habia forma de notar que faltaba, que

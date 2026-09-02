@@ -106,8 +106,12 @@ def pendientes_por_preguntar(cx, usuario_id=None, limite=50):
 
 
 def pendientes_abiertos(cx, usuario_id=None, limite=50):
-    """Todo lo que tiene pregunta abierta, sin importar si ya se pregunto."""
-    return Almacen(cx).pendientes_por_preguntar(limite)
+    """Todo lo que tiene pregunta abierta, sin importar si ya se pregunto.
+
+    Delegaba en `pendientes_por_preguntar`, que SI filtra por tiempo: /pendientes
+    contestaba «no tengo nada por preguntarte» con tres preguntas abiertas.
+    """
+    return Almacen(cx).pendientes_abiertos(limite)
 
 
 def marcar_preguntado(cx, pendiente_id):

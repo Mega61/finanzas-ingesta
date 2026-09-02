@@ -10,6 +10,7 @@ en la vida. Despues de contestar, el movimiento se publica en Firefly de una
 """
 
 import contextlib
+import html
 import sys
 import time
 import traceback
@@ -72,11 +73,17 @@ def _categorias_firefly():
         return []
 
 
-def sugerir_categorias(cx, usuario_id, p, todas):
+def sugerir_categorias(cx, usuario_id, p, todas=None):
     """Las categorias mas probables primero.
 
     Filtra por direccion: a una nomina que ENTRA no tiene sentido ofrecerle
     'Mecato' ni 'Salidas'. Sin esto la primera prueba real ofrecio justo eso.
+
+    `todas` es el relleno para cuando la historia no alcanza. Se pide sola si
+    no la dan: antes era obligatoria y `_pedir_categoria_a_mano` le pasaba
+    `todas=False`, asi que `for c in todas` reventaba con «'bool' object is not
+    iterable» justo en el camino de rescate —el que corre cuando NO se entendio
+    el mensaje—, y el usuario quedaba colgado sin botones.
     """
     direccion = 'ingreso' if float(p['valor']) > 0 else 'gasto'
     sug = []
@@ -94,7 +101,7 @@ def sugerir_categorias(cx, usuario_id, p, todas):
 
     # si en esa direccion no hay historia suficiente, se completa con el resto
     if len(sug) < 4:
-        for c in todas:
+        for c in todas if todas is not None else _categorias_firefly():
             if len(sug) >= MAX_BOTONES:
                 break
             if c not in sug:
@@ -628,6 +635,21 @@ def _toque_presupuesto(t):
     )
 
 
+def _toque_producto_en_espera(t):
+    """«Era el producto»: aplica el texto que quedo en espera a ESE producto.
+
+    El gemelo de `_toque_mover` para el otro mundo. Los dos mundos viven en el
+    mismo chat y el texto no cabe en el callback, asi que queda guardado por
+    chat y el boton solo dice a cual de los dos iba.
+    """
+    txt = _texto_en_espera(t.cx, t.chat)
+    if not txt:
+        t.aviso('ya no tengo ese mensaje, escribelo de nuevo')
+        return
+    t.aviso('es el producto, entonces')
+    _responder_producto(t.cx, t.chat, t.pid, txt)
+
+
 def _toque_mover(t):
     """«Era otro»: aplica el texto libre que quedo en espera a ESTE movimiento.
 
@@ -1007,10 +1029,19 @@ def _pagina_de(items, pagina, plantilla_dato, volver_a):
 
 
 def _toque_lista_categorias(t):
-    """Las 71 categorias, paginadas. El indice del boton es absoluto."""
+    """TODAS las categorias, paginadas. El indice del boton es absoluto sobre
+    `movimientos.categorias()`.
+
+    Va por `sc:` y no por `mc:` a proposito. Compartian prefijo y son dos
+    listas distintas: `mc:` indexa las seis de `_categorias_para` (filtradas
+    por direccion) y esta indexa las setenta y una. Resultado: de los botones
+    de esta pantalla solo servian los seis primeros y los demas contestaban
+    «esa opcion ya no esta». No se podia poner Mercado, Gato ni Ropa desde
+    aqui.
+    """
     todas = movimientos.categorias()
     botones, pagina, total = _pagina_de(
-        todas, t.idx, lambda i: f'mc:{t.pid}:{i}', lambda p: f'lc:{t.pid}:{p}'
+        todas, t.idx, lambda i: f'sc:{t.pid}:{i}', lambda p: f'lc:{t.pid}:{p}'
     )
     botones.append([('« volver', f'mv:{t.pid}:0')])
     t.aviso('')
@@ -1186,6 +1217,20 @@ def _toque_categoria_movimiento(t):
         t.aviso('esa opción ya no está')
         return
     _aplicar_edicion(t.cx, t.chat, str(t.pid), {'categoria': cat}, aviso=t.aviso)
+
+
+def _toque_categoria_de_la_lista(t):
+    """El de la pantalla paginada: indexa TODAS las categorias."""
+    if movimientos.uno(str(t.pid)) is None:
+        t.aviso('ese movimiento ya no existe')
+        return
+    todas = movimientos.categorias()
+    if t.idx >= len(todas):
+        t.aviso('esa opción ya no está')
+        return
+    _aplicar_edicion(
+        t.cx, t.chat, str(t.pid), {'categoria': todas[t.idx]}, aviso=t.aviso
+    )
 
 
 def _toque_confirmar_movimiento(t):
@@ -1388,22 +1433,37 @@ def preguntar_productos(cx, limite=MAX_PRODUCTOS):
     filas = _a(cx).catalogo_por_preguntar(limite)
     mandadas = 0
     for p in filas:
-        botones = _botonera(
-            [(g, f'fg:{p["id"]}:{i}') for i, g in enumerate(catalogo.GRUPOS)]
-        )
-        botones.append([('🤷 Saltar', f'fx:{p["id"]}:0')])
         try:
-            msg = telegram.enviar(chat, _texto_producto(p), botones)
-            db.catalogo_marcar_preguntado_id(cx, p['id'])
-            # Se ata el mensaje al producto: asi contestar por escrito llega a
-            # donde debe. Sin esto la unica via eran los botones, y una
-            # respuesta escrita acababa en el camino de las transacciones.
-            if msg and msg.get('message_id'):
-                _a(cx).guardar_mensaje_producto(chat, msg['message_id'], p['id'])
+            _preguntar_producto_uno(cx, chat, p)
             mandadas += 1
         except telegram.TelegramError as ex:
             print(f'  no pude preguntar por el producto #{p["id"]}: {ex}')
     return mandadas
+
+
+def _preguntar_producto_uno(cx, chat, p, encabezado=''):
+    """La pregunta de UN producto, con los grupos en botones.
+
+    Aparte para poder volver a preguntar cuando el modelo propone algo que no
+    sirve -- un grupo que no existe, o con la confianza en el piso -- en vez de
+    guardar cualquier cosa o quedarse callado.
+    """
+    botones = _botonera(
+        [(g, f'fg:{p["id"]}:{i}') for i, g in enumerate(catalogo.GRUPOS)]
+    )
+    botones.append([('🤷 Saltar', f'fx:{p["id"]}:0')])
+    texto = _texto_producto(p)
+    if encabezado:
+        texto = f'{encabezado}{SALTO}{SALTO}{texto}'
+    msg = telegram.enviar(chat, texto, botones)
+    db.catalogo_marcar_preguntado_id(cx, p['id'])
+    # Se ata el mensaje al producto: asi contestar por escrito llega a donde
+    # debe. Sin esto la unica via eran los botones, y una respuesta escrita
+    # acababa en el camino de las transacciones.
+    if msg and msg.get('message_id'):
+        _a(cx).guardar_mensaje_producto(str(chat), msg['message_id'], p['id'])
+    cx.commit()
+    return msg
 
 
 def _toque_producto_grupo(t):
@@ -1502,7 +1562,17 @@ def cmd_productos(cx, chat, _texto=''):
         f'({_dinero.formatear(total, "COP")})\n'
         'Te mando los más caros primero.',
     )
-    preguntar_productos(cx, limite=MAX_PRODUCTOS)
+    # Manda las filas que ACABO de contar. Antes contaba con esta consulta
+    # -- que ignora `preguntado_en` a proposito, porque el comando lo pide el
+    # usuario -- y mandaba con `preguntar_productos`, que filtra los preguntados
+    # hace menos de tres dias. Pedirlo dos veces anunciaba «2 productos sin
+    # clasificar» y no mandaba ninguno: el bot se veia muerto, y si se perdian
+    # los mensajes quedaba mudo tres dias.
+    for f in filas[:MAX_PRODUCTOS]:
+        try:
+            _preguntar_producto_uno(cx, chat, f)
+        except telegram.TelegramError as ex:
+            print(f'  no pude preguntar por el producto #{f["id"]}: {ex}')
 
 
 # --------------------------------------------------- entender con el modelo
@@ -1519,6 +1589,11 @@ def cmd_productos(cx, chat, _texto=''):
 # Por debajo de esto no se aplica nada solo: se muestra lo que se entendio y se
 # pide un toque. El modelo devuelve 0.9+ cuando la orden es inequivoca.
 CONFIANZA_PARA_APLICAR = 0.75
+
+# Cuantos movimientos se pueden tocar de un golpe sin confirmar. «las ultimas
+# 2» o «las 3 ultimas» son ordenes precisas y pasan directo; «cambia todas a
+# mercado» reescribia los diez, el ingreso incluido, sin preguntar nada.
+MAXIMO_SIN_CONFIRMAR = 4
 
 
 def _plan_de_ia(cx, chat, texto, abiertas):
@@ -1542,6 +1617,9 @@ def _plan_de_ia(cx, chat, texto, abiertas):
             historial=HISTORIAL.get(str(chat)),
             productos=[dict(p) for p in prods],
             grupos_producto={g: list(catalogo.CATEGORIAS[g]) for g in catalogo.GRUPOS},
+            # Cuales se acabaron de tocar, para que «no espera, era el mercado»
+            # corrija ESE y no el de id mas alto.
+            tocados=_ultimos_tocados(chat),
         )
     except Exception as ex:
         # Sin IA o con la llamada rota se cae al camino de patrones, que sigue
@@ -1564,6 +1642,48 @@ def _cambios_del_plan(plan):
     if plan.get('etiquetas_quitar'):
         cambios['quitar_etiquetas'] = plan['etiquetas_quitar']
     return cambios
+
+
+def _lotes_del_plan(plan):
+    """El plan como una lista de (ids, cambios).
+
+    Un mensaje puede darle valores distintos a movimientos distintos: «la de
+    tierragro ponla en gato y la de uber en salidas». Antes solo cabia UN juego
+    de cambios para toda la lista, asi que ganaba el ultimo y las dos quedaban
+    en lo mismo -- y el texto que se le mostraba decia lo correcto, que es lo
+    peor de todo: parecia que habia funcionado.
+    """
+    lotes = []
+    for lote in plan.get('lotes') or []:
+        ids = [str(i) for i in (lote.get('movimientos') or [])]
+        cambios = _cambios_del_plan(lote)
+        if ids and cambios:
+            lotes.append((ids, cambios))
+    if lotes:
+        return lotes
+    ids = [str(i) for i in (plan.get('movimientos') or [])]
+    cambios = _cambios_del_plan(plan)
+    return [(ids, cambios)] if ids and cambios else []
+
+
+def _cerrar_preguntas(cx, ids, cambios, abiertas):
+    """Cierra las preguntas de esos movimientos. Devuelve cuantas."""
+    por_firefly = {str(p['firefly_id']): p for p in abiertas if p['firefly_id']}
+    cerradas = 0
+    for i in ids:
+        p = por_firefly.get(i)
+        if p:
+            db.pendiente_actualizar(
+                cx,
+                p['id'],
+                pregunta=None,
+                categoria=cambios.get('categoria') or p['categoria'],
+                presupuesto=cambios.get('presupuesto') or p['presupuesto'],
+                confianza=1.0,
+                decidido_por='usuario',
+            )
+            cerradas += 1
+    return cerradas
 
 
 def _ejecutar_plan(cx, chat, texto, plan, abiertas):
@@ -1599,7 +1719,7 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas):
         return True
 
     if accion == 'clasificar_producto':
-        return _clasificar_producto_del_plan(cx, chat, plan)
+        return _clasificar_producto_del_plan(cx, chat, plan, confianza)
 
     if accion == 'borrar':
         if len(ids) != 1:
@@ -1619,20 +1739,52 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas):
     if accion not in ('editar', 'responder'):
         return False
 
-    cambios = _cambios_del_plan(plan)
-    if not cambios or not ids:
+    lotes = _lotes_del_plan(plan)
+    if not lotes:
         return False
 
-    # Confianza baja: se muestra lo que se entendio y se pide un toque. Aplicar
-    # en silencio algo que no se entendio bien es lo unico inaceptable.
-    if confianza < CONFIANZA_PARA_APLICAR:
-        _guardar_texto_en_espera(cx, chat, texto)
-        objetivo = ids[0]
+    # Pidio un PRESUPUESTO y el plan solo trae categoria: el presupuesto que
+    # nombro no existe y el modelo lo reemplazo por la categoria parecida.
+    # «ponla en el presupuesto Viajes Largos» le borraba a Uber su categoria
+    # «Transporte Aplicacion» y la dejaba en «Viajes». Se avisa y no se toca.
+    if intencion.pide_presupuesto(texto) and not any(
+        c.get('presupuesto') for _g, c in lotes
+    ):
+        cuales = ', '.join(c['categoria'] for _g, c in lotes if c.get('categoria'))
         telegram.enviar(
             chat,
-            f'Creo que quieres esto, pero no estoy seguro:\n'
-            f'<i>{porque}</i>\n\n'
-            f'{_resumen_de_cambios(cambios)}',
+            f'No tengo un presupuesto con ese nombre. Los que hay: '
+            f'<b>{", ".join(presupuestos.nombres_activos())}</b>.'
+            + (
+                f'{SALTO}{SALTO}<i>No le puse la categoría «{cuales}», que es '
+                f'lo más parecido, porque eso te borraría la que ya tenía.</i>'
+                if cuales
+                else ''
+            ),
+        )
+        _recordar_camino(chat, 'edicion')
+        return True
+
+    ids = [i for grupo, _c in lotes for i in grupo]
+
+    # Confianza baja: se muestra lo que se entendio y se pide un toque. Aplicar
+    # en silencio algo que no se entendio bien es lo unico inaceptable. Y una
+    # edicion que toca MUCHOS movimientos de un golpe se confirma aunque la
+    # confianza sea alta: «cambia todas a mercado» reescribia los diez -- el
+    # ingreso incluido, que quedaba con categoria de gasto -- sin preguntar.
+    masiva = len(ids) > MAXIMO_SIN_CONFIRMAR
+    if confianza < CONFIANZA_PARA_APLICAR or masiva:
+        _guardar_texto_en_espera(cx, chat, texto)
+        objetivo = ids[0]
+        encabezado = (
+            f'Eso toca <b>{len(ids)} movimientos</b>. Confírmame antes:'
+            if masiva
+            else 'Creo que quieres esto, pero no estoy seguro:'
+        )
+        telegram.enviar(
+            chat,
+            f'{encabezado}{SALTO}<i>{porque}</i>{SALTO}{SALTO}'
+            f'{_resumen_de_lotes(lotes)}',
             [
                 [('✅ sí, hazlo', f'ok:{objetivo}:0')],
                 [('⚙️ mejor lo toco yo', f'mv:{objetivo}:0')],
@@ -1641,44 +1793,31 @@ def _ejecutar_plan(cx, chat, texto, plan, abiertas):
         _recordar_camino(chat, 'edicion')
         return True
 
-    resultados = movimientos.editar_varios(ids, **cambios)
     lineas = [f'✅ <i>{porque}</i>', '']
-    for r in resultados:
-        if r.get('error'):
-            lineas.append(f'⚠️ #{r["id"]}: {r["error"]}')
-        else:
-            lineas.append(movimientos.describir(r['movimiento']))
-
-    # Si era la RESPUESTA a algo que el bot pregunto, tambien se cierra la
-    # pregunta: si no, seguiria preguntando por algo ya resuelto.
-    cerradas = 0
-    if accion == 'responder':
-        por_firefly = {str(p['firefly_id']): p for p in abiertas if p['firefly_id']}
-        for i in ids:
-            p = por_firefly.get(i)
-            if p:
-                db.pendiente_actualizar(
-                    cx,
-                    p['id'],
-                    pregunta=None,
-                    categoria=cambios.get('categoria') or p['categoria'],
-                    presupuesto=cambios.get('presupuesto') or p['presupuesto'],
-                    confianza=1.0,
-                    decidido_por='usuario',
-                )
-                cerradas += 1
-        cx.commit()
+    cerradas, hubo_error = 0, False
+    for grupo, cambios in lotes:
+        for r in movimientos.editar_varios(grupo, **cambios):
+            if r.get('error'):
+                lineas.append(f'⚠️ #{r["id"]}: {r["error"]}')
+                hubo_error = True
+            else:
+                lineas.append(movimientos.describir(r['movimiento']))
+        # Si era la RESPUESTA a algo que el bot pregunto, tambien se cierra la
+        # pregunta: si no, seguiria preguntando por algo ya resuelto.
+        if accion == 'responder':
+            cerradas += _cerrar_preguntas(cx, grupo, cambios, abiertas)
     if cerradas:
-        lineas.append(f'\n<i>{cerradas} pregunta(s) cerradas.</i>')
+        lineas.append(f'{SALTO}<i>{cerradas} pregunta(s) cerradas.</i>')
 
     db.bitacora(
         cx,
         'plan_ia',
         usuario_id=_usuario_de(cx, chat),
-        payload={'texto': texto, 'plan': plan, 'cambios': cambios},
-        ok=all(not r.get('error') for r in resultados),
+        payload={'texto': texto, 'plan': plan, 'lotes': lotes},
+        ok=not hubo_error,
     )
     cx.commit()
+    _recordar_tocados(chat, ids)
     telegram.enviar(
         chat,
         SALTO.join(lineas),
@@ -1719,8 +1858,10 @@ def _responder_producto(cx, chat, catalogo_id, texto):
         return
 
     # Respaldo: las reglas de palabras del propio catalogo, aplicadas a lo que
-    # el usuario escribio en vez de a la descripcion truncada del almacen.
-    _tipo, grupo, cat, _fuente = catalogo.clasificar(p['nit'], p['codigo'], texto, 19)
+    # el usuario escribio en vez de a la descripcion truncada del almacen. Sin
+    # el nit ni el codigo a proposito: con ellos ganan los OVERRIDES y lo que
+    # escribio el usuario no se mira. Ver `catalogo.clasificar_texto`.
+    _tipo, grupo, cat, _fuente = catalogo.clasificar_texto(texto)
     if grupo == 'Sin clasificar':
         telegram.enviar(
             chat,
@@ -1740,7 +1881,7 @@ def _responder_producto(cx, chat, catalogo_id, texto):
     )
 
 
-def _clasificar_producto_del_plan(cx, chat, plan):
+def _clasificar_producto_del_plan(cx, chat, plan, confianza=1.0):
     """Guarda que ES un producto de supermercado, dicho en palabras.
 
     Antes la pregunta de producto solo aceptaba botones. Contestar «es el costo
@@ -1757,10 +1898,54 @@ def _clasificar_producto_del_plan(cx, chat, plan):
     if p is None:
         telegram.enviar(chat, 'Ese producto ya no está en la cola.')
         return True
-    # El par grupo/categoria tiene que ser valido: el modelo puede cruzarlos.
+
+    # El GRUPO tiene que existir. Se validaba la categoria contra el grupo pero
+    # nunca el grupo contra el catalogo: con uno inventado -- «Mercado», que es
+    # el nombre de una categoria de MOVIMIENTOS y por eso el error mas probable
+    # -- `validas` quedaba vacio y se guardaba `grupo=categoria=Mercado`. Y como
+    # queda con origen='usuario', ninguna regla lo vuelve a pisar: el dashboard
+    # se rompe en silencio y para siempre.
+    if grupo not in catalogo.GRUPOS:
+        _preguntar_producto_uno(
+            cx, chat, p, f'No tengo un grupo que se llame «{grupo}». ¿Cuál es?'
+        )
+        _recordar_camino(chat, 'producto')
+        return True
+
+    # Que el par sea valido: el modelo puede cruzarlos. Y se DICE, porque
+    # guardar otra categoria callado es lo mismo que mentir.
     validas = catalogo.CATEGORIAS.get(grupo) or ()
+    nota = ''
     if cat not in validas:
-        cat = validas[0] if validas else grupo
+        pedida, cat = cat, validas[0]
+        if pedida:
+            nota = (
+                f'{SALTO}<i>«{pedida}» no es una categoría de {grupo}; '
+                f'la dejé en «{cat}».</i>'
+            )
+
+    # Un producto no se guarda con la confianza en el piso. Es asimetrico a
+    # proposito al reves de como estaba: editar una transaccion pedia 0.75 y se
+    # puede deshacer; un producto no pedia nada y no lo vuelve a tocar ninguna
+    # regla.
+    if confianza < CONFIANZA_PARA_APLICAR:
+        combinado = catalogo.GRUPOS.index(grupo) * 100 + list(validas).index(cat)
+        msg = telegram.enviar(
+            chat,
+            f'¿<b>{p["descripcion"] or p["codigo"]}</b> es '
+            f'<b>{grupo} · {cat}</b>?{SALTO}'
+            f'<i>{plan.get("explicacion") or ""}</i>',
+            [
+                [('✅ sí', f'fc:{pid}:{combinado}')],
+                [('⚙️ otro grupo', f'fv:{pid}:0')],
+            ],
+        )
+        if msg and msg.get('message_id'):
+            _a(cx).guardar_mensaje_producto(str(chat), msg['message_id'], int(pid))
+        cx.commit()
+        _recordar_camino(chat, 'producto')
+        return True
+
     tipo = catalogo.tipo_de(grupo)
     db.catalogo_responder_id(cx, int(pid), tipo, grupo, cat)
     # La consulta del catalogo trae 'veces' en un sitio y 'compras' en
@@ -1777,7 +1962,7 @@ def _clasificar_producto_del_plan(cx, chat, plan):
     telegram.enviar(
         chat,
         f'✅ <b>{p["descripcion"] or p["codigo"]}</b>{SALTO}'
-        f'{tipo} · {grupo} · {cat}{arrastre}{SALTO}'
+        f'{tipo} · {grupo} · {cat}{arrastre}{nota}{SALTO}'
         f'<i>{plan.get("explicacion") or ""}</i>',
     )
     _recordar_camino(chat, 'producto')
@@ -1799,6 +1984,18 @@ def _resumen_de_cambios(cambios):
         valor = ', '.join(v) if isinstance(v, list) else v
         filas.append(f'· {nombres.get(k, k)}: <b>{valor}</b>')
     return SALTO.join(filas)
+
+
+def _resumen_de_lotes(lotes):
+    """Igual que arriba pero diciendo A QUE movimiento va cada cosa, que es lo
+    que importa cuando el mensaje le pone valores distintos a cada uno."""
+    if len(lotes) == 1:
+        return _resumen_de_cambios(lotes[0][1])
+    trozos = []
+    for ids, cambios in lotes:
+        cuales = ', '.join(f'#{i}' for i in ids)
+        trozos.append(f'<b>{cuales}</b>{SALTO}{_resumen_de_cambios(cambios)}')
+    return (SALTO + SALTO).join(trozos)
 
 
 def _toque_confirmar_plan(t):
@@ -1858,6 +2055,9 @@ TOQUES = {
     # contra un pendiente de la cola.
     'mv': _toque_ver_movimiento,
     'mc': _toque_categoria_movimiento,
+    # 'sc' indexa TODAS las categorias; 'mc' solo las seis del menu. Ver la
+    # nota en `_toque_lista_categorias`.
+    'sc': _toque_categoria_de_la_lista,
     'mk': _toque_confirmar_movimiento,
     'mx': _toque_borrar_movimiento,
     'mB': _toque_borrar_confirmado,
@@ -1880,6 +2080,7 @@ TOQUES = {
     'fg': _toque_producto_grupo,
     'fc': _toque_producto_categoria,
     'fv': _toque_producto_volver,
+    'fp': _toque_producto_en_espera,
     'fx': _toque_producto_saltar,
 }
 
@@ -1948,11 +2149,59 @@ COMANDOS = {
 }
 
 
+def _escapar(valor):
+    """Lo que viene del usuario o de Firefly, listo para meter en HTML.
+
+    Un comercio que se llame «Cafe & Bar <3» rompe el HTML del mensaje, y
+    Telegram rechaza el mensaje COMPLETO: el bot queda mudo sin decir por que.
+    Peor cuando el nombre queda guardado en Firefly, porque desde ahi TODA
+    pantalla que lo muestre -- incluidas las que servirian para corregirlo --
+    queda irrenderizable.
+    """
+    return html.escape(str(valor if valor is not None else ''), quote=False)
+
+
+def chats_autorizados():
+    """Los chat_id que pueden usar el bot. Vacio = no hay ninguno configurado.
+
+    Se lee en cada llamada y no se cachea: el conjunto sale del entorno y en
+    las pruebas se cambia con monkeypatch.
+    """
+    return {
+        str(config.get(clave))
+        for clave in ('TELEGRAM_CHAT_ID_JUAN', 'TELEGRAM_CHAT_ID_NOVIA')
+        if config.get(clave)
+    }
+
+
+def autorizado(chat):
+    """Si ese chat puede hablarle al bot.
+
+    El token de un bot de Telegram es un secreto, pero el NOMBRE del bot es
+    publico: cualquiera que lo encuentre le puede escribir, y el bot atendia a
+    quien fuera. Con un `/ultimos` se leian todos los movimientos y saldos, y
+    con tres toques se borraba un movimiento de Firefly.
+
+    Sin chats configurados NO se abre a todo el mundo: se cierra. Un despliegue
+    a medio configurar tiene que quedar mudo, no publico.
+    """
+    permitidos = chats_autorizados()
+    return bool(permitidos) and str(chat) in permitidos
+
+
 def manejar_update(cx, u):
     """Reparte un update de Telegram. Solo enruta: la logica vive en los
     manejadores, que se pueden probar uno por uno."""
     if 'callback_query' in u:
         cq = u['callback_query']
+        # De quien viene el toque. Se mira ANTES de armar el Toque: un callback
+        # forjado desde otro chat borraba de Firefly.
+        de_chat = ((cq.get('message') or {}).get('chat') or {}).get('id')
+        if not autorizado(de_chat):
+            print(f'  toque ignorado, chat no autorizado: {de_chat}')
+            with contextlib.suppress(Exception):
+                telegram.responder_callback(cq['id'], 'este bot no es tuyo')
+            return
         try:
             toque = Toque(cx, cq)
         except (ValueError, KeyError):
@@ -1962,15 +2211,44 @@ def manejar_update(cx, u):
         if manejador is None:
             toque.aviso('no entendí ese botón')
             return
-        manejador(toque)
+        # El callback SIEMPRE se contesta: si el manejador revienta antes de
+        # avisar, el botoncito se queda girando en Telegram para siempre y no
+        # hay ninguna senal de que algo fallo.
+        try:
+            manejador(toque)
+        except Exception as ex:
+            print(f'  el toque {toque.accion} fallo: {type(ex).__name__}: {ex}')
+            with contextlib.suppress(Exception):
+                toque.aviso('algo se rompió, intenta de nuevo')
+            raise
         return
 
-    msg = u.get('message')
+    msg = u.get('message') or u.get('edited_message')
     if not msg:
         return
-    chat = msg['chat']['id']
-    texto = (msg.get('text') or '').strip()
+    # Con `.get`: llegan updates de encuestas, de miembros que entran y de
+    # canales, y no todos traen `chat`.
+    chat = (msg.get('chat') or {}).get('id')
+    if not chat:
+        return
+    if not autorizado(chat):
+        # Se registra el id: es exactamente el numero que hay que poner en
+        # TELEGRAM_CHAT_ID_JUAN o _NOVIA para dar acceso.
+        print(f'  mensaje ignorado, chat no autorizado: {chat}')
+        return
+    # El `caption` de una foto o un PDF tambien es texto que el usuario
+    # escribio: mandar la foto de una factura con «esto fue mercado» dejaba al
+    # bot completamente callado.
+    texto = (msg.get('text') or msg.get('caption') or '').strip()
     if not texto:
+        # Callarse ante un sticker o una nota de voz parece un bot roto. Ante un
+        # mensaje vacio de verdad si hay que callarse.
+        if any(k in msg for k in ('photo', 'document', 'voice', 'audio', 'video')):
+            telegram.enviar(
+                chat,
+                'Por ahora solo entiendo texto. Si le pusiste descripción a eso, '
+                'escríbemela y ya.',
+            )
         return
 
     if texto.startswith('/'):
@@ -1978,7 +2256,7 @@ def manejar_update(cx, u):
         nombre = texto.split()[0].split('@')[0]
         manejador = COMANDOS.get(nombre)
         if manejador is None:
-            telegram.enviar(chat, f'No conozco {nombre}.\n\n{AYUDA}')
+            telegram.enviar(chat, f'No conozco {_escapar(nombre)}.\n\n{AYUDA}')
             return
         manejador(cx, chat, texto)
         return
@@ -2025,6 +2303,25 @@ MINUTOS_DE_HILO = 15
 
 def _recordar_camino(chat, camino):
     ULTIMO_CAMINO[str(chat)] = (camino, time.time())
+
+
+# Lo ultimo que se toco en ese chat. Sin esto, «no espera, era el mercado»
+# se aplicaba al movimiento de id mas alto y no al que se acababa de cambiar:
+# la correccion se le escribia a un movimiento que el usuario nunca menciono.
+ULTIMO_TOCADO = {}
+
+
+def _recordar_tocados(chat, ids):
+    if ids:
+        ULTIMO_TOCADO[str(chat)] = ([str(i) for i in ids], time.time())
+
+
+def _ultimos_tocados(chat):
+    """Los del ultimo cambio, si fue hace poco. Vacio si no."""
+    ids, cuando = ULTIMO_TOCADO.get(str(chat), ([], 0))
+    if ids and (time.time() - cuando) < MINUTOS_DE_HILO * 60:
+        return ids
+    return []
 
 
 def _venia_del_asesor(chat):
@@ -2127,6 +2424,37 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
     if _venia_del_asesor(chat) and not implicada and not senala:
         _recordar_camino(chat, 'asesor')
         _consultar_asesor(cx, chat, texto)
+        return
+
+    # 6.5 HAY PRODUCTOS DE FACTURA ESPERANDO y el mensaje no nombra ninguna
+    #     transaccion. No se puede adivinar de cual de los dos mundos habla.
+    #     Adivinando, «es shampoo» acababa escrito en la compra de Google
+    #     Workspace Y aprendido como regla permanente: «GOOGLE WORKSPACE GO ->
+    #     Cuidado personal», o sea que el bot aprendia para siempre que Google
+    #     Workspace es shampoo. Preguntar cuesta un mensaje; equivocarse cuesta
+    #     una regla que envenena todo lo que entre despues.
+    prods = _a(cx).productos_preguntados(chat)
+    if prods and not senala:
+        _guardar_texto_en_espera(cx, chat, texto)
+        botones = [
+            [(f'🛒 {(p["descripcion"] or p["codigo"])[:24]}', f'fp:{p["id"]}:0')]
+            for p in prods[:3]
+        ]
+        botones.append(
+            [
+                (
+                    f'💳 {(abiertas[0]["contraparte"] or "")[:20]}',
+                    f'm:{abiertas[0]["id"]}:0',
+                )
+            ]
+        )
+        telegram.enviar(
+            chat,
+            f'¿«{texto[:60]}» es sobre un producto del mercado o sobre una '
+            f'transacción? No quiero apuntarle al equivocado.',
+            botones,
+        )
+        _recordar_camino(chat, 'respuesta')
         return
 
     _recordar_camino(chat, 'respuesta')
@@ -2283,7 +2611,7 @@ def _responder_con_texto(cx, chat, pendiente_id, texto):
 def _pedir_categoria_a_mano(cx, chat, p, texto):
     """No se entendio nada del texto. En vez de dejar al usuario colgado, se le
     vuelven a ofrecer las categorias con botones."""
-    sug = sugerir_categorias(cx, p['usuario_id'], p, todas=False)
+    sug = sugerir_categorias(cx, p['usuario_id'], p)
     if not sug:
         telegram.enviar(
             chat,

@@ -423,9 +423,31 @@ class TestMenuCompleto:
         alm, tg, _e, _u = entorno
         bot.manejar_update(alm.cx, _cb('lc:1455:2'))
         indices = [
-            int(d.split(':')[2]) for d in tg.datos_de_botones() if d.startswith('mc:')
+            int(d.split(':')[2]) for d in tg.datos_de_botones() if d.startswith('sc:')
         ]
+        assert indices, 'la lista paginada manda botones «sc:», no «mc:»'
         assert min(indices) >= 20, f'la pagina 3 empieza en 20, no en {min(indices)}'
+
+    def test_el_boton_de_la_pagina_3_de_verdad_aplica(self, entorno, monkeypatch):
+        """Esto es lo que faltaba probar y por eso el bug vivio.
+
+        La pantalla paginada y el menu del movimiento compartian el prefijo
+        `mc:`, pero indexan listas distintas: seis categorias filtradas por
+        direccion contra las setenta y una. Los botones del 6 en adelante
+        contestaban «esa opcion ya no esta» y no se podia poner Mercado, Gato
+        ni Ropa desde ahi. Verificar el INDICE no bastaba: hay que tocar el
+        boton y ver que escriba.
+        """
+        monkeypatch.setattr(
+            movimientos, 'categorias', lambda d=None: [f'C{i}' for i in range(71)]
+        )
+        alm, tg, estado, _u = entorno
+        bot.manejar_update(alm.cx, _cb('lc:1455:2'))
+        dato = next(d for d in tg.datos_de_botones() if d.startswith('sc:'))
+        bot.manejar_update(alm.cx, _cb(dato))
+        _, payload = estado['puts'][-1]
+        i = int(dato.split(':')[2])
+        assert payload['transactions'][0]['category_name'] == f'C{i}'
 
     def test_elegir_un_presupuesto_lo_aplica(self, entorno, monkeypatch):
         monkeypatch.setattr(

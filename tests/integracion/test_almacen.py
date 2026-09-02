@@ -88,6 +88,7 @@ class TestEsquema:
         }
         assert vistas == {
             'v_por_preguntar',
+            'v_abiertos',
             'v_sin_conciliar',
             'v_sospechosos',
             'v_catalogo_por_preguntar',

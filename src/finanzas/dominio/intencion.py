@@ -496,3 +496,21 @@ def es_seguimiento(txt: str | None) -> bool:
     if not _CONTINUA.search(t):
         return False
     return len(t.split()) <= 4 and not _texto.tokens_distintivos(t)
+
+
+# «presupuesto» y «budget» -- el usuario usa las dos. Tambien «cupo», que en
+# Colombia es el limite de la tarjeta, no un presupuesto de Firefly, asi que
+# NO va aqui.
+_PIDE_PRESUPUESTO = re.compile(r'\b(presupuesto|presupuestos|budget|budgets)\b', re.I)
+
+
+def pide_presupuesto(txt: str | None) -> bool:
+    """El mensaje habla explicitamente de un PRESUPUESTO.
+
+    Existe para una barrera concreta: «la de uber ponla en el presupuesto
+    Viajes Largos» -- un presupuesto que no existe -- hacia que el modelo le
+    pusiera la CATEGORIA «Viajes», que si existe. Uber perdia su categoria por
+    algo que nunca se pidio. Si el mensaje nombra un presupuesto, el cambio
+    tiene que ser de presupuesto o no ser nada.
+    """
+    return bool(txt and _PIDE_PRESUPUESTO.search(txt))

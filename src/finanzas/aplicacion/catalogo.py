@@ -358,6 +358,21 @@ def clasificar(nit, codigo, desc, iva):
     return tipo_de(grupo), grupo, categoria, origen
 
 
+def clasificar_texto(desc):
+    """Igual pero SOLO por las palabras, sin la identidad del producto.
+
+    Cuando lo que se clasifica es lo que ESCRIBIO EL USUARIO, pasarle tambien
+    el nit y el codigo del producto deja ganar a `OVERRIDES` y a las reglas de
+    IVA, que van antes de mirar una sola palabra. El sintoma: se responde «eso
+    es una cerveza» sobre un producto que esta en OVERRIDES como reloj, y el
+    bot guarda «Tecnologia» diciendo «por lo que escribiste: eso es una
+    cerveza». Decir que hizo lo que le pidieron y guardar lo contrario es peor
+    que no entender.
+    """
+    grupo, categoria, origen = _grupo_y_categoria('', '', normalizar(desc), 19)
+    return tipo_de(grupo), grupo, categoria, origen
+
+
 def _grupo_y_categoria(nit, codigo, desc, iva):
     # 1. reglas duras por impuesto
     if iva == 8.0:

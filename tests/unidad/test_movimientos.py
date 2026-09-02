@@ -292,3 +292,46 @@ class TestPresupuestoSeguro:
     @pytest.mark.parametrize('cat', [None, '', 'X'])
     def test_sin_categoria_no_hay_presupuesto(self, mapa, cat):
         assert presupuestos.presupuesto_seguro(cat, mapa) is None
+
+
+class TestLaContraparte:
+    """En un gasto es el destino; en un ingreso es el ORIGEN.
+
+    `describir` usaba siempre el destino, asi que un abono de la Rappicard se
+    leia «+$113.943 Bancolombia»: el banco propio, no quien pago. Y como esa
+    linea es tambien la que ve el modelo, el asesor repetia lo mismo cuando se
+    le preguntaba de donde venia la plata.
+    """
+
+    def _mov(self, valor):
+        return {
+            'id': '1',
+            'fecha': '2026-09-02',
+            'valor': valor,
+            'moneda': 'COP',
+            'descripcion': 'Abono',
+            'categoria': None,
+            'presupuesto': None,
+            'origen': 'RAPPICARD BLACK' if valor > 0 else 'AMEX PLATINO',
+            'destino': 'Bancolombia' if valor > 0 else 'Tienda D1',
+            'etiquetas': [],
+            'tipo': 'deposit' if valor > 0 else 'withdrawal',
+            'notas': '',
+            'partes': 1,
+        }
+
+    def test_en_un_gasto_es_el_destino(self):
+        assert movimientos.contraparte(self._mov(-21040)) == 'Tienda D1'
+
+    def test_en_un_ingreso_es_el_origen(self):
+        assert movimientos.contraparte(self._mov(113943)) == 'RAPPICARD BLACK'
+
+    def test_describir_un_ingreso_no_dice_el_banco_propio(self):
+        linea = movimientos.describir(self._mov(113943))
+        assert 'RAPPICARD' in linea
+        assert 'Bancolombia' not in linea
+
+    def test_sin_ninguno_de_los_dos_cae_a_la_descripcion(self):
+        m = self._mov(113943)
+        m['origen'] = None
+        assert movimientos.contraparte(m) == 'Abono'

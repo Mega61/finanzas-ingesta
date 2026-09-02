@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
 
-from finanzas import config
+from finanzas import config, registro
 
 API = 'https://api.telegram.org'
 OFFSET = os.path.join(config.DATOS, 'telegram_offset')
@@ -120,7 +121,7 @@ def enviar(
                 for fila in botones
             ]
         }
-    return call('sendMessage', payload)
+    return _con_respaldo_plano('sendMessage', payload)
 
 
 def editar(
@@ -128,7 +129,7 @@ def editar(
 ) -> dict[str, Any]:
     """Se usa para reemplazar la pregunta por la respuesta: deja el chat
     limpio en vez de una fila de preguntas ya contestadas."""
-    return call(
+    return _con_respaldo_plano(
         'editMessageText',
         {
             'chat_id': str(chat_id),
@@ -137,6 +138,42 @@ def editar(
             'parse_mode': modo,
             'disable_web_page_preview': True,
         },
+    )
+
+
+def _con_respaldo_plano(metodo: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Si el HTML no le gusta a Telegram, se manda el mismo texto SIN formato.
+
+    Telegram rechaza el mensaje COMPLETO cuando el HTML esta mal, y el bot se
+    queda mudo. Y el HTML se rompe con cosas de todos los dias: un comercio que
+    se llame «Cafe & Bar <3» -- que ademas queda guardado en Firefly, asi que a
+    partir de ahi TODA pantalla que lo muestre queda irrenderizable -- o el
+    recorte a 4096 cortando por la mitad una etiqueta `<i>`.
+
+    Escapar en el origen sigue siendo lo correcto y se hace; esto es la red
+    debajo. Un mensaje feo se lee; uno que no llega, no.
+    """
+    try:
+        return call(metodo, payload)
+    except TelegramError as ex:
+        if 'parse' not in str(ex).lower() and 'entit' not in str(ex).lower():
+            raise
+        registro.aviso(f'HTML rechazado por Telegram, lo mando plano: {str(ex)[:120]}')
+        plano = dict(payload)
+        plano.pop('parse_mode', None)
+        plano['text'] = _sin_etiquetas(plano.get('text') or '')
+        return call(metodo, plano)
+
+
+def _sin_etiquetas(texto: str) -> str:
+    """Quita el marcado para el respaldo plano. No es un saneador de HTML:
+    es para que no se vean `<b>` sueltos en un mensaje ya rechazado."""
+    limpio = re.sub(r'</?[a-zA-Z][^>]*>', '', texto)
+    return (
+        limpio.replace('&lt;', '<')
+        .replace('&gt;', '>')
+        .replace('&quot;', '"')
+        .replace('&amp;', '&')
     )
 
 

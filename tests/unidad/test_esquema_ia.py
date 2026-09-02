@@ -28,7 +28,8 @@ MOVS = ['1459', '1458']
 
 
 def _revisar(esquema, donde=''):
-    """Las invariantes que la API exige y no perdona."""
+    """Las invariantes que la API exige y no perdona. Recursivo: `lotes` es un
+    arreglo de objetos y sus enums anidados se rechazan igual."""
     props = esquema['properties']
     for campo in esquema.get('propertyOrdering', []):
         assert campo in props, f'{donde}: «{campo}» esta en el orden y no en properties'
@@ -38,6 +39,8 @@ def _revisar(esquema, donde=''):
         for e in (spec, spec.get('items') or {}):
             if 'enum' in e:
                 assert e['enum'], f'{donde}: el enum de «{nombre}» esta vacio'
+            if e.get('type') == 'object':
+                _revisar(e, f'{donde} > {nombre}')
 
 
 class TestElEsquemaDeOrdenes:
@@ -118,3 +121,17 @@ class TestGeneradoresVacios:
 
     def test_clasificar_con_generadores_vacios(self):
         _revisar(ia._esquema(CATS, iter([]), iter([])), 'generadores')
+
+
+class TestLosLotes:
+    """Un mensaje puede darle valores distintos a movimientos distintos."""
+
+    def test_el_lote_tiene_sus_propios_campos(self):
+        lote = ia._esquema_orden(MOVS, CATS, PRES)['properties']['lotes']['items']
+        assert lote['required'] == ['movimientos']
+        for campo in ('movimientos', 'categoria', 'presupuesto', 'comercio'):
+            assert campo in lote['properties'], campo
+
+    def test_el_lote_tambien_omite_los_enums_vacios(self):
+        """Si no, la peticion entera se cae por un enum anidado."""
+        _revisar(ia._esquema_orden([], [], []), 'lotes vacios')
