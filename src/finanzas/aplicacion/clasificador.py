@@ -512,6 +512,21 @@ def clasificar(cx, usuario_id, evento, indice=None):
         r['decidido_por'] = 'sin_regla'
 
     r['pregunta'] = None if _es_seguro(regla, conf, clave) else 'categoria'
+
+    # La categoria puede quedar resuelta y el PRESUPUESTO no. Pasa siempre que
+    # la categoria es nueva —no hay historico de donde sacarlo— o que el
+    # historico esta repartido, como Restaurante entre Vivir y Antojos. Antes
+    # se publicaba en blanco y nadie preguntaba: y la categoria tampoco podia
+    # arreglarse sola con el tiempo, porque nunca recibia un presupuesto del
+    # cual aprender. Solo aplica a GASTOS: en Firefly un presupuesto es de
+    # salidas, y ponerselo a un abono de tarjeta contaria el gasto dos veces.
+    if (
+        r['pregunta'] is None
+        and r['categoria']
+        and not r['presupuesto']
+        and float(evento.get('valor') or 0) < 0
+    ):
+        r['pregunta'] = 'categoria'
     return r
 
 

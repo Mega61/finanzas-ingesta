@@ -134,6 +134,15 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
                 mandadas += 1
             continue
 
+        # Si la categoria ya esta resuelta y lo que falta es el presupuesto,
+        # se pregunta ESO. Antes se preguntaba siempre la categoria, asi que
+        # un movimiento con categoria buena y sin presupuesto no tenia como
+        # completarse: la ingesta lo publicaba en blanco y nadie preguntaba.
+        if p['categoria'] and not p['presupuesto'] and float(p['valor']) < 0:
+            if _preguntar_presupuesto_del_pendiente(cx, p, chat):
+                mandadas += 1
+            continue
+
         sug = sugerir_categorias(cx, p['usuario_id'], p, todas)
         # el indice va en el callback por el limite de 64 bytes
         botones = []
@@ -259,6 +268,53 @@ def _presupuestos_de(cx, pendiente_id):
     return presupuestos.nombres_activos()
 
 
+def _toque_sin_presupuesto(t):
+    """«Este no lleva presupuesto»: cierra la pregunta y no toca nada mas.
+
+    Aparte de `k:` a proposito: ese marca el movimiento como CONFIRMADO contra
+    el extracto, que es otra cosa y no se ha verificado.
+    """
+    db.pendiente_actualizar(t.cx, t.pid, pregunta=None, decidido_por='usuario')
+    t.cx.commit()
+    t.aviso('listo, sin presupuesto')
+    t.reemplazar('Anotado: este no lleva presupuesto.')
+
+
+def _preguntar_presupuesto_del_pendiente(cx, p, chat):
+    """«¿A que presupuesto va?» cuando la categoria ya se sabe.
+
+    Es la misma pregunta que ya se hacia al contestar por el chat, pero desde
+    la cola de la ingesta. Se ofrecen primero los presupuestos que de verdad
+    se han usado con esa categoria.
+    """
+    nombres = _presupuestos_de(cx, p['id'])
+    botones, fila = [], []
+    for i, n in enumerate(nombres):
+        fila.append((n, f'b:{p["id"]}:{i}'))
+        if len(fila) == 2:
+            botones.append(fila)
+            fila = []
+    if fila:
+        botones.append(fila)
+    botones.append([('sin presupuesto', f'sp:{p["id"]}:0')])
+    try:
+        msg = telegram.enviar(
+            chat,
+            f'{describir(p)}{SALTO}{SALTO}'
+            f'La tengo en <b>{_escapar(p["categoria"])}</b>. '
+            f'¿A qué presupuesto va?',
+            botones,
+        )
+        db.marcar_preguntado(cx, p['id'])
+        if msg and msg.get('message_id'):
+            _a(cx).guardar_mensaje(str(chat), msg['message_id'], p['id'])
+        cx.commit()
+    except telegram.TelegramError as ex:
+        print(f'  no pude preguntar el presupuesto de #{p["id"]}: {ex}')
+        return False
+    return True
+
+
 def _preguntar_presupuesto(cx, pendiente_id, chat, pr):
     """Las 9 categorias donde el historico esta dividido son juicios reales:
     'Restaurante' entre Vivir y Antojos. No se asume la mayoria, se pregunta."""
@@ -294,23 +350,27 @@ def aplicar_respuesta(
         return p, 'descartado, no entra a Firefly'
 
     clave = clasificador.normalizar(p['contraparte'] or p['descripcion'])
-    if clave:
+    if clave and (categoria or presupuesto or comercio):
         db.regla_guardar(
             cx,
             p['usuario_id'],
             clave,
-            categoria=categoria,
+            categoria=categoria or p['categoria'],
             presupuesto=presupuesto,
             cuenta_firefly=comercio,
             origen='usuario',
             direccion='ingreso' if float(p['valor']) > 0 else 'gasto',
         )
     campos = {
-        'categoria': categoria,
         'pregunta': None,
         'confianza': 1.0,
         'decidido_por': 'usuario',
     }
+    # La categoria solo se toca si vino: cuando lo unico que falta es el
+    # presupuesto se contesta con `categoria=None`, y ponerla igual borraba la
+    # que ya estaba resuelta.
+    if categoria:
+        campos['categoria'] = categoria
     if presupuesto:
         campos['presupuesto'] = presupuesto
     if comercio:
@@ -2166,6 +2226,7 @@ TOQUES = {
     'pb': _toque_menu_presupuesto,
     'sb': _toque_elegir_presupuesto,
     'bp': _toque_fijar_presupuesto_de_categoria,
+    'sp': _toque_sin_presupuesto,
     'le': _toque_menu_etiquetas,
     'se': _toque_elegir_etiqueta,
     'ne': _toque_pedir_etiqueta,

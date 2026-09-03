@@ -265,6 +265,9 @@ def paso_procesar(cx, uid):
                 'traslado_a': ev.traslado_a,
                 'contraparte': ev.contraparte,
                 'descripcion': ev.descripcion,
+                # El signo hace falta: un presupuesto de Firefly es de GASTOS,
+                # asi que solo se pregunta por el cuando la plata sale.
+                'valor': ev.valor,
             },
             indice=idx,
         )
@@ -332,6 +335,7 @@ def paso_reclasificar(cx, uid):
                 'traslado_a': p['traslado_a'],
                 'contraparte': p['contraparte'],
                 'descripcion': p['descripcion'],
+                'valor': p['valor'],
             },
             indice=idx,
         )
