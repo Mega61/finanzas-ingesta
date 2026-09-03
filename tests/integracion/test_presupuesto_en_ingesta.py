@@ -45,7 +45,17 @@ def uid(cx):
 
 @pytest.fixture
 def _sin_red(monkeypatch):
-    """Ni Firefly ni el mapa del historico: el mapa se fija por prueba."""
+    """Ni Firefly, ni el mapa del historico, ni el mapeo de tarjetas.
+
+    `cuenta_de_instrumento` lee `productos.csv`, que tiene los ultimos 4
+    digitos de las tarjetas de verdad y por eso NO esta en el repo. Sin
+    reemplazarla, estas pruebas pasan en la maquina del dueno -- que si tiene
+    el archivo -- y se caen en CI. Aqui no se esta probando la resolucion de
+    la tarjeta, sino el presupuesto.
+    """
+    monkeypatch.setattr(
+        clasificador, 'cuenta_de_instrumento', lambda inst, fecha: 'AMEX PLATINO'
+    )
     monkeypatch.setattr(presupuestos, 'mapa_categoria', lambda **k: {})
     monkeypatch.setattr(presupuestos, 'nombres_activos', lambda: ['Esencial', 'Vivir'])
 
