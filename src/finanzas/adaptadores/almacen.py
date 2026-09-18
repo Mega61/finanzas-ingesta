@@ -919,6 +919,13 @@ class Almacen:
         Telegram, y una regla automatica no tiene por que ganarle. Sin esto,
         la siguiente pasada del clasificador borraba lo que acababas de
         contestar.
+
+        La UNICA que si le gana es 'no_mercado', porque no opina de lo mismo.
+        Contestar «Mascotas / Gato» dice QUE es el producto; no dice que la
+        veterinaria sea un supermercado. Son dos ejes distintos y el del NIT
+        es estructural. Sin esta excepcion, los tres productos que alcanzaste
+        a contestar de la farmacia y la veterinaria se quedaban dentro de la
+        canasta para siempre: 175.245 que ninguna reclasificacion podia sacar.
         """
         self.cx.execute(
             """INSERT INTO catalogo (nit, codigo, descripcion, tipo, grupo,
@@ -929,12 +936,16 @@ class Almacen:
                       WHEN length(excluded.descripcion) > length(catalogo.descripcion)
                       THEN excluded.descripcion ELSE catalogo.descripcion END,
                   tipo       = CASE WHEN catalogo.origen = 'usuario'
+                                     AND excluded.origen <> 'no_mercado'
                                     THEN catalogo.tipo ELSE excluded.tipo END,
                   grupo      = CASE WHEN catalogo.origen = 'usuario'
+                                     AND excluded.origen <> 'no_mercado'
                                     THEN catalogo.grupo ELSE excluded.grupo END,
                   categoria  = CASE WHEN catalogo.origen = 'usuario'
+                                     AND excluded.origen <> 'no_mercado'
                                     THEN catalogo.categoria ELSE excluded.categoria END,
                   origen     = CASE WHEN catalogo.origen = 'usuario'
+                                     AND excluded.origen <> 'no_mercado'
                                     THEN 'usuario' ELSE excluded.origen END,
                   veces      = catalogo.veces + 1,
                   actualizado_en = datetime('now')""",
