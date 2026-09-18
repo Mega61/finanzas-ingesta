@@ -485,7 +485,7 @@ def paso_exportar_facturas(cx, carpeta=None):
     return cuenta
 
 
-def paso_cargar_postgres(cx, ensayo=False):
+def paso_cargar_postgres(cx, ensayo=False, encoger=False):
     """Las tres tablas del dashboard -> Postgres. El ultimo tramo del camino.
 
     Hasta que esto existio, el recorrido se cortaba aqui: el servicio parseaba
@@ -501,7 +501,11 @@ def paso_cargar_postgres(cx, ensayo=False):
         print('  sin POSTGRES_DSN: no hay a donde cargar')
         return {}
 
-    r = facturas.cargar_a_postgres(cx, ensayo=ensayo)
+    try:
+        r = facturas.cargar_a_postgres(cx, ensayo=ensayo, permitir_encoger=encoger)
+    except facturas.CargaEncoge as ex:
+        print(f'  CARGA DETENIDA: {ex}')
+        raise
     if ensayo:
         print('  ENSAYO (no se escribio nada):')
         for tabla, d in r.items():
@@ -550,6 +554,11 @@ def main(argv=None):
         help='cargar-postgres: decir que pasaria, sin escribir nada',
     )
     ap.add_argument(
+        '--encoger',
+        action='store_true',
+        help='cargar-postgres: dejar que una tabla quede mucho mas chica',
+    )
+    ap.add_argument(
         '--reclasificar',
         action='store_true',
         help='volver a clasificar TODO el catalogo con las reglas de hoy',
@@ -587,7 +596,7 @@ def main(argv=None):
         elif a.accion == 'exportar-facturas':
             paso_exportar_facturas(cx, carpeta=a.carpeta)
         elif a.accion == 'cargar-postgres':
-            paso_cargar_postgres(cx, ensayo=a.ensayo)
+            paso_cargar_postgres(cx, ensayo=a.ensayo, encoger=a.encoger)
         elif a.accion == 'conciliar':
             conciliador.correr(cx, carpeta=a.carpeta, dry_run=not a.en_serio)
         elif a.accion == 'publicar':

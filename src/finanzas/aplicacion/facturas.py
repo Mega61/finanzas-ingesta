@@ -111,11 +111,12 @@ def responder(cx, nit: str, codigo: str, grupo: str, categoria: str) -> None:
 
 
 # --------------------------------------------------------------- exportar
-# Postgres no tiene credenciales en el contenedor: el stack solo lleva las de
-# Firefly, Graph, Telegram y Gemini. Asi que la sincronizacion sale como CSV y
-# se carga con metabase/cargar_csv.py, que es el camino que ya usa
-# finanzas.movimientos. Si algun dia se agrega el DSN de Postgres al stack,
-# esto se reemplaza por un UPSERT y no cambia nada mas.
+# Hay dos caminos a Postgres y comparten CONJUNTOS, mas abajo:
+#
+#   cargar_a_postgres()  el del servicio. Necesita POSTGRES_DSN en el stack y
+#                        carga cada tabla en UNA transaccion.
+#   exportar()           los CSV, para metabase/cargar_csv.py a mano. Sigue
+#                        siendo util cuando no hay DSN a la mano.
 
 CSV_FACTURA = (
     'cufe',
@@ -235,7 +236,17 @@ def exportar(cx, carpeta: str) -> dict:
     return cuenta
 
 
-def cargar_a_postgres(cx, ensayo: bool = False) -> dict:
+class CargaEncoge(Exception):
+    """La carga dejaria la tabla mucho mas chica de lo que esta hoy."""
+
+
+# Cuanto puede encoger una tabla sin que haya que decirlo a proposito. Por
+# debajo de esto se asume que la fuente esta incompleta, no que de verdad
+# desaparecieron las filas.
+MINIMO_DEL_ACTUAL = 0.9
+
+
+def cargar_a_postgres(cx, ensayo: bool = False, permitir_encoger: bool = False) -> dict:
     """Las tres tablas a Postgres, cada una en su propia transaccion.
 
     Con `ensayo` no escribe: solo dice cuantas filas hay hoy alla y cuantas
@@ -243,6 +254,17 @@ def cargar_a_postgres(cx, ensayo: bool = False) -> dict:
 
     Cada tabla va aparte a proposito. Son independientes entre si, y si
     `producto` falla no hay razon para perder tambien la carga de `factura`.
+
+    Y no carga si la tabla fuera a encoger de golpe. Esto no es hipotetico:
+    la primera vez que el ensayo corrio contra la base de verdad dijo
+
+        finanzas.factura: hoy 229 filas, irian 13
+
+    porque el volumen del contenedor se habia quedado sin los dos anos de
+    historia que se sembraron a mano desde los .eml. Un TRUNCATE + COPY con
+    esa fuente habria borrado el dashboard entero, en una transaccion
+    impecable. Que la carga sea atomica protege de una carga a medias, no de
+    cargar lo que no era.
     """
     from finanzas.adaptadores import postgres
 
@@ -252,8 +274,15 @@ def cargar_a_postgres(cx, ensayo: bool = False) -> dict:
     cuenta = {}
     for _nombre, tabla, columnas, consulta, adaptar in CONJUNTOS:
         filas = [adaptar(r) for r in getattr(db, consulta)(cx)]
+        ahora = postgres.conteo(tabla)
         if ensayo:
-            cuenta[tabla] = {'ahora': postgres.conteo(tabla), 'irian': len(filas)}
-        else:
-            cuenta[tabla] = postgres.cargar(tabla, columnas, filas)
+            cuenta[tabla] = {'ahora': ahora, 'irian': len(filas)}
+            continue
+        if not permitir_encoger and ahora and len(filas) < ahora * MINIMO_DEL_ACTUAL:
+            raise CargaEncoge(
+                f'{tabla}: hoy tiene {ahora} filas y la carga traeria solo '
+                f'{len(filas)}. Si de verdad es lo correcto, hay que decirlo '
+                f'a proposito (--encoger).'
+            )
+        cuenta[tabla] = postgres.cargar(tabla, columnas, filas)
     return cuenta

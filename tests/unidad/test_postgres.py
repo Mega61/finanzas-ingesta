@@ -76,3 +76,56 @@ def test_cada_conjunto_produce_tantos_valores_como_columnas(conjunto):
     _nombre, _tabla, columnas, _consulta, adaptar = conjunto
     fila = adaptar(dict.fromkeys(columnas, ''))
     assert len(fila) == len(columnas)
+
+
+def test_no_carga_si_la_tabla_fuera_a_encoger(monkeypatch):
+    """El caso real: la fuente se quedo sin historia y el destino la tenia.
+
+    El ensayo contra la base de verdad dijo `factura: hoy 229, irian 13`. Con
+    TRUNCATE + COPY eso borra el dashboard en una transaccion perfecta, asi
+    que la carga se planta salvo que se le diga que si a proposito.
+    """
+    monkeypatch.setattr(postgres, 'disponible', lambda: True)
+    monkeypatch.setattr(postgres, 'conteo', lambda t: 229)
+    monkeypatch.setattr(facturas, 'CONJUNTOS', (facturas.CONJUNTOS[0],))
+    monkeypatch.setattr(
+        facturas.db,
+        'facturas_todas',
+        lambda cx: [dict.fromkeys(facturas.CSV_FACTURA, '')] * 13,
+    )
+
+    def no_debe_llamarse(*a, **k):
+        raise AssertionError('no debio cargar: la tabla encogia de 229 a 13')
+
+    monkeypatch.setattr(postgres, 'cargar', no_debe_llamarse)
+    with pytest.raises(facturas.CargaEncoge, match='229'):
+        facturas.cargar_a_postgres(None)
+
+
+def test_con_permiso_explicito_si_encoge(monkeypatch):
+    """Que se pueda, pero diciendolo. A veces encoger es lo correcto."""
+    monkeypatch.setattr(postgres, 'disponible', lambda: True)
+    monkeypatch.setattr(postgres, 'conteo', lambda t: 229)
+    monkeypatch.setattr(facturas, 'CONJUNTOS', (facturas.CONJUNTOS[0],))
+    monkeypatch.setattr(
+        facturas.db,
+        'facturas_todas',
+        lambda cx: [dict.fromkeys(facturas.CSV_FACTURA, '')] * 13,
+    )
+    monkeypatch.setattr(postgres, 'cargar', lambda t, c, f: len(list(f)))
+    r = facturas.cargar_a_postgres(None, permitir_encoger=True)
+    assert r == {'finanzas.factura': 13}
+
+
+def test_crecer_no_necesita_permiso(monkeypatch):
+    """Lo normal —el dashboard se pone al dia— no pide nada."""
+    monkeypatch.setattr(postgres, 'disponible', lambda: True)
+    monkeypatch.setattr(postgres, 'conteo', lambda t: 229)
+    monkeypatch.setattr(facturas, 'CONJUNTOS', (facturas.CONJUNTOS[0],))
+    monkeypatch.setattr(
+        facturas.db,
+        'facturas_todas',
+        lambda cx: [dict.fromkeys(facturas.CSV_FACTURA, '')] * 240,
+    )
+    monkeypatch.setattr(postgres, 'cargar', lambda t, c, f: len(list(f)))
+    assert facturas.cargar_a_postgres(None) == {'finanzas.factura': 240}
