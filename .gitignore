@@ -54,3 +54,5 @@ htmlcov/
 # Custom
 
 facturas_example/
+# Credenciales de Metabase (mismo criterio que .env)
+.metabase.env
