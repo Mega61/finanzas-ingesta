@@ -293,6 +293,22 @@ COMPILADAS = [(re.compile(p, re.I), g, c) for p, g, c in REGLAS]
 # igual en un presupuesto, el televisor no.
 NO_CONSUMIBLES = frozenset({'Tecnologia', 'Electrodomesticos', 'Hogar'})
 
+# Los tres supermercados. Al buzon de facturacion electronica llega TODA la
+# factura con NIT: la de EPM, la del gimnasio, la de la veterinaria, la de la
+# farmacia. Nada de eso es la canasta, pero entraba igual y se clasificaba por
+# palabras, con resultados que no se sostienen: el "PLAN DE SALUD Y BIENESTAR"
+# del gimnasio caia en Carnes y pollo y sumaba 70.000 al mercado del mes.
+#
+# Y como quedaban 'Sin clasificar', el bot volvia a preguntar por ellos cada
+# tres dias para siempre: las once lineas de la factura de EPM (energia, gas,
+# alumbrado, aseo) no tenian forma de cerrarse, porque 'saltar' solo aplaza.
+NITS_MERCADO = frozenset({'890900608', '900276962', '900522508'})
+
+# El grupo que cierra la pregunta. No es 'Sin clasificar' —asi sale de la cola
+# del bot— y no es consumible —asi sale de la canasta—, que son las dos cosas
+# que hacian falta.
+NO_ES_MERCADO = 'No es mercado'
+
 # Grupos validos, para que el bot no invente uno nuevo al responder.
 GRUPOS_CONSUMIBLE = (
     'Alimentacion',
@@ -345,6 +361,8 @@ CATEGORIAS = {
 
 def tipo_de(grupo: str) -> str:
     """Consumible o no. Es el corte de arriba del dashboard."""
+    if grupo == NO_ES_MERCADO:
+        return NO_ES_MERCADO
     if grupo in NO_CONSUMIBLES:
         return 'No consumible'
     if grupo == 'Sin clasificar':
@@ -354,6 +372,8 @@ def tipo_de(grupo: str) -> str:
 
 def clasificar(nit, codigo, desc, iva):
     """Devuelve (tipo, grupo, categoria, origen)."""
+    if nit not in NITS_MERCADO:
+        return NO_ES_MERCADO, NO_ES_MERCADO, NO_ES_MERCADO, 'no_mercado'
     grupo, categoria, origen = _grupo_y_categoria(nit, codigo, normalizar(desc), iva)
     return tipo_de(grupo), grupo, categoria, origen
 
