@@ -39,6 +39,19 @@ INTERVALO_MIN = int(config.get('INGESTA_INTERVALO_MIN', '15'))
 HORA_RESUMEN = config.get('RESUMEN_HORA', '21:00')
 # Hora de la conciliacion contra extractos, una vez al dia.
 HORA_CONCILIAR = config.get('CONCILIAR_HORA', '03:30')
+# Cada cuanto se sube el dashboard de mercado a Postgres. Mas espaciado que la
+# ingesta a proposito: una alerta del banco es urgente, un dashboard no.
+EXPORT_INTERVALO_MIN = int(config.get('EXPORT_INTERVALO_MIN', '60'))
+# Si la carga escribe de verdad. Arranca en 'no' como INGESTA_EN_SERIO y por
+# la misma razon, solo que aqui pesa mas: el esquema `finanzas` vive DENTRO de
+# la base de produccion de Firefly. En 'no' igual corre, pero en ensayo: dice
+# en el log cuantas filas hay hoy y cuantas entrarian, sin tocar nada.
+EXPORT_EN_SERIO = str(config.get('EXPORT_EN_SERIO', 'no')).lower() in (
+    '1',
+    'si',
+    'true',
+    'yes',
+)
 # Si se publica de verdad. Arranca en seco a proposito: hay que decir que si.
 EN_SERIO = str(config.get('INGESTA_EN_SERIO', 'no')).lower() in (
     '1',
@@ -96,6 +109,10 @@ def hilo_ingesta(uid):
     cx = db.conectar()
     proximo_resumen = _proxima_hora(HORA_RESUMEN)
     proxima_concil = _proxima_hora(HORA_CONCILIAR)
+    # Arranca vencido: si hay DSN, la primera vuelta ya carga. Al encender
+    # esto por primera vez el dashboard lleva semanas viejo y no tiene sentido
+    # hacerlo esperar una hora mas.
+    proximo_export = fechas.ahora()
     fallos = 0
     try:
         while not _parar.is_set():
@@ -131,6 +148,29 @@ def hilo_ingesta(uid):
                 except Exception as ex:
                     log('conciliar', f'ERROR: {ex}')
                 proxima_concil = _proxima_hora(HORA_CONCILIAR)
+
+            if ahora >= proximo_export:
+                try:
+                    r = demonio.paso_cargar_postgres(cx, ensayo=not EXPORT_EN_SERIO)
+                    if r and EXPORT_EN_SERIO:
+                        log('metabase', ' '.join(f'{t}={n}' for t, n in r.items()))
+                    elif r:
+                        log(
+                            'metabase',
+                            'ENSAYO '
+                            + ' '.join(
+                                f'{t}: hoy {d["ahora"]} -> {d["irian"]}'
+                                for t, d in r.items()
+                                if isinstance(d, dict)
+                            ),
+                        )
+                except Exception as ex:
+                    # Que el dashboard no cargue no puede tumbar la ingesta:
+                    # el correo y Firefly son lo importante.
+                    log('metabase', f'ERROR: {type(ex).__name__}: {ex}')
+                proximo_export = fechas.ahora() + timedelta(
+                    minutes=EXPORT_INTERVALO_MIN
+                )
 
             _parar.wait(INTERVALO_MIN * 60)
     finally:

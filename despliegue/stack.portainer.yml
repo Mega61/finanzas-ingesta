@@ -48,6 +48,9 @@ services:
     hostname: ingesta
     restart: unless-stopped
     networks:
+      # RED_FIREFLY ya apunta a 'proxied', que es donde viven Firefly,
+      # Metabase Y postgress. El contenedor resuelve `postgress` desde el
+      # primer dia: no hacia falta red nueva, solo credenciales.
       - firefly
     volumes:
       # La cola, el token de OAuth ya rotado, y el offset de Telegram.
@@ -108,6 +111,19 @@ services:
       # mercado lo viejo es ruido: precios de otra epoca y productos que ya no
       # existen.
       FACTURAS_DESDE: ${FACTURAS_DESDE:-2025-01-01}
+
+      # Postgres: el esquema `finanzas` del dashboard de mercado. Vive DENTRO
+      # de la base de Firefly, asi que esta cadena lleva credenciales de
+      # produccion — va por variable de entorno y nunca al repo.
+      # Vacia = no se carga nada y el resto del servicio sigue igual.
+      POSTGRES_DSN: ${POSTGRES_DSN:-}
+      POSTGRES_TIMEOUT: ${POSTGRES_TIMEOUT:-60}
+      # Cada cuantos minutos se exporta y se carga a Postgres. El dashboard no
+      # es urgente como una alerta del banco: 60 minutos sobra.
+      EXPORT_INTERVALO_MIN: ${EXPORT_INTERVALO_MIN:-60}
+      # Arranca en 'no': la primera vez conviene ver en el log que iba a pasar
+      # antes de escribir en la base de produccion de Firefly.
+      EXPORT_EN_SERIO: ${EXPORT_EN_SERIO:-no}
 
     # Sin puertos publicados: nadie tiene que entrarle de afuera.
     security_opt:

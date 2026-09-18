@@ -485,6 +485,33 @@ def paso_exportar_facturas(cx, carpeta=None):
     return cuenta
 
 
+def paso_cargar_postgres(cx, ensayo=False):
+    """Las tres tablas del dashboard -> Postgres. El ultimo tramo del camino.
+
+    Hasta que esto existio, el recorrido se cortaba aqui: el servicio parseaba
+    las facturas, preguntaba por Telegram y guardaba la respuesta en SQLite...
+    y ahi se quedaba. La carga a Postgres era un script que habia que acordarse
+    de correr a mano, asi que el dashboard mostraba la primera adivinanza por
+    palabra clave y NINGUNA de las respuestas del usuario.
+    """
+    from finanzas.adaptadores import postgres
+    from finanzas.aplicacion import facturas
+
+    if not postgres.disponible():
+        print('  sin POSTGRES_DSN: no hay a donde cargar')
+        return {}
+
+    r = facturas.cargar_a_postgres(cx, ensayo=ensayo)
+    if ensayo:
+        print('  ENSAYO (no se escribio nada):')
+        for tabla, d in r.items():
+            print(f'    {tabla}: hoy {d["ahora"]} filas, irian {d["irian"]}')
+    else:
+        for tabla, n in r.items():
+            print(f'    {tabla}: {n} filas')
+    return r
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog='finanzas',
@@ -504,6 +531,7 @@ def main(argv=None):
             'conciliar',
             'facturas',
             'exportar-facturas',
+            'cargar-postgres',
             'ciclo',
         ],
     )
@@ -516,6 +544,11 @@ def main(argv=None):
     ap.add_argument('--dias', type=int, help='bajar los ultimos N dias')
     ap.add_argument('--desde', help='marca de agua YYYY-MM-DD')
     ap.add_argument('--carpeta', help='carpeta de .eml o de PDF de extracto')
+    ap.add_argument(
+        '--ensayo',
+        action='store_true',
+        help='cargar-postgres: decir que pasaria, sin escribir nada',
+    )
     ap.add_argument(
         '--reclasificar',
         action='store_true',
@@ -553,6 +586,8 @@ def main(argv=None):
             )
         elif a.accion == 'exportar-facturas':
             paso_exportar_facturas(cx, carpeta=a.carpeta)
+        elif a.accion == 'cargar-postgres':
+            paso_cargar_postgres(cx, ensayo=a.ensayo)
         elif a.accion == 'conciliar':
             conciliador.correr(cx, carpeta=a.carpeta, dry_run=not a.en_serio)
         elif a.accion == 'publicar':

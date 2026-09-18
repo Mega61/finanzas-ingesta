@@ -162,6 +162,59 @@ CSV_PRODUCTO = (
 )
 
 
+def _fila_factura(r):
+    return [
+        r['cufe'],
+        r['nit'],
+        r['proveedor'],
+        r['numero'],
+        r['tipo'],
+        r['signo'],
+        r['fecha'],
+        r['hora'],
+        r['sede'],
+        r['moneda'],
+        r['subtotal'],
+        r['descuento'],
+        r['total'],
+        r['medios_pago'],
+        r['puntos_redimidos'],
+        r['ahorro'],
+        'true' if r['pagada_con_puntos'] else 'false',
+    ]
+
+
+def _fila_linea(r):
+    return [r[c] for c in CSV_LINEA]
+
+
+def _fila_producto(r):
+    return [r[c] for c in CSV_PRODUCTO]
+
+
+# Las tres tablas del dashboard, definidas UNA vez. De aqui salen tanto los
+# CSV como la carga directa a Postgres: si vivieran por separado, arreglar una
+# columna en un camino y no en el otro daria dos verdades distintas, que es
+# justo lo que veniamos sufriendo.
+CONJUNTOS = (
+    ('factura.csv', 'finanzas.factura', CSV_FACTURA, 'facturas_todas', _fila_factura),
+    (
+        'factura_linea.csv',
+        'finanzas.factura_linea',
+        CSV_LINEA,
+        'lineas_todas',
+        _fila_linea,
+    ),
+    (
+        'producto.csv',
+        'finanzas.producto',
+        CSV_PRODUCTO,
+        'catalogo_todo',
+        _fila_producto,
+    ),
+)
+
+
 def exportar(cx, carpeta: str) -> dict:
     """Deja los tres CSV que carga metabase/cargar_csv.py."""
     import csv
@@ -169,74 +222,38 @@ def exportar(cx, carpeta: str) -> dict:
 
     os.makedirs(carpeta, exist_ok=True)
     cuenta = {}
-
-    def volcar(nombre, columnas, filas, adaptar=None):
+    for nombre, _tabla, columnas, consulta, adaptar in CONJUNTOS:
         ruta = os.path.join(carpeta, nombre)
         with open(ruta, 'w', newline='', encoding='utf-8') as fh:
             w = csv.writer(fh)
             w.writerow(columnas)
             n = 0
-            for r in filas:
-                w.writerow(adaptar(r) if adaptar else [r[c] for c in columnas])
+            for r in getattr(db, consulta)(cx):
+                w.writerow(adaptar(r))
                 n += 1
         cuenta[nombre] = n
+    return cuenta
 
-    volcar(
-        'factura.csv',
-        CSV_FACTURA,
-        db.facturas_todas(cx),
-        lambda r: [
-            r['cufe'],
-            r['nit'],
-            r['proveedor'],
-            r['numero'],
-            r['tipo'],
-            r['signo'],
-            r['fecha'],
-            r['hora'],
-            r['sede'],
-            r['moneda'],
-            r['subtotal'],
-            r['descuento'],
-            r['total'],
-            r['medios_pago'],
-            r['puntos_redimidos'],
-            r['ahorro'],
-            'true' if r['pagada_con_puntos'] else 'false',
-        ],
-    )
-    volcar(
-        'factura_linea.csv',
-        CSV_LINEA,
-        db.lineas_todas(cx),
-        lambda r: [
-            r['cufe'],
-            r['n'],
-            r['nit'],
-            r['codigo'],
-            r['descripcion'],
-            r['cantidad'],
-            r['unidad'],
-            r['precio_unitario'],
-            r['descuento'],
-            r['iva_pct'],
-            r['total'],
-            r['signo'],
-            r['fecha'],
-        ],
-    )
-    volcar(
-        'producto.csv',
-        CSV_PRODUCTO,
-        db.catalogo_todo(cx),
-        lambda r: [
-            r['nit'],
-            r['codigo'],
-            r['descripcion'],
-            r['tipo'],
-            r['grupo'],
-            r['categoria'],
-            r['origen'],
-        ],
-    )
+
+def cargar_a_postgres(cx, ensayo: bool = False) -> dict:
+    """Las tres tablas a Postgres, cada una en su propia transaccion.
+
+    Con `ensayo` no escribe: solo dice cuantas filas hay hoy alla y cuantas
+    irian, que es lo que se quiere ver antes de tocar la base de Firefly.
+
+    Cada tabla va aparte a proposito. Son independientes entre si, y si
+    `producto` falla no hay razon para perder tambien la carga de `factura`.
+    """
+    from finanzas.adaptadores import postgres
+
+    if not postgres.disponible():
+        return {'omitido': 'sin POSTGRES_DSN'}
+
+    cuenta = {}
+    for _nombre, tabla, columnas, consulta, adaptar in CONJUNTOS:
+        filas = [adaptar(r) for r in getattr(db, consulta)(cx)]
+        if ensayo:
+            cuenta[tabla] = {'ahora': postgres.conteo(tabla), 'irian': len(filas)}
+        else:
+            cuenta[tabla] = postgres.cargar(tabla, columnas, filas)
     return cuenta

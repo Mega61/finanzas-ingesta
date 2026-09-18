@@ -59,6 +59,10 @@ ACCIONES_DEMONIO = (
     ('reclasificar', 'volver a pasar las reglas sobre lo que sigue abierto'),
     ('sembrar', 'aprender reglas del historico de Firefly'),
     ('importar', 'cargar .eml de una carpeta'),
+    (
+        'cargar-postgres',
+        'subir el dashboard de mercado a Postgres (--ensayo para ver antes)',
+    ),
 )
 
 DEMONIO = 'finanzas.entrada.demonio'
