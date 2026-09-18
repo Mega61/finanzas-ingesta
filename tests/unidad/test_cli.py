@@ -9,6 +9,8 @@ modulo correcto con los argumentos intactos — sin ejecutar nada de verdad.
 from __future__ import annotations
 
 import importlib
+import re
+from pathlib import Path
 
 import pytest
 
@@ -163,3 +165,23 @@ class TestEnrutamiento:
 
         monkeypatch.setattr(demonio, 'main', lambda argv=None: None)
         assert cli.main(['estado']) == 0
+
+
+def test_toda_accion_del_demonio_se_alcanza_desde_el_cli():
+    """Si demonio la acepta, `finanzas <accion>` tiene que llegarle.
+
+    Esto no es teorico. `facturas` vivia en el argparse del demonio desde
+    siempre, pero nunca estuvo en ACCIONES_DEMONIO, asi que
+    `finanzas facturas --carpeta ...` respondia «No conozco facturas» y la
+    unica forma de sembrar el historico era saberse de memoria
+    `python -m finanzas.entrada.demonio`. Se descubrio justo cuando hacia
+    falta: reponiendo los dos anos de facturas que se habian perdido.
+    """
+    ruta = Path(cli.__file__).resolve().parent / 'entrada' / 'demonio.py'
+    acepta = set(re.findall(r"a\.accion == '([a-z-]+)'", ruta.read_text('utf-8')))
+    alcanza = {a for a, _ in cli.ACCIONES_DEMONIO} | set(cli.GRUPOS)
+
+    assert acepta - alcanza == set(), (
+        f'el demonio acepta {sorted(acepta - alcanza)} pero el cli no las '
+        f'expone: agregalas a ACCIONES_DEMONIO en cli.py'
+    )

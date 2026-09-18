@@ -59,6 +59,8 @@ ACCIONES_DEMONIO = (
     ('reclasificar', 'volver a pasar las reglas sobre lo que sigue abierto'),
     ('sembrar', 'aprender reglas del historico de Firefly'),
     ('importar', 'cargar .eml de una carpeta'),
+    ('facturas', 'facturas de supermercado: parsear, clasificar, preguntar'),
+    ('exportar-facturas', 'dejar los tres CSV para carga manual'),
     (
         'cargar-postgres',
         'subir el dashboard de mercado a Postgres (--ensayo para ver antes)',
