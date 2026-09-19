@@ -207,3 +207,36 @@ def actualizar_split(tx_id: str, **campos: Any) -> bool:
     cambio.update(campos)
     call('PUT', f'/api/v1/transactions/{tx_id}', {'transactions': [cambio]})
     return True
+
+
+def destinos_recurrentes() -> dict[str, float]:
+    """Cuenta -> monto del recibo que Firefly ya crea solo cada mes.
+
+    Son los programados: Tigo, el arriendo, el gimnasio, las cuotas de manejo,
+    Amazon Prime. Firefly los crea por su cuenta, asi que si la ingesta publica
+    ADEMAS el cargo que llega por la alerta del banco, el recibo queda contado
+    dos veces.
+
+    El anti-duplicado por monto no los agarra: el programado lleva el monto de
+    siempre (119.900 de Tigo) y el cargo real trae el del mes (129.721), que
+    nunca se parecen lo suficiente para chocar.
+
+    Va el MONTO y no solo el nombre porque una cuenta puede recibir cosas que
+    no son el recibo: a 'Bancolombia' le entran las cuotas de manejo de tres
+    tarjetas y tambien cualquier traslado. Tapar todo lo que le llegue seria
+    peor que el duplicado.
+    """
+    salida: dict[str, float] = {}
+    for r in get_all('/api/v1/recurrences'):
+        a = r.get('attributes', {})
+        if not a.get('active', True):
+            continue
+        for t in a.get('transactions', []) or []:
+            nombre = t.get('destination_name')
+            if not nombre:
+                continue
+            try:
+                salida[nombre] = float(t.get('amount') or 0)
+            except (TypeError, ValueError):
+                continue
+    return salida

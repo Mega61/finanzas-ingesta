@@ -69,7 +69,17 @@ class IndiceFirefly:
         # recorriendo todo— y es lo que permite cerrar la pregunta en vez de
         # seguir preguntando por algo que ya esta bien registrado.
         self.external = {}
+        # (cuenta, 'YYYY-MM') -> montos ya registrados ese mes. Es lo que deja
+        # ver que el recibo programado del mes YA esta, aunque venga por otro
+        # monto que el cargo de la alerta.
+        self.por_mes = {}
         self.n = 0
+        # Si Firefly no responde esto, se sigue sin ello: perder el chequeo de
+        # recibos es mucho menos grave que no poder publicar nada.
+        try:
+            self.recurrentes = firefly.destinos_recurrentes()
+        except Exception:
+            self.recurrentes = {}
         for t in firefly.get_all(ruta):
             for s in t.get('attributes', {}).get('transactions', []):
                 self.n += 1
@@ -91,6 +101,39 @@ class IndiceFirefly:
                 for cuenta in (s.get('source_name'), s.get('destination_name')):
                     if cuenta:
                         self.por_monto.setdefault((cuenta, monto), []).append(f)
+                dest = s.get('destination_name')
+                if dest:
+                    self.por_mes.setdefault((dest, f.strftime('%Y-%m')), []).append(
+                        monto
+                    )
+
+    def recibo_del_mes(self, destino, fecha, valor, recurrentes):
+        """El recibo programado de esa cuenta ya esta puesto este mes.
+
+        Firefly crea solo los recurrentes —Tigo, arriendo, gimnasio, cuotas de
+        manejo, Prime— y ademas llega la alerta del banco del mismo cobro. El
+        anti-duplicado por monto no los cruza porque el programado lleva el
+        monto de siempre y el cargo real el del mes: Tigo entro dos veces,
+        119.900 programado y 129.721 de la alerta.
+
+        Se pide que el monto se PAREZCA al del recurrente (20%) y no solo que
+        la cuenta coincida: a 'Bancolombia' le llegan tres cuotas de manejo
+        distintas y cualquier traslado, y taparlos todos seria peor.
+        """
+        esperado = recurrentes.get(destino)
+        if not esperado:
+            return None
+        f = _a_fecha(fecha)
+        if not f:
+            return None
+        monto = round(abs(float(valor)))
+        if abs(monto - esperado) > esperado * 0.20:
+            return None
+        ya = self.por_mes.get((destino, f.strftime('%Y-%m')), [])
+        for otro in ya:
+            if abs(otro - esperado) <= esperado * 0.20:
+                return otro
+        return None
 
     def ya_existe(self, cuenta, fecha, valor, tolerancia=TOLERANCIA_DIAS):
         f = _a_fecha(fecha)
@@ -219,6 +262,32 @@ def publicar_uno(cx, p, idx=None, dry_run=True):
     # red 2: el external_id ya esta en Firefly
     if idx is not None and p['external_id'] in idx.external:
         return _adoptar_lo_de_firefly(cx, p, idx.external[p['external_id']])
+
+    # red 3b: el recibo programado de ese mes ya esta.
+    #
+    # Va ANTES del anti-duplicado por monto porque ese no los cruza: el
+    # programado lleva el monto de siempre y la alerta el del mes. Tigo entro
+    # dos veces en septiembre —119.900 del recurrente el dia 6 y 129.721 de la
+    # alerta el dia 4— y para el chequeo de monto eran movimientos distintos.
+    if idx is not None and getattr(idx, 'recurrentes', None):
+        destino = (
+            p['cuenta_destino']
+            or _texto.cuenta_de_cadena(p['contraparte'])
+            or p['contraparte']
+        )
+        otro = idx.recibo_del_mes(destino, p['fecha'], p['valor'], idx.recurrentes)
+        if otro:
+            db.pendiente_actualizar(
+                cx,
+                p['id'],
+                estado='descartado',
+                pregunta=None,
+                decidido_por='recibo_programado',
+            )
+            cx.commit()
+            return 'duplicado', (
+                f'«{destino}» ya tiene su recibo programado este mes ({otro:,.0f})'
+            )
 
     # red 3: mismo monto, misma cuenta, fecha cercana
     if idx is not None:
