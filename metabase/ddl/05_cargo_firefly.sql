@@ -53,8 +53,23 @@ WHERE tj.deleted_at IS NULL
 -- El emparejamiento, uno a uno.
 --
 -- Tolerancias, sacadas de mirar los 90 pares que salen:
---   monto  +/- 2 pesos. Las diferencias reales son de 1 peso, por el redondeo
---          entre lo que suman las lineas y lo que cobra la caja.
+--   monto  el 1% del total, con piso de 2 pesos. Era +/- 2 fijo, y con eso se
+--          perdian cuatro compras enteras por diferencias de caja:
+--
+--            SF6812317   18-sep-2026   factura 373.099   cobro 374.689   0,43%
+--            SF688342    05-jun-2026   factura 296.717   cobro 295.683   0,35%
+--            UE5317718   28-feb-2026   factura 525.146   cobro 523.353   0,34%
+--            UE534252    11-oct-2025   factura 347.917   cobro 347.565   0,10%
+--
+--          Las cuatro son el mismo dia o el siguiente. Tirar 33 lineas de
+--          detalle por 1.590 pesos no tiene sentido: la diferencia la absorbe
+--          la fila de cierre de v_mercado_linea, que existe para eso.
+--
+--          El 1% no sale gratis: dos almuerzos de 14.385 y 14.310 del mismo
+--          fin de semana quedan cada uno dentro del 1% del cargo del OTRO. No
+--          hace daño porque el orden es `dias` primero y el par exacto —mismo
+--          dia, cero diferencia— gana siempre. Pero por eso el orden importa
+--          y no se puede cambiar a la ligera.
 --   fecha  de 3 dias antes a 10 despues. El maximo observado son 4 dias, y
 --          siempre hacia adelante: el cargo entra despues de la compra, nunca
 --          antes. Los 3 dias hacia atras son holgura por zona horaria.
@@ -71,7 +86,7 @@ WITH candidatos AS (
   FROM finanzas.factura f
   JOIN finanzas.v_firefly_super ff
     ON ff.nit = f.nit
-   AND ABS(ff.amount - f.total) <= 2
+   AND ABS(ff.amount - f.total) <= GREATEST(2, f.total * 0.01)
    AND ff.fecha BETWEEN f.fecha - 3 AND f.fecha + 10
 ), mejor_por_factura AS (
   SELECT DISTINCT ON (cufe) * FROM candidatos ORDER BY cufe, dias, dif
