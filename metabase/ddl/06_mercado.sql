@@ -63,27 +63,35 @@ WHERE ff.nit IS NOT NULL;
 -- Comprobado contra septiembre de 2026: la suma da 1.729.284, identica a la de
 -- Firefly. Si se redondea POR CATEGORIA antes de sumar puede aparecer un peso
 -- de diferencia; es el redondeo de la presentacion, no del dato.
-CREATE OR REPLACE VIEW finanzas.v_mercado_linea AS
+-- DROP y no CREATE OR REPLACE: Postgres no deja renombrar ni reordenar las
+-- columnas de una vista existente. Nada cuelga de esta todavia.
+DROP VIEW IF EXISTS finanzas.v_mercado_linea;
+
+CREATE VIEW finanzas.v_mercado_linea AS
 WITH detalle AS (
-  SELECT m.firefly_id, m.fecha, m.mes, m.cadena, m.nit,
-         v.producto, v.grupo, v.categoria, v.tipo,
-         v.valor_pagado AS valor
+  SELECT m.firefly_id, m.fecha, m.mes, m.cadena, m.nit, m.cufe,
+         v.codigo, v.producto, v.grupo, v.categoria, v.tipo, v.sede, v.cantidad,
+         v.valor_pagado
   FROM finanzas.v_mercado m
   JOIN finanzas.v_compra v ON v.cufe = m.cufe
   WHERE m.tiene_factura AND v.tipo = 'Consumible'
 ), explicado AS (
-  SELECT firefly_id, SUM(valor) AS suma FROM detalle GROUP BY 1
+  SELECT firefly_id, SUM(valor_pagado) AS suma FROM detalle GROUP BY 1
 )
-SELECT firefly_id, fecha, mes, cadena, nit, producto, grupo, categoria, tipo,
-       valor, TRUE AS detallado
+SELECT firefly_id, fecha, mes, cadena, nit, cufe, codigo, producto, grupo,
+       categoria, tipo, sede, cantidad, valor_pagado,
+       CASE WHEN grupo IN ('Alimentacion', 'Comida preparada', 'Licores')
+            THEN 'Comida' ELSE 'Hogar y cuidado' END AS bloque,
+       TRUE AS detallado
 FROM detalle
 UNION ALL
-SELECT m.firefly_id, m.fecha, m.mes, m.cadena, m.nit,
+SELECT m.firefly_id, m.fecha, m.mes, m.cadena, m.nit, NULL, NULL,
        CASE WHEN m.tiene_factura THEN 'No detallado' ELSE 'Sin factura' END,
        CASE WHEN m.tiene_factura THEN 'No detallado' ELSE 'Sin factura' END,
        CASE WHEN m.tiene_factura THEN 'No detallado' ELSE 'Sin factura' END,
-       'Sin detalle',
+       'Sin detalle', NULL, NULL,
        m.pagado - COALESCE(e.suma, 0),
+       'Sin detalle',
        FALSE
 FROM finanzas.v_mercado m
 LEFT JOIN explicado e ON e.firefly_id = m.firefly_id
