@@ -32,7 +32,11 @@ SELECT tj.id,
        t.amount,
        CASE
          WHEN a.name ILIKE '%xito%' OR a.name ILIKE '%carulla%' THEN '890900608'
-         WHEN a.name = 'D1'                                     THEN '900276962'
+         -- Ojo con la igualdad: era `a.name = 'D1'` y dejaba por fuera
+         -- 'TIENDA D1 SABANETA P' y 'KOBA COLOMBIA' (Koba es la dueña de D1).
+         -- Sin NIT no hay cruce, y sin cruce la factura se queda con SU fecha
+         -- en vez de la del cargo, que es justo lo que este archivo arregla.
+         WHEN a.name ~* '\yD1\y' OR a.name ~* '\yKOBA\y'      THEN '900276962'
          WHEN a.name ILIKE '%vaquita%' OR a.name ILIKE '%supermu%' THEN '900522508'
        END AS nit
 FROM public.transaction_journals tj
@@ -42,7 +46,8 @@ JOIN public.accounts a ON a.id = t.account_id
 JOIN public.transaction_types tt ON tt.id = tj.transaction_type_id
 WHERE tj.deleted_at IS NULL
   AND tt.type = 'Withdrawal'
-  AND (a.name ILIKE '%xito%' OR a.name ILIKE '%carulla%' OR a.name = 'D1'
+  AND (a.name ILIKE '%xito%' OR a.name ILIKE '%carulla%'
+       OR a.name ~* '\yD1\y' OR a.name ~* '\yKOBA\y'
        OR a.name ILIKE '%vaquita%' OR a.name ILIKE '%supermu%');
 
 -- El emparejamiento, uno a uno.

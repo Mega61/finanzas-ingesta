@@ -205,3 +205,48 @@ def es_numerico(texto: str | None) -> bool:
     numero es la identidad: no se puede normalizar a nada."""
     n = normalizar(texto)
     return bool(n) and n.replace(' ', '').isdigit()
+
+
+# --------------------------------------------------------------- cadenas
+# El nombre que el banco manda cambia por DATAFONO, no por comercio:
+#
+#   TIENDA D1 SABANETA P    TIENDA D1 SABANETA S    KOBA COLOMBIA
+#   EXITO SABANETA          ALMACENES EXITO         GRUPO EXITO
+#
+# `normalizar` los deja distintos —y hace bien, son textos distintos— asi que
+# cada uno estrena clave de regla, nadie le tiene cuenta aprendida, y el
+# publicador cae en el nombre crudo. Firefly entonces CREA una cuenta de gasto
+# nueva con ese nombre. Asi aparecieron 'EXITO SABANETA', 'KOBA COLOMBIA',
+# 'ALMACENES EXITO' y 'TIENDA D1 SABANETA P' al lado de 'Grupo Éxito' (128
+# movimientos desde 2025) y 'D1' (22), partiendo en pedazos el historico de
+# las tres cadenas justo cuando se quiere cuadrar el mes.
+#
+# Esto NO reemplaza a las reglas: solo actua cuando no hay ninguna, antes de
+# rendirse y usar el texto crudo. Una regla aprendida o contestada por
+# Telegram sigue mandando.
+CADENAS = (
+    ('Grupo Éxito', re.compile(r'\b(EXITO|CARULLA)\b')),
+    ('D1', re.compile(r'\b(D1|KOBA)\b')),
+    ('Supermu', re.compile(r'\b(SUPERMU|SUPERVAQUITA|VAQUITA)\b')),
+)
+
+
+def cuenta_de_cadena(nombre: str | None) -> str | None:
+    """La cuenta de Firefly de la cadena, o None si no se reconoce.
+
+    >>> cuenta_de_cadena('TIENDA D1 SABANETA P')
+    'D1'
+    >>> cuenta_de_cadena('KOBA COLOMBIA')
+    'D1'
+    >>> cuenta_de_cadena('ALMACENES EXITO')
+    'Grupo Éxito'
+    >>> cuenta_de_cadena('PANADERIA LA 33') is None
+    True
+    """
+    if not nombre:
+        return None
+    limpio = normalizar(nombre)
+    for cuenta, patron in CADENAS:
+        if patron.search(limpio):
+            return cuenta
+    return None

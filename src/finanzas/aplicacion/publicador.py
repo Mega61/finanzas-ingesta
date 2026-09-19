@@ -21,6 +21,7 @@ from datetime import timedelta
 from finanzas import registro
 from finanzas.adaptadores import db, firefly
 from finanzas.dominio import fechas
+from finanzas.dominio import texto as _texto
 
 ETIQUETA = 'sin-confirmar'
 ETIQUETA_ORIGEN = 'ingesta-automatica'
@@ -114,7 +115,23 @@ def armar_payload(p):
     """
     valor = float(p['valor'])
     cuenta = p['cuenta_firefly']
-    destino = p['cuenta_destino'] or (p['contraparte'] or 'Sin identificar')
+    # El orden importa y es este:
+    #
+    #   1. la regla     lo aprendido del historico o contestado por Telegram
+    #   2. la cadena    'TIENDA D1 SABANETA P' y 'KOBA COLOMBIA' son D1
+    #   3. el crudo     lo que mando el banco, y que Firefly convierte en
+    #                   una cuenta de gasto nueva si no existia
+    #
+    # Sin el paso 2 se llegaba del 1 al 3 de una, y cada datafono estrenaba
+    # cuenta: 'EXITO SABANETA' y 'ALMACENES EXITO' aparte de 'Grupo Éxito',
+    # que ya llevaba 128 movimientos. El historico de la cadena quedaba
+    # partido en pedazos.
+    destino = (
+        p['cuenta_destino']
+        or _texto.cuenta_de_cadena(p['contraparte'])
+        or p['contraparte']
+        or 'Sin identificar'
+    )
 
     if p['traslado_a'] and p['cuenta_destino']:
         tipo = 'transfer'
