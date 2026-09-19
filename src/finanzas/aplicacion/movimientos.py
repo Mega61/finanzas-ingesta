@@ -145,6 +145,10 @@ def uno(tx_id: str) -> dict | None:
 # Lo que se puede cambiar, y como se llama en la API de Firefly. `comercio` se
 # traduce segun el signo: en un gasto es la cuenta de DESTINO y en un ingreso la
 # de ORIGEN. Mandarlo al lado equivocado mueve la plata de cuenta.
+# Pasar esto como `presupuesto` QUITA el presupuesto. Se necesita un valor
+# aparte porque None y la ausencia de la clave ya significan «no lo toques».
+SIN_PRESUPUESTO = ''
+
 CAMBIABLES = (
     'categoria',
     'presupuesto',
@@ -197,6 +201,14 @@ def editar(tx_id: str, **cambios: Any) -> dict[str, Any]:
         campos['category_name'] = cambios['categoria']
     if cambios.get('presupuesto'):
         campos['budget_name'] = cambios['presupuesto']
+    elif 'presupuesto' in cambios and cambios['presupuesto'] == SIN_PRESUPUESTO:
+        # QUITAR el presupuesto, que no es lo mismo que no tocarlo. Hacia falta
+        # para la inversion: una compra de inversion no consume ningun bucket
+        # del mes, y dejarla en uno descuadra el presupuesto entero.
+        #
+        # Va por `budget_id: None` y no por `budget_name: ''` porque Firefly
+        # con el nombre vacio no quita nada: lo ignora.
+        campos['budget_id'] = None
     if cambios.get('descripcion'):
         campos['description'] = _acortar(cambios['descripcion'])
     if cambios.get('notas'):

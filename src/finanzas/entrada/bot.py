@@ -11,6 +11,7 @@ en la vida. Despues de contestar, el movimiento se publica en Firefly de una
 
 import contextlib
 import html
+import re
 import sys
 import time
 import traceback
@@ -762,6 +763,15 @@ CUANTOS_ULTIMOS = 10
 SALTO = chr(10)
 
 
+# Lo que «es una inversion» significa, en los nombres que ya usa Firefly:
+# categoria Inversión (27 movimientos), etiqueta Inversión (18) y NINGUN
+# presupuesto. Lo ultimo es el punto: una inversion no se come un bucket del
+# mes. Dejarla en uno —aunque sea el que mas le cuadre— descuadra el
+# presupuesto, y por eso hay que QUITARLO y no solo no ponerlo.
+INVERSION = 'Inversión'
+_ES_INVERSION = re.compile(r'\binversi[oó]n\b|\bes\s+inversi[oó]n\b', re.I)
+
+
 def _cambios_de_etiquetas_y_presupuesto(ed, texto):
     """Lo que la orden pide ademas de la categoria.
 
@@ -770,6 +780,14 @@ def _cambios_de_etiquetas_y_presupuesto(ed, texto):
     manda es de que lista sale el nombre, no la forma de la frase.
     """
     cambios = {}
+    if _ES_INVERSION.search(texto or ''):
+        # Va antes que todo lo demas y se devuelve de una: si el texto dice
+        # inversion, el nombre de un presupuesto que aparezca de paso
+        # («la inversion de la casa») no puede volver a meterle un bucket.
+        cambios['categoria'] = INVERSION
+        cambios['etiquetas'] = [INVERSION]
+        cambios['presupuesto'] = movimientos.SIN_PRESUPUESTO
+        return cambios
     if ed.etiqueta_agregar:
         cambios['etiquetas'] = [ed.etiqueta_agregar]
     if ed.etiqueta_quitar:
