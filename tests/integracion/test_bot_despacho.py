@@ -214,6 +214,29 @@ class TestSoloElDueno:
         bot.manejar_update(alm.cx, _mensaje('/ultimos'))
         assert tg.enviados == []
 
+    def test_un_chat_autorizado_sin_cuenta_no_ve_nada(self, entorno, monkeypatch):
+        """Autorizado no es lo mismo que con cuenta. Antes, un chat sin usuario
+        caia en el usuario 1 -- Juan -- y con /ultimos leia su Firefly."""
+        bot, alm, tg, *_ = entorno
+        monkeypatch.setattr(bot, 'chats_autorizados', lambda: {'555', '777'})
+        bot.manejar_update(alm.cx, _mensaje('/ultimos', chat='777'))
+        bot.manejar_update(alm.cx, _mensaje('cuanto llevo gastado', chat='777'))
+        assert tg.enviados == [('777', bot.SIN_CUENTA)] * 2
+
+    def test_un_toque_de_un_chat_sin_cuenta_no_toca_nada(self, entorno, monkeypatch):
+        bot, alm, tg, uid, cid = entorno
+        monkeypatch.setattr(bot, 'chats_autorizados', lambda: {'555', '777'})
+        pid = _pendiente(alm, uid, cid)
+        alm.guardar_sugerencias(pid, ['Gato', 'Mercado'])
+        bot.manejar_update(alm.cx, _toque(f'c:{pid}:0', chat='777'))
+        assert tg.avisos == [bot.SIN_CUENTA]
+        assert alm.pendiente(pid)['categoria'] is None
+
+    def test_sin_usuario_no_cae_en_el_usuario_uno(self, entorno):
+        bot, alm, *_ = entorno
+        with pytest.raises(LookupError):
+            bot._usuario_de(alm.cx, '777')
+
     def test_el_dueno_si(self, entorno):
         bot, alm, tg, *_ = entorno
         bot.manejar_update(alm.cx, _mensaje('/ayuda'))
@@ -222,21 +245,37 @@ class TestSoloElDueno:
 
 class TestStart:
     def test_el_primer_start_vincula_el_chat(self, entorno, monkeypatch):
-        """El /start vincula, pero solo desde un chat AUTORIZADO.
+        """El /start vincula, pero solo desde un chat AUTORIZADO, y solo al
+        usuario al que la configuracion le asigna ese chat.
 
         Antes vinculaba desde cualquiera, que es la vulnerabilidad en su forma
         mas pura: un desconocido manda /start y a partir de ahi le llegan a el
-        todas las alertas de movimientos. Para dar acceso a alguien -- la
-        novia, el segundo usuario -- su chat_id va en TELEGRAM_CHAT_ID_NOVIA y
-        despues manda /start.
+        todas las alertas de movimientos.
         """
         bot, alm, tg, *_ = entorno
         monkeypatch.setattr(bot, 'chats_autorizados', lambda: {'999'})
+        monkeypatch.setenv('TELEGRAM_CHAT_ID_JUAN', '999')
         alm.cx.execute('UPDATE usuarios SET telegram_chat_id = NULL')
         alm.cx.commit()
         bot.manejar_update(alm.cx, _mensaje('/start', chat='999'))
         assert alm.usuario_por_nombre('Juan')['telegram_chat_id'] == '999'
         assert tg.enviados[0][1] == bot.AYUDA
+
+    def test_el_start_de_otra_persona_autorizada_no_se_queda_con_juan(
+        self, entorno, monkeypatch
+    ):
+        """El hueco de verdad: TELEGRAM_CHAT_ID_NOVIA autoriza el chat, y su
+        /start lo ataba al primer usuario sin chat. Con Juan sin vincular, ella
+        quedaba viendo y editando el Firefly de Juan."""
+        bot, alm, tg, *_ = entorno
+        monkeypatch.setattr(bot, 'chats_autorizados', lambda: {'555', '777'})
+        monkeypatch.setenv('TELEGRAM_CHAT_ID_JUAN', '555')
+        monkeypatch.setenv('TELEGRAM_CHAT_ID_NOVIA', '777')
+        alm.cx.execute('UPDATE usuarios SET telegram_chat_id = NULL')
+        alm.cx.commit()
+        bot.manejar_update(alm.cx, _mensaje('/start', chat='777'))
+        assert alm.usuario_por_nombre('Juan')['telegram_chat_id'] is None
+        assert tg.enviados == [('777', bot.SIN_CUENTA)]
 
     def test_un_start_de_un_chat_sin_autorizar_no_vincula_nada(self, entorno):
         bot, alm, tg, *_ = entorno

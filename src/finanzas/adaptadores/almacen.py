@@ -158,14 +158,17 @@ class Almacen:
         self.cx.commit()
         return cur.lastrowid
 
-    def vincular_chat(self, chat_id: str) -> int | None:
-        """Ata un chat de Telegram al primer usuario que no tenga uno.
+    def vincular_chat(self, chat_id: str, nombre: str) -> int | None:
+        """Ata un chat de Telegram a ESE usuario, si todavia no tiene uno.
 
         Es lo que pasa en el primer /start: el usuario existe (lo creo el
         arranque desde el .env) pero todavia no sabe a que chat escribirle.
+        Antes se ataba al primer usuario sin chat, fuera quien fuera, y el
+        /start de otra persona podia quedarse con la cuenta de Juan.
         """
         fila = self.cx.execute(
-            'SELECT id FROM usuarios WHERE telegram_chat_id IS NULL ORDER BY id LIMIT 1'
+            'SELECT id FROM usuarios WHERE nombre = ? AND telegram_chat_id IS NULL',
+            (nombre,),
         ).fetchone()
         if not fila:
             return None
