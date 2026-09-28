@@ -333,13 +333,20 @@ class TestSeguridad:
 class TestVincularChat:
     def test_el_primer_start_ata_el_chat(self, alm):
         uid = alm.guardar_usuario('Juan', 'url', 'tok')
-        assert alm.vincular_chat('12345') == uid
+        assert alm.vincular_chat('12345', 'Juan') == uid
         assert alm.usuario_por_nombre('Juan')['telegram_chat_id'] == '12345'
 
     def test_no_roba_el_chat_de_otro(self, alm):
         alm.guardar_usuario('Juan', 'url', 'tok', '111')
-        assert alm.vincular_chat('222') is None, 'ya todos tienen chat'
+        assert alm.vincular_chat('222', 'Juan') is None, 'Juan ya tiene chat'
         assert alm.usuario_por_nombre('Juan')['telegram_chat_id'] == '111'
+
+    def test_solo_ata_al_usuario_que_se_nombra(self, alm):
+        """Antes ataba al PRIMER usuario sin chat: el /start de la segunda
+        persona se quedaba con la cuenta de Juan si Juan no estaba vinculado."""
+        alm.guardar_usuario('Juan', 'url', 'tok')
+        assert alm.vincular_chat('777', 'Mariana') is None
+        assert alm.usuario_por_nombre('Juan')['telegram_chat_id'] is None
 
 
 class TestLosAbiertosSinFiltroDeTiempo:

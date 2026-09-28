@@ -892,8 +892,13 @@ def _aplicar_en_lote(cx, chat, texto, ed, objetivos):
 
 
 def _usuario_de(cx, chat):
+    """El usuario de ese chat. Sin caer en el usuario 1 si no hay: esa caida
+    le daba a cualquier chat sin cuenta los datos de Juan. `manejar_update` ya
+    rechaza los chats sin cuenta, asi que llegar aqui sin usuario es un bug."""
     u = _a(cx).usuario_por_chat(chat)
-    return u['id'] if u else 1
+    if u is None:
+        raise LookupError(f'el chat {chat} no tiene usuario')
+    return u['id']
 
 
 def _para_puntuar(movs):
@@ -2263,7 +2268,16 @@ TOQUES = {
 
 
 def _cmd_start(cx, chat, _texto):
-    _a(cx).vincular_chat(chat)
+    """Ata el chat SOLO al usuario al que la configuracion se lo asigna.
+
+    Antes lo ataba al primer usuario sin chat, fuera quien fuera: con Juan sin
+    vincular, el /start de otro chat autorizado se quedaba con sus finanzas.
+    """
+    if not _tiene_cuenta(cx, chat):
+        nombre = dueno_configurado(chat)
+        if not nombre or _a(cx).vincular_chat(chat, nombre) is None:
+            telegram.enviar(chat, SIN_CUENTA)
+            return
     telegram.enviar(chat, AYUDA)
 
 
@@ -2366,6 +2380,30 @@ def autorizado(chat):
     return bool(permitidos) and str(chat) in permitidos
 
 
+# De que usuario es cada variable de chat. Solo Juan por ahora: TELEGRAM_CHAT_ID_NOVIA
+# deja entrar al chat pero no le da cuenta, porque todavia no hay usuario ni
+# libro para ella. Cuando se le daba, su /start la ataba al primer usuario sin
+# chat -- que podia ser Juan -- y desde ahi veia y editaba su Firefly.
+DUENO_DE_LA_VARIABLE = {'TELEGRAM_CHAT_ID_JUAN': 'Juan'}
+
+SIN_CUENTA = (
+    'Este chat todavía no tiene una cuenta habilitada. '
+    'Cuando esté lista, te aviso por aquí.'
+)
+
+
+def dueno_configurado(chat):
+    """El nombre del usuario al que la configuracion le asigna ese chat, o None."""
+    for clave, nombre in DUENO_DE_LA_VARIABLE.items():
+        if config.get(clave) and str(config.get(clave)) == str(chat):
+            return nombre
+    return None
+
+
+def _tiene_cuenta(cx, chat):
+    return _a(cx).usuario_por_chat(chat) is not None
+
+
 def manejar_update(cx, u):
     """Reparte un update de Telegram. Solo enruta: la logica vive en los
     manejadores, que se pueden probar uno por uno."""
@@ -2378,6 +2416,13 @@ def manejar_update(cx, u):
             print(f'  toque ignorado, chat no autorizado: {de_chat}')
             with contextlib.suppress(Exception):
                 telegram.responder_callback(cq['id'], 'este bot no es tuyo')
+            return
+        # Autorizado no es lo mismo que con cuenta: un chat que entra pero no
+        # esta atado a ningun usuario no puede tocar los datos de nadie.
+        if not _tiene_cuenta(cx, de_chat):
+            print(f'  toque ignorado, chat sin cuenta: {de_chat}')
+            with contextlib.suppress(Exception):
+                telegram.responder_callback(cq['id'], SIN_CUENTA)
             return
         try:
             toque = Toque(cx, cq)
@@ -2412,6 +2457,12 @@ def manejar_update(cx, u):
         # Se registra el id: es exactamente el numero que hay que poner en
         # TELEGRAM_CHAT_ID_JUAN o _NOVIA para dar acceso.
         print(f'  mensaje ignorado, chat no autorizado: {chat}')
+        return
+    # /start pasa aunque no haya cuenta: es justo lo que la ata.
+    es_start = (msg.get('text') or '').strip().split('@')[0].split(' ')[0] == '/start'
+    if not es_start and not _tiene_cuenta(cx, chat):
+        print(f'  mensaje ignorado, chat sin cuenta: {chat}')
+        telegram.enviar(chat, SIN_CUENTA)
         return
     # El `caption` de una foto o un PDF tambien es texto que el usuario
     # escribio: mandar la foto de una factura con «esto fue mercado» dejaba al
