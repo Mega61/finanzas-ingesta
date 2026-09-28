@@ -185,8 +185,16 @@ def interpretar(datos: dict[str, Any]) -> list[Persona]:
             d = f'{donde}, libro «{lb.get("clave")}»'
             if lb.get('tipo') not in TIPOS_LIBRO:
                 raise ConfiguracionInvalida(f'{d}: tipo tiene que ser {TIPOS_LIBRO}')
-            if not lb.get('clave') or not lb.get('url'):
-                raise ConfiguracionInvalida(f'{d}: faltan clave o url')
+            if not lb.get('clave'):
+                raise ConfiguracionInvalida(f'{d}: falta la clave')
+            if not lb.get('url'):
+                # Casi siempre es esto: Portainer interpola los ${...} dentro de
+                # los valores, y un ${VARIABLE} definido mas abajo queda vacio.
+                raise ConfiguracionInvalida(
+                    f'{d}: la url esta vacia. Si venia como ${{VARIABLE}}, '
+                    'Portainer la borro: genera PERSONAS_JSON con '
+                    'herramientas/generar_variables.py, que la escribe resuelta'
+                )
             libros.append(
                 Libro(
                     clave=str(lb['clave']),

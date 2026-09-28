@@ -85,16 +85,47 @@ def variables_del_stack():
 
 
 def personas_en_una_linea():
+    """personas.toml -> una linea de JSON, con las referencias YA resueltas.
+
+    No se pueden dejar los "${VARIABLE}" para que los resuelva el contenedor:
+    Portainer (docker compose) interpola los `${...}` DENTRO de los valores de
+    las variables, en el orden del archivo. "${ACTUAL_API_URL}" se volvio ""
+    porque ACTUAL_API_URL venia despues, la configuracion quedo rota, y el bot
+    no la atendio. Aqui solo van URLs y chats, que no son secretos: se
+    escriben tal cual, con el valor del CONTENEDOR (la URL interna de Firefly,
+    el servicio del puente), no el de esta maquina.
+    """
     import tomllib
 
     ruta = config.ruta_proyecto('personas.toml')
-    if config.get('PERSONAS_JSON'):
-        return config.get('PERSONAS_JSON')
     if not os.path.exists(ruta):
-        return None
+        return config.get('PERSONAS_JSON')
     with open(ruta, 'rb') as fh:
         datos = tomllib.load(fh)
-    return json.dumps(datos, ensure_ascii=False, separators=(',', ':'))
+
+    def valor(nombre):
+        v = (
+            SOLO_DESPLIEGUE[nombre]()
+            if nombre in SOLO_DESPLIEGUE
+            else config.get(nombre)
+        )
+        if not v:
+            sys.exit(f'ERROR: personas.toml usa ${{{nombre}}} y no tengo su valor')
+        return str(v)
+
+    def resolver(x):
+        if isinstance(x, dict):
+            return {k: resolver(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [resolver(v) for v in x]
+        if isinstance(x, str):
+            return re.sub(r'\$\{([A-Z_][A-Z0-9_]*)\}', lambda m: valor(m.group(1)), x)
+        return x
+
+    texto = json.dumps(resolver(datos), ensure_ascii=False, separators=(',', ':'))
+    if '$' in texto:
+        sys.exit('ERROR: PERSONAS_JSON todavia tiene un $: Portainer lo interpolaria')
+    return texto
 
 
 # De donde sale cada valor que no es un simple config.get(). Lo que no este
