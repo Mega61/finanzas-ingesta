@@ -49,6 +49,9 @@ CAMPOS_PENDIENTE = (
     'external_id',
     'libro_id',
     'destino_por',
+    'origen',
+    'referencia',
+    'sugerido_libro_id',
 )
 
 # Lo que se puede ACTUALIZAR de un pendiente: los campos de creacion mas los
@@ -127,12 +130,21 @@ class Almacen:
 
         Devuelve los numeros de las migraciones que aplico.
         """
-        self.cx.executescript(Path(esquema).read_text(encoding='utf-8'))
+        base = Path(esquema).read_text(encoding='utf-8')
+        self.cx.executescript(base)
         self.cx.commit()
         carpeta = (
             Path(migraciones) if migraciones else Path(esquema).parent / 'migraciones'
         )
-        return self.migrar(carpeta)
+        aplicadas = self.migrar(carpeta)
+        if aplicadas:
+            # Una migracion que reconstruye una tabla se lleva sus vistas e
+            # indices. Volver a correr el esquema base (todo IF NOT EXISTS) los
+            # recrea desde su unica definicion, en vez de copiarlos a mano en
+            # cada migracion.
+            self.cx.executescript(base)
+            self.cx.commit()
+        return aplicadas
 
     def version(self) -> int:
         return self.cx.execute('PRAGMA user_version').fetchone()[0]
@@ -169,14 +181,31 @@ class Almacen:
             if numero <= self.version():
                 continue
             sql = archivo.read_text(encoding='utf-8')
+            # Reconstruir una tabla exige las claves foraneas apagadas, y ese
+            # PRAGMA no se puede cambiar dentro de una transaccion: se apaga
+            # antes, y se verifica todo antes de confirmar.
+            sin_claves = sql.lstrip().startswith('-- claves-foraneas: apagadas')
+            if sin_claves:
+                self.cx.execute('PRAGMA foreign_keys = OFF')
             try:
-                self.cx.executescript(
-                    f'BEGIN;\n{sql}\nPRAGMA user_version = {numero};\nCOMMIT;'
-                )
+                # executescript deja la transaccion abierta: el BEGIN no tiene
+                # COMMIT. Asi la version y el chequeo van en la misma.
+                self.cx.executescript(f'BEGIN;\n{sql}')
+                self.cx.execute(f'PRAGMA user_version = {numero}')
+                colgando = self.cx.execute('PRAGMA foreign_key_check').fetchall()
+                if colgando:
+                    raise sqlite3.IntegrityError(
+                        f'la migracion {numero} deja {len(colgando)} filas con '
+                        f'claves foraneas rotas: {[tuple(f) for f in colgando[:3]]}'
+                    )
+                self.cx.execute('COMMIT')
             except sqlite3.Error:
                 if self.cx.in_transaction:
                     self.cx.execute('ROLLBACK')
                 raise
+            finally:
+                if sin_claves:
+                    self.cx.execute('PRAGMA foreign_keys = ON')
             aplicadas.append(numero)
         return aplicadas
 
@@ -202,20 +231,25 @@ class Almacen:
         firefly_token: str,
         telegram_chat_id: str | None = None,
     ) -> int:
+        """Crea o actualiza el usuario. El token NO se guarda: se recibe por
+        compatibilidad y se descarta. La columna `firefly_token_enc` decia
+        cifrado y guardaba el token en claro; el token vive en el entorno y el
+        libro guarda el nombre de la variable."""
+        del firefly_token
         fila = self.usuario_por_nombre(nombre)
         if fila:
             self.cx.execute(
-                """UPDATE usuarios SET firefly_url = ?, firefly_token_enc = ?,
+                """UPDATE usuarios SET firefly_url = ?, firefly_token_enc = '',
                    telegram_chat_id = COALESCE(?, telegram_chat_id)
                    WHERE id = ?""",
-                (firefly_url, firefly_token, telegram_chat_id, fila['id']),
+                (firefly_url, telegram_chat_id, fila['id']),
             )
             self.cx.commit()
             return fila['id']
         cur = self.cx.execute(
             """INSERT INTO usuarios (nombre, firefly_url, firefly_token_enc,
-               telegram_chat_id) VALUES (?, ?, ?, ?)""",
-            (nombre, firefly_url, firefly_token, telegram_chat_id),
+               telegram_chat_id) VALUES (?, ?, '', ?)""",
+            (nombre, firefly_url, telegram_chat_id),
         )
         self.cx.commit()
         return cur.lastrowid

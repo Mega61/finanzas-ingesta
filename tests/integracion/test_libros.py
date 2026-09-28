@@ -21,6 +21,7 @@ from finanzas.dominio import destino
 
 ESQUEMA = db.ESQUEMA
 MIGRACIONES = db.MIGRACIONES
+ULTIMA = max(n for n, _ in Almacen.migraciones_de(MIGRACIONES))
 
 
 def _base(migraciones=MIGRACIONES):
@@ -78,9 +79,9 @@ class TestLaMigracion:
         alm.actualizar_pendiente(_mov(alm, uid, cid, 'b'), firefly_id='99')
         _mov(alm, uid, cid, 'c', estado='nuevo')
 
-        assert alm.migrar(MIGRACIONES) == [1]
+        assert alm.migrar(MIGRACIONES) == list(range(1, ULTIMA + 1))
 
-        assert alm.version() == 1
+        assert alm.version() == ULTIMA
         (libro,) = alm.libros_de(uid)
         assert (libro['clave'], libro['tipo'], libro['url']) == (
             'personal',
@@ -96,9 +97,9 @@ class TestLaMigracion:
 
     def test_migrar_dos_veces_no_hace_nada(self):
         alm = _base()
-        assert alm.version() == 1
+        assert alm.version() == ULTIMA
         assert alm.inicializar(ESQUEMA, MIGRACIONES) == []
-        assert alm.version() == 1
+        assert alm.version() == ULTIMA
 
     def test_una_migracion_que_falla_no_deja_nada_a_medias(self, tmp_path):
         """Cada migracion va en su transaccion con el cambio de version. Si
@@ -146,12 +147,12 @@ class TestElRespaldo:
 
         db.inicializar(cx)
 
-        (copia,) = tmp_path.glob('finanzas.db.antes-de-v1-*')
+        (copia,) = tmp_path.glob(f'finanzas.db.antes-de-v{ULTIMA}-*')
         vieja = sqlite3.connect(copia)
         assert vieja.execute('PRAGMA user_version').fetchone()[0] == 0
         assert vieja.execute('SELECT nombre FROM usuarios').fetchone()[0] == 'Juan'
         vieja.close()
-        assert Almacen(cx).version() == 1
+        assert Almacen(cx).version() == ULTIMA
         cx.close()
 
     def test_una_base_nueva_no_se_respalda(self, tmp_path, monkeypatch):
