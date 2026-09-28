@@ -26,10 +26,21 @@ from datetime import UTC, datetime, timedelta
 from email import policy
 
 from finanzas import config
-from finanzas.adaptadores import db, graph
-from finanzas.aplicacion import clasificador, conciliador, libros, publicador
+from finanzas.adaptadores import db, graph, imap
+from finanzas.aplicacion import (
+    clasificador,
+    conciliador,
+    libros,
+    personas,
+    publicador,
+    ruteo,
+)
 from finanzas.dominio import fechas
 from finanzas.parsers import bancolombia_alertas as alertas
+
+# Si la configuracion de personas no se pudo aplicar, el motivo. El servicio
+# se lo cuenta a Juan por Telegram al arrancar.
+PROBLEMA_CON_PERSONAS = None
 
 
 def marca_de_agua():
@@ -78,6 +89,20 @@ def paso_asegurar_usuario(cx):
     url, tok = config.requerir('FIREFLY_URL', 'FIREFLY_TOKEN')
     uid = db.usuario_upsert(cx, 'Juan', url, tok, config.get('TELEGRAM_CHAT_ID_JUAN'))
     libros.asegurar_libro_del_entorno(db.almacen(cx), uid)
+    # Los demas, de la configuracion de personas. Si esta rota no se aplica
+    # NADA de ella y el bot no atiende a nadie nuevo (`personas.chats()` da
+    # vacio): aplicar a medias podria dejar a alguien con los libros de otra
+    # persona. Pero Juan sigue andando: tumbar el arranque lo dejaba a el sin
+    # ingesta por un error en la configuracion de otro.
+    global PROBLEMA_CON_PERSONAS  # noqa: PLW0603
+    PROBLEMA_CON_PERSONAS = None
+    try:
+        otras = personas.leer_para_aplicar()
+        if otras:
+            personas.aplicar(db.almacen(cx), otras)
+    except personas.ConfiguracionInvalida as ex:
+        PROBLEMA_CON_PERSONAS = str(ex)
+        print(f'  CONFIGURACION DE PERSONAS ROTA, no se aplico: {ex}')
     cuenta = config.get('GRAPH_CUENTA')
     bid = None
     if cuenta and config.get('GRAPH_CLIENT_ID'):
@@ -98,11 +123,11 @@ def paso_sembrar(cx, uid):
 
 
 def paso_bajar(cx, tope=None, interactivo=False, dias=None):
+    total_n = _bajar_imap(cx, dias=dias)
     buzones = db.almacen(cx).buzones('graph')
     if not buzones:
         print('  no hay buzones de Graph configurados')
-        return 0
-    total_n = 0
+        return total_n
     for b in buzones:
         # Sin ventana, la primera bajada en un contenedor nuevo se trae el
         # buzon completo: fueron 1819 correos de anos atras, con 770 plantillas
@@ -130,6 +155,50 @@ def paso_bajar(cx, tope=None, interactivo=False, dias=None):
             db.buzon_error(cx, b['id'], str(ex))
             print(f'  {b["direccion"]}: error — {ex}')
     return total_n
+
+
+def _bajar_imap(cx, dias=None):
+    """Los buzones IMAP (Gmail con app password). Cada uno con su secreto, que
+    vive en el entorno: la base guarda el nombre de la variable."""
+    alm = db.almacen(cx)
+    total = 0
+    for b in alm.buzones('imap'):
+        clave = config.get(b['secreto_env']) if b['secreto_env'] else None
+        if not clave:
+            db.buzon_error(cx, b['id'], f'falta {b["secreto_env"]} en el entorno')
+            print(f'  {b["direccion"]}: falta {b["secreto_env"]}')
+            continue
+        try:
+            correos, cursor = imap.bajar(
+                b['imap_host'] or 'imap.gmail.com:993',
+                b['direccion'],
+                clave,
+                cursor=b['cursor'],
+                dias=dias or int(config.get('INGESTA_DIAS_INICIAL', '30')),
+            )
+        except imap.SinAutorizacion as ex:
+            db.buzon_error(cx, b['id'], f'sin autorizacion: {ex}')
+            print(f'  {b["direccion"]}: SIN AUTORIZACION — {ex}')
+            continue
+        except Exception as ex:
+            db.buzon_error(cx, b['id'], str(ex))
+            print(f'  {b["direccion"]}: error — {ex}')
+            continue
+        nuevos = 0
+        for c in correos:
+            cuerpo = alertas.cuerpo_mensaje(c.mensaje)
+            if not cuerpo.strip():
+                continue
+            _, era_nuevo = db.correo_guardar(
+                cx, b['id'], c.message_id, c.remitente, c.asunto, c.fecha, cuerpo
+            )
+            nuevos += 1 if era_nuevo else 0
+        if cursor:
+            alm.guardar_cursor(b['id'], cursor)
+        db.buzon_guardar_delta(cx, b['id'], None)
+        print(f'  {b["direccion"]}: {nuevos} nuevos de {len(correos)}')
+        total += nuevos
+    return total
 
 
 def paso_importar(cx, uid, carpeta=None):
@@ -275,6 +344,36 @@ def paso_procesar(cx, uid):
             },
             indice=idx,
         )
+
+        # Quien lleva varios libros no pasa por el clasificador de Juan: su
+        # movimiento nace preguntando a que libro va, y lo demas se decide
+        # despues de esa respuesta (ver aplicacion/ruteo.py).
+        alm = db.almacen(cx)
+        if ruteo.usa_ruteo(alm, c['usuario_id']):
+            if fecha_ev < ruteo.marca_de_agua(alm, c['usuario_id'], marca):
+                db.pendiente_crear(
+                    cx,
+                    correo_id=c['id'],
+                    usuario_id=c['usuario_id'],
+                    tipo=ev.tipo,
+                    fecha=fecha_ev,
+                    valor=ev.valor,
+                    instrumento=ev.instrumento,
+                    contraparte=ev.contraparte,
+                    descripcion=ev.descripcion,
+                    plantilla=ev.plantilla,
+                    external_id=publicador.external_id(c['message_id']),
+                    estado='descartado',
+                    decidido_por='anterior_a_la_marca_de_agua',
+                )
+                conteo['historico'] = conteo.get('historico', 0) + 1
+            else:
+                _, era_nuevo = ruteo.crear_desde_alerta(
+                    alm, c, ev, publicador.external_id(c['message_id'])
+                )
+                conteo['movimiento' if era_nuevo else 'repetido'] += 1
+            db.correo_marcar_procesado(cx, c['id'])
+            continue
 
         if c['usuario_id'] not in destinos:
             destinos[c['usuario_id']] = libros.destino_seguro(

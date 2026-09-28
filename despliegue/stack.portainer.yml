@@ -125,7 +125,55 @@ services:
       # antes de escribir en la base de produccion de Firefly.
       EXPORT_EN_SERIO: ${EXPORT_EN_SERIO:-no}
 
+      # Las otras personas: sus libros, buzones y tarjetas, en UNA linea de
+      # JSON. Lo genera `python herramientas/generar_variables.py personas`.
+      PERSONAS_JSON: ${PERSONAS_JSON:-}
+      PERSONAS_TOML: ${PERSONAS_TOML:-}
+      # Los secretos que esa configuracion nombra. Van uno por uno porque el
+      # contenedor solo ve lo que se le pasa aqui.
+      FIREFLY_TOKEN_NOVIA: ${FIREFLY_TOKEN_NOVIA:-}
+      GMAIL_APP_PASSWORD_NOVIA: ${GMAIL_APP_PASSWORD_NOVIA:-}
+      ACTUAL_API_URL: ${ACTUAL_API_URL:-http://actual-api:5007}
+      ACTUAL_API_KEY: ${ACTUAL_API_KEY:-}
+
     # Sin puertos publicados: nadie tiene que entrarle de afuera.
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # El puente HTTP a Actual Budget: la libreria oficial de Node
+  # (@actual-app/api) detras de HTTP, porque Actual no tiene API REST. Le habla
+  # al servidor de Actual por su URL publica, asi que en la VM de Actual no se
+  # abre nada. No publica puertos: solo el contenedor de la ingesta lo alcanza,
+  # por la red interna.
+  #
+  # La version VA FIJA y tiene que ser la misma del servidor de Actual y del
+  # CRM (automation/actual-sync). Si el servidor se actualiza solo (`:latest`),
+  # el cliente puede dejar de entenderlo sin avisar. Se suben los tres juntos.
+  actual-api:
+    image: jhonderson/actual-http-api:26.7.0
+    container_name: finanzas_actual_api
+    hostname: actual-api
+    restart: unless-stopped
+    networks:
+      - firefly
+    volumes:
+      # La copia del presupuesto que la libreria mantiene sincronizada.
+      - actual_api_datos:/data
+    environment:
+      ACTUAL_SERVER_URL: ${ACTUAL_SERVER_URL:-https://finanzas.goldenbeautystudio.com.co/}
+      # La clave con la que se entra a Actual. Es la misma del secreto
+      # ACTUAL_PASSWORD del CRM.
+      ACTUAL_SERVER_PASSWORD: ${ACTUAL_PASSWORD:-}
+      # La llave del puente: la misma ACTUAL_API_KEY que usa la ingesta.
+      API_KEY: ${ACTUAL_API_KEY:-}
+      # SIN ESTO LA LLAVE NO SE EXIGE: el puente solo la verifica en
+      # produccion, y atenderia a cualquiera en la red.
+      NODE_ENV: production
     security_opt:
       - no-new-privileges:true
     logging:
@@ -136,6 +184,7 @@ services:
 
 volumes:
   finanzas_datos:
+  actual_api_datos:
 
 networks:
   firefly:

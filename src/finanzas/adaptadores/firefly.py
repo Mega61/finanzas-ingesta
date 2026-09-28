@@ -9,10 +9,14 @@ Nunca imprime el token.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,8 +59,52 @@ def del_entorno() -> Conexion:
     return Conexion(url.rstrip('/'), tok)
 
 
+# El Firefly de la persona que se esta atendiendo. El bot lo fija al recibir
+# cada mensaje (`with firefly.usar(...)`), y todo lo que corre adentro -- los
+# ultimos movimientos, una edicion, las categorias -- le habla a ESE Firefly
+# sin que cada funcion tenga que recibirlo. Es por hilo y por contexto: el hilo
+# de la ingesta no ve el del bot.
+#
+# Sin nada fijado se usa el del entorno, que es el de Juan: asi funcionaba todo
+# antes, y asi sigue funcionando para el.
+_EN_CURSO: ContextVar[Conexion | None] = ContextVar('firefly_en_curso', default=None)
+
+# Para una persona que no tiene Firefly. Fijarlo hace que cualquier llamada
+# falle, en vez de caer al Firefly del entorno, que es de otra persona.
+SIN_FIREFLY = Conexion('', '')
+
+
+@contextlib.contextmanager
+def usar(conexion: Conexion) -> Iterator[Conexion]:
+    """Todo lo de adentro le habla a ese Firefly."""
+    marca = _EN_CURSO.set(conexion)
+    try:
+        yield conexion
+    finally:
+        _EN_CURSO.reset(marca)
+
+
+def en_curso() -> Conexion:
+    """La conexion que usa una llamada que no recibio ninguna."""
+    c = _EN_CURSO.get()
+    if c is SIN_FIREFLY:
+        raise ApiError(0, 'esta persona no tiene un libro de Firefly')
+    return c or del_entorno()
+
+
+def llave_en_curso() -> str:
+    """Una llave estable del Firefly en curso, para los caches.
+
+    Un cache por ruta ('/api/v1/categories') le mostraba a una persona las
+    categorias del Firefly de otra. El token entra hasheado: la llave puede
+    terminar en un log.
+    """
+    c = en_curso()
+    return f'{c.url}#{hashlib.sha256(c.token.encode()).hexdigest()[:12]}'
+
+
 def _base(conexion: Conexion | None = None) -> str:
-    return (conexion or del_entorno()).url.rstrip('/')
+    return (conexion or en_curso()).url.rstrip('/')
 
 
 def call(
@@ -65,7 +113,7 @@ def call(
     payload: dict[str, Any] | None = None,
     conexion: Conexion | None = None,
 ) -> dict[str, Any]:
-    conexion = conexion or del_entorno()
+    conexion = conexion or en_curso()
     url = _base(conexion) + path
     datos = json.dumps(payload).encode('utf-8') if payload is not None else None
     req = urllib.request.Request(url, data=datos, method=method)

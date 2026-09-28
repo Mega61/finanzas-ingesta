@@ -643,3 +643,110 @@ def entender_orden(
     for k in ('etiquetas_agregar', 'etiquetas_quitar', 'movimientos'):
         d[k] = [x for x in (d.get(k) or []) if str(x).strip()]
     return d
+
+
+# ------------------------------------------------- lo que alguien cuenta
+
+CONTADO = """Eres el oido de un bot de finanzas por Telegram, en Colombia. La
+persona te cuenta un gasto o un ingreso que ACABA de hacer -- por escrito o en
+una nota de voz -- y tu sacas los datos. No clasificas ni decides a que libro
+va: solo entiendes lo que dijo.
+
+Reglas:
+- `monto` en pesos colombianos, positivo. «cuarenta mil», «40 lucas», «40k» y
+  «40.000» son 40000. «una luca» es 1000. «un palo» o «una palanca» es 1000000.
+- `direccion`: 'gasto' si pago, compro, transfirio o le cobraron; 'ingreso' si
+  le pagaron, le transfirieron o vendio.
+- `comercio`: a quien le pago o quien le pago, si lo dice. Si no, vacio.
+- `descripcion`: que fue, en pocas palabras y en sus palabras: «esmaltes»,
+  «almuerzo», «arreglo de la silla».
+- `fecha`: YYYY-MM-DD. Hoy es la fecha que te dan; «ayer», «el sabado» o «el 3»
+  se calculan desde hoy, nunca hacia el futuro.
+- `medio`: con que pago, SOLO si lo dice. Escoge de la lista; si no lo dice o
+  no esta, 'no_dijo'.
+- `libro`: SOLO si dice claramente para cual es («para el estudio», «esto es
+  personal», «del salon»). Si no lo dice, 'no_dijo'. Nunca lo adivines por lo
+  que compro.
+- `es_movimiento`: false si NO esta contando un gasto o ingreso (saluda,
+  pregunta algo, habla de otra cosa). En ese caso lo demas no importa.
+- `transcripcion`: lo que dijo, tal cual, corto.
+"""
+
+
+def _esquema_contado(medios: list[str], libros: list[str]) -> dict[str, Any]:
+    return {
+        'type': 'object',
+        'properties': {
+            'es_movimiento': {'type': 'boolean'},
+            'direccion': {'type': 'string', 'enum': ['gasto', 'ingreso']},
+            'monto': {'type': 'number'},
+            'comercio': {'type': 'string'},
+            'descripcion': {'type': 'string'},
+            'fecha': {'type': 'string'},
+            'medio': {'type': 'string', 'enum': [*medios, 'no_dijo']},
+            'libro': {'type': 'string', 'enum': [*libros, 'no_dijo']},
+            'transcripcion': {'type': 'string'},
+        },
+        'required': ['es_movimiento', 'direccion', 'monto', 'fecha', 'medio', 'libro'],
+    }
+
+
+def entender_contado(
+    hoy: str,
+    medios: list[str],
+    libros: list[tuple[str, str]],
+    texto: str | None = None,
+    audio: bytes | None = None,
+    tipo_audio: str = 'audio/ogg',
+) -> dict[str, Any]:
+    """Lo que la persona conto, como dict. `libros` es [(clave, nombre)].
+
+    Una nota de voz va directo al modelo, sin transcribir aparte: Gemini
+    entiende el audio y devuelve los datos en la misma llamada.
+    """
+    import base64
+
+    claves = [c for c, _ in libros]
+    contexto = (
+        f'HOY: {hoy}\n'
+        f'MEDIOS DE PAGO: {", ".join(medios) or "(ninguno)"}\n'
+        'LIBROS: ' + ', '.join(f'{c} ({n})' for c, n in libros)
+    )
+    partes: list[dict[str, Any]] = [{'text': contexto}]
+    if audio is not None:
+        partes.append(
+            {
+                'inline_data': {
+                    'mime_type': tipo_audio,
+                    'data': base64.b64encode(audio).decode('ascii'),
+                }
+            }
+        )
+    if texto:
+        partes.append({'text': f'LO QUE ESCRIBIO: {texto}'})
+    payload = {
+        'systemInstruction': {'parts': [{'text': CONTADO}]},
+        'contents': [{'role': 'user', 'parts': partes}],
+        'generationConfig': _config_generacion(
+            max_salida=800,
+            thinking=THINKING_CLASIFICAR,
+            extra={
+                'responseMimeType': 'application/json',
+                'responseSchema': _esquema_contado(medios, claves),
+            },
+        ),
+    }
+    crudo = texto_de(_llamar(payload), ' al entender lo contado')
+    try:
+        d = json.loads(crudo)
+    except json.JSONDecodeError:
+        m = re.search(r'\{.*\}', crudo, re.S)
+        if not m:
+            raise SinIA(f'no devolvio JSON: {crudo[:200]}') from None
+        d = json.loads(m.group(0))
+    # por si el modelo se sale del esquema
+    if d.get('medio') not in medios:
+        d['medio'] = None
+    if d.get('libro') not in claves:
+        d['libro'] = None
+    return d

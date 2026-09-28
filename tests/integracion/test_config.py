@@ -39,6 +39,10 @@ EXENTAS = {
     'CLAVE',
     # las declara el stack aparte, no dentro de environment
     'FINANZAS_DATOS',
+    # son del servicio actual-api, no de la ingesta: la ingesta no entra al
+    # servidor de Actual, le habla al puente con su llave
+    'ACTUAL_PASSWORD',
+    'ACTUAL_SERVER_URL',
     # las tres carpetas: solo se fijan para mover la instalacion de sitio
     'FINANZAS_PROYECTO',
     'FINANZAS_PERSONAL',
@@ -173,10 +177,15 @@ class TestElGeneradorCubreElStack:
     def test_conoce_todas_las_variables_del_stack(self):
         gv = self._generador()
         del_stack = set(gv.variables_del_stack())
-        assert del_stack == variables_del_stack(), (
-            'el generador y esta prueba leen el mismo bloque; si difieren, uno '
-            'de los dos parsers esta mal'
-        )
+        faltan = variables_del_stack() - del_stack
+        assert not faltan, f'el generador no conoce {sorted(faltan)}'
+        # Lo que conoce de mas son las variables de los OTROS servicios del
+        # stack (el puente de Actual): tienen que ser referencias reales.
+        texto = (DESPLIEGUE / 'stack.portainer.yml').read_text(encoding='utf-8')
+        inventadas = {
+            v for v in del_stack if '${' + v not in texto and f'      {v}:' not in texto
+        }
+        assert not inventadas, inventadas
 
     def test_no_deja_fuera_ninguna_que_el_stack_exija(self):
         """Las marcadas con `:?` en el stack: sin ellas el contenedor no

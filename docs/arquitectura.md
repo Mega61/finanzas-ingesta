@@ -4,6 +4,10 @@ Cuatro vistas, de afuera hacia adentro: el recorrido de un movimiento, las capas
 y quién puede llamar a quién, los estados por los que pasa un pendiente, y lo que
 corre dentro del contenedor.
 
+El recorrido de quien lleva **varios libros** (su Firefly y el Actual de su
+negocio) está en [`otra-persona.md`](otra-persona.md): la regla de que nada se
+publica sin que la persona diga a qué libro va, y dónde vive esa regla.
+
 ---
 
 ## 1. El recorrido de un movimiento

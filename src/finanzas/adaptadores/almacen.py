@@ -49,6 +49,11 @@ CAMPOS_PENDIENTE = (
     'external_id',
     'libro_id',
     'destino_por',
+    'origen',
+    'referencia',
+    'sugerido_libro_id',
+    'pago_libro_id',
+    'cuenta_pago',
 )
 
 # Lo que se puede ACTUALIZAR de un pendiente: los campos de creacion mas los
@@ -127,12 +132,21 @@ class Almacen:
 
         Devuelve los numeros de las migraciones que aplico.
         """
-        self.cx.executescript(Path(esquema).read_text(encoding='utf-8'))
+        base = Path(esquema).read_text(encoding='utf-8')
+        self.cx.executescript(base)
         self.cx.commit()
         carpeta = (
             Path(migraciones) if migraciones else Path(esquema).parent / 'migraciones'
         )
-        return self.migrar(carpeta)
+        aplicadas = self.migrar(carpeta)
+        if aplicadas:
+            # Una migracion que reconstruye una tabla se lleva sus vistas e
+            # indices. Volver a correr el esquema base (todo IF NOT EXISTS) los
+            # recrea desde su unica definicion, en vez de copiarlos a mano en
+            # cada migracion.
+            self.cx.executescript(base)
+            self.cx.commit()
+        return aplicadas
 
     def version(self) -> int:
         return self.cx.execute('PRAGMA user_version').fetchone()[0]
@@ -169,14 +183,31 @@ class Almacen:
             if numero <= self.version():
                 continue
             sql = archivo.read_text(encoding='utf-8')
+            # Reconstruir una tabla exige las claves foraneas apagadas, y ese
+            # PRAGMA no se puede cambiar dentro de una transaccion: se apaga
+            # antes, y se verifica todo antes de confirmar.
+            sin_claves = sql.lstrip().startswith('-- claves-foraneas: apagadas')
+            if sin_claves:
+                self.cx.execute('PRAGMA foreign_keys = OFF')
             try:
-                self.cx.executescript(
-                    f'BEGIN;\n{sql}\nPRAGMA user_version = {numero};\nCOMMIT;'
-                )
+                # executescript deja la transaccion abierta: el BEGIN no tiene
+                # COMMIT. Asi la version y el chequeo van en la misma.
+                self.cx.executescript(f'BEGIN;\n{sql}')
+                self.cx.execute(f'PRAGMA user_version = {numero}')
+                colgando = self.cx.execute('PRAGMA foreign_key_check').fetchall()
+                if colgando:
+                    raise sqlite3.IntegrityError(
+                        f'la migracion {numero} deja {len(colgando)} filas con '
+                        f'claves foraneas rotas: {[tuple(f) for f in colgando[:3]]}'
+                    )
+                self.cx.execute('COMMIT')
             except sqlite3.Error:
                 if self.cx.in_transaction:
                     self.cx.execute('ROLLBACK')
                 raise
+            finally:
+                if sin_claves:
+                    self.cx.execute('PRAGMA foreign_keys = ON')
             aplicadas.append(numero)
         return aplicadas
 
@@ -202,20 +233,25 @@ class Almacen:
         firefly_token: str,
         telegram_chat_id: str | None = None,
     ) -> int:
+        """Crea o actualiza el usuario. El token NO se guarda: se recibe por
+        compatibilidad y se descarta. La columna `firefly_token_enc` decia
+        cifrado y guardaba el token en claro; el token vive en el entorno y el
+        libro guarda el nombre de la variable."""
+        del firefly_token
         fila = self.usuario_por_nombre(nombre)
         if fila:
             self.cx.execute(
-                """UPDATE usuarios SET firefly_url = ?, firefly_token_enc = ?,
+                """UPDATE usuarios SET firefly_url = ?, firefly_token_enc = '',
                    telegram_chat_id = COALESCE(?, telegram_chat_id)
                    WHERE id = ?""",
-                (firefly_url, firefly_token, telegram_chat_id, fila['id']),
+                (firefly_url, telegram_chat_id, fila['id']),
             )
             self.cx.commit()
             return fila['id']
         cur = self.cx.execute(
             """INSERT INTO usuarios (nombre, firefly_url, firefly_token_enc,
-               telegram_chat_id) VALUES (?, ?, ?, ?)""",
-            (nombre, firefly_url, firefly_token, telegram_chat_id),
+               telegram_chat_id) VALUES (?, ?, '', ?)""",
+            (nombre, firefly_url, telegram_chat_id),
         )
         self.cx.commit()
         return cur.lastrowid
@@ -276,7 +312,7 @@ class Almacen:
         if fila:
             self.cx.execute(
                 """UPDATE libros SET nombre = ?, tipo = ?, url = ?, secreto_env = ?,
-                   en_serio = ?, desde = ?, ajustes = ? WHERE id = ?""",
+                   en_serio = ?, desde = ?, ajustes = ?, activo = 1 WHERE id = ?""",
                 (*valores, fila['id']),
             )
             self.cx.commit()
@@ -298,6 +334,39 @@ class Almacen:
         filtro = ' AND activo = 1' if activos else ''
         return self.cx.execute(
             f'SELECT * FROM libros WHERE usuario_id = ?{filtro} ORDER BY id',
+            (usuario_id,),
+        ).fetchall()
+
+    def desactivar_libros_salvo(self, usuario_id: int, activos: list[int]) -> None:
+        """Los libros de esa persona que ya no estan en la configuracion quedan
+        inactivos. No se borran: sus movimientos los siguen nombrando."""
+        marcas = ', '.join('?' for _ in activos) or 'NULL'
+        self.cx.execute(
+            f'UPDATE libros SET activo = 0 WHERE usuario_id = ? AND id NOT IN ({marcas})',
+            (usuario_id, *activos),
+        )
+        self.cx.commit()
+
+    # --------------------------------------------------------- instrumentos
+
+    def reemplazar_instrumentos(
+        self, usuario_id: int, filas: list[tuple[Any, ...]]
+    ) -> None:
+        """Deja exactamente esas filas: (clave, clase, alias, libro_id, cuenta,
+        desde, hasta). Se reemplazan completas porque nada las referencia."""
+        self.cx.execute('DELETE FROM instrumentos WHERE usuario_id = ?', (usuario_id,))
+        self.cx.executemany(
+            """INSERT INTO instrumentos (usuario_id, clave, clase, alias, libro_id,
+               cuenta, desde, hasta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(usuario_id, *f) for f in filas],
+        )
+        self.cx.commit()
+
+    def instrumentos_de(self, usuario_id: int) -> list[sqlite3.Row]:
+        return self.cx.execute(
+            """SELECT i.*, l.clave AS libro_clave, l.nombre AS libro_nombre
+               FROM instrumentos i JOIN libros l ON l.id = i.libro_id
+               WHERE i.usuario_id = ? AND l.activo = 1 ORDER BY i.id""",
             (usuario_id,),
         ).fetchall()
 
@@ -345,6 +414,44 @@ class Almacen:
         )
         self.cx.commit()
         return cur.lastrowid
+
+    def guardar_buzon_configurado(
+        self,
+        usuario_id: int,
+        proveedor: str,
+        direccion: str,
+        secreto_env: str,
+        imap_host: str | None,
+        facturas: bool,
+    ) -> int:
+        """Un buzon declarado en la configuracion de personas. A diferencia de
+        `guardar_buzon`, actualiza lo que ya estaba: la configuracion manda."""
+        fila = self.cx.execute(
+            'SELECT id FROM buzones WHERE usuario_id = ? AND direccion = ?',
+            (usuario_id, direccion),
+        ).fetchone()
+        valores = (proveedor, secreto_env, imap_host, 1 if facturas else 0)
+        if fila:
+            self.cx.execute(
+                """UPDATE buzones SET proveedor = ?, secreto_env = ?, imap_host = ?,
+                   facturas = ?, activo = 1 WHERE id = ?""",
+                (*valores, fila['id']),
+            )
+            self.cx.commit()
+            return fila['id']
+        cur = self.cx.execute(
+            """INSERT INTO buzones (proveedor, secreto_env, imap_host, facturas,
+               usuario_id, direccion) VALUES (?, ?, ?, ?, ?, ?)""",
+            (*valores, usuario_id, direccion),
+        )
+        self.cx.commit()
+        return cur.lastrowid
+
+    def guardar_cursor(self, buzon_id: int, cursor: str) -> None:
+        self.cx.execute(
+            'UPDATE buzones SET cursor = ? WHERE id = ?', (cursor, buzon_id)
+        )
+        self.cx.commit()
 
     def marcar_sync(self, buzon_id: int) -> None:
         self.cx.execute(
@@ -501,6 +608,16 @@ class Almacen:
             (*ESTADOS_ABIERTOS, str(chat_id)),
         ).fetchall()
 
+    def en_espera_de_agendapro(self) -> list[sqlite3.Row]:
+        """Las transferencias que son de una clienta y esperan a que Agendapro
+        suba la venta, con el chat de su persona."""
+        return self.cx.execute(
+            """SELECT p.*, u.telegram_chat_id FROM pendientes p
+               JOIN usuarios u ON u.id = p.usuario_id
+               WHERE p.decidido_por = 'espera_agendapro'
+                 AND p.estado IN ('nuevo', 'error') AND p.libro_id IS NOT NULL"""
+        ).fetchall()
+
     def marcar_preguntado(self, pendiente_id: int) -> None:
         self.cx.execute(
             "UPDATE pendientes SET preguntado_en = datetime('now') WHERE id = ?",
@@ -515,14 +632,22 @@ class Almacen:
         hasta: str,
         estado: str | None = None,
         moneda: str | None = None,
+        usuario_id: int | None = None,
     ) -> list[sqlite3.Row]:
         """Lo que hay en la cola para una tarjeta en un periodo. Es lo que el
-        conciliador cruza contra el extracto."""
+        conciliador cruza contra el extracto.
+
+        `usuario_id` importa: el extracto es de UNA persona, y cruzarlo contra
+        los movimientos de otra corregiria -- con el token de la primera -- un
+        id de Firefly que ni siquiera es de su libro."""
         sql = [
             'SELECT * FROM pendientes WHERE instrumento = ?',
             'AND fecha BETWEEN ? AND ?',
         ]
         args: list[Any] = [instrumento, desde, hasta]
+        if usuario_id is not None:
+            sql.append('AND usuario_id = ?')
+            args.append(usuario_id)
         if estado:
             sql.append('AND estado = ?')
             args.append(estado)
@@ -540,24 +665,35 @@ class Almacen:
             f'SELECT * FROM pendientes WHERE estado IN ({marcas}) ORDER BY id', estados
         ).fetchall()
 
-    def sin_confirmar(self, limite: int = 20) -> list[sqlite3.Row]:
+    # Las tres de abajo reciben el usuario: sin el, el resumen de una persona
+    # contaba y listaba los movimientos de todas.
+
+    def sin_confirmar(
+        self, limite: int = 20, usuario_id: int | None = None
+    ) -> list[sqlite3.Row]:
         return self.cx.execute(
             """SELECT * FROM pendientes
                WHERE estado = 'publicado' AND visto_en IS NULL
+                 AND (? IS NULL OR usuario_id = ?)
                ORDER BY fecha DESC LIMIT ?""",
-            (limite,),
+            (usuario_id, usuario_id, limite),
         ).fetchall()
 
-    def total_sin_confirmar(self) -> sqlite3.Row:
+    def total_sin_confirmar(self, usuario_id: int | None = None) -> sqlite3.Row:
         return self.cx.execute(
             """SELECT count(*) n, sum(valor) t FROM pendientes
-               WHERE estado = 'publicado' AND visto_en IS NULL"""
+               WHERE estado = 'publicado' AND visto_en IS NULL
+                 AND (? IS NULL OR usuario_id = ?)""",
+            (usuario_id, usuario_id),
         ).fetchone()
 
-    def contar_sospechosos(self) -> int:
+    def contar_sospechosos(self, usuario_id: int | None = None) -> int:
         """Tarjetas publicadas hace mas de 45 dias que ningun extracto
         confirmo: los candidatos a fantasma."""
-        return self.cx.execute('SELECT count(*) FROM v_sospechosos').fetchone()[0]
+        return self.cx.execute(
+            'SELECT count(*) FROM v_sospechosos WHERE (? IS NULL OR usuario_id = ?)',
+            (usuario_id, usuario_id),
+        ).fetchone()[0]
 
     def resumen(self, usuario_id: int | None = None) -> list[sqlite3.Row]:
         if usuario_id:
@@ -626,6 +762,39 @@ class Almacen:
         if solo_texto:
             sql.append("AND es_regex = 0 AND patron <> ''")
         return self.cx.execute(' '.join(sql), args).fetchall()
+
+    def regla_de_libro(self, usuario_id: int, patron: str) -> sqlite3.Row | None:
+        """La regla de ese comercio para una persona de varios libros. Dice el
+        libro donde se aprendio: una categoria de un libro no existe en el otro."""
+        return self.cx.execute(
+            'SELECT * FROM reglas WHERE usuario_id = ? AND patron = ? AND libro_id IS NOT NULL',
+            (usuario_id, patron),
+        ).fetchone()
+
+    def guardar_regla_de_libro(
+        self,
+        usuario_id: int,
+        libro_id: int,
+        patron: str,
+        categoria: str,
+        direccion: str,
+    ) -> bool:
+        """Lo que la persona contesto, atado al libro donde lo contesto. Pisa lo
+        anterior: la ultima respuesta es la que vale."""
+        if not patron or texto.es_pasarela_pura(patron):
+            return False
+        self.cx.execute(
+            """INSERT INTO reglas (usuario_id, libro_id, patron, categoria, direccion,
+                  origen, aciertos)
+               VALUES (?, ?, ?, ?, ?, 'usuario', 1)
+               ON CONFLICT (usuario_id, patron) DO UPDATE SET
+                  libro_id = excluded.libro_id, categoria = excluded.categoria,
+                  direccion = excluded.direccion, origen = 'usuario',
+                  aciertos = reglas.aciertos + 1""",
+            (usuario_id, libro_id, patron, categoria, direccion),
+        )
+        self.cx.commit()
+        return True
 
     def guardar_regla(
         self,

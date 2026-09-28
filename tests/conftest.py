@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from finanzas.aplicacion import personas
 from finanzas.entrada import bot
 
 CHAT_DE_PRUEBA = '555'
@@ -32,3 +33,11 @@ def _sin_memoria_de_la_prueba_anterior():
     yield
     for d in (bot.ULTIMO_CAMINO, bot.ULTIMO_TOCADO, bot.HISTORIAL):
         d.clear()
+
+
+@pytest.fixture(autouse=True)
+def _sin_la_configuracion_real_de_personas(monkeypatch):
+    """personas.toml en la raiz del repo es la configuracion REAL de
+    desarrollo, con correos y tarjetas de verdad. Ninguna prueba la lee: las
+    que necesitan personas las declaran ellas mismas."""
+    monkeypatch.setattr(personas, '_texto_crudo', lambda: None)

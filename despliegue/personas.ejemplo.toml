@@ -1,0 +1,72 @@
+# Copia este archivo a personas.toml (en la raiz del repo) y pon los datos
+# reales. personas.toml esta en .gitignore: tiene correos y ultimos digitos.
+#
+# Los SECRETOS no van aqui: `secreto` es el NOMBRE de la variable de entorno
+# que lo tiene. Lo que no es secreto puede ir escrito o como "${VARIABLE}".
+#
+# Para Portainer: python herramientas/generar_variables.py personas
+# lo convierte en la linea de PERSONAS_JSON.
+
+[[persona]]
+nombre = "Mariana"
+# El chat se sabe cuando le escribe al bot: el log dice
+# «mensaje ignorado, chat no autorizado: <id>».
+telegram = "${TELEGRAM_CHAT_ID_NOVIA}"
+
+  # --- sus libros. Con mas de uno, el bot SIEMPRE pregunta a cual va cada
+  # --- movimiento antes de publicarlo.
+  [[persona.libro]]
+  clave = "personal"
+  nombre = "Personal"
+  tipo = "firefly"
+  url = "${FIREFLY_URL}"
+  secreto = "FIREFLY_TOKEN_NOVIA"
+  # Arranca en seco: ver en el log que haria antes de escribir de verdad.
+  en_serio = false
+  # Nada anterior a esta fecha se publica en este libro.
+  desde = "2026-10-01"
+
+  [[persona.libro]]
+  clave = "estudio"
+  nombre = "Golden Beauty"
+  tipo = "actual"
+  url = "${ACTUAL_API_URL}"
+  secreto = "ACTUAL_API_KEY"
+  en_serio = false
+  desde = "2026-10-01"
+  # El Sync ID del presupuesto: Settings -> Advanced settings.
+  ajustes = { sync_id = "00000000-0000-0000-0000-000000000000" }
+
+  [[persona.buzon]]
+  tipo = "imap"
+  direccion = "ella@gmail.com"
+  host = "imap.gmail.com:993"
+  secreto = "GMAIL_APP_PASSWORD_NOVIA"
+  # Las facturas de supermercado son de Juan: de este buzon no se sacan.
+  facturas = false
+
+  # --- sus tarjetas y cuentas: que cuenta son EN CADA LIBRO. Solo se ofrecen
+  # --- los libros donde el instrumento tiene cuenta.
+  [[persona.instrumento]]
+  clave = "1111"
+  clase = "cuenta"
+  cuentas = { personal = "Bancolombia Ahorros *1111", estudio = "Bancolombia" }
+
+  [[persona.instrumento]]
+  clave = "2222"
+  clase = "tarjeta"
+  cuentas = { estudio = "T.Cred Bancolombia *2222" }
+
+  # Sin correos: entra solo por lo que ella cuente en el chat. `alias` es como
+  # la nombra al hablar.
+  [[persona.instrumento]]
+  clave = "nu"
+  clase = "tarjeta"
+  alias = "nu, nubank, la nu"
+  cuentas = { personal = "Nu" }
+
+  [[persona.instrumento]]
+  clave = "efectivo"
+  clase = "efectivo"
+  alias = "efectivo, cash, en efectivo"
+  cuentas = { personal = "Efectivo", estudio = "Efectivo" }

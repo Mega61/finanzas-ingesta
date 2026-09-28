@@ -448,7 +448,9 @@ resto del código vivía fuera de `src/` y no se contaba. Al entrar todo al
 paquete, el número por fin mide todo, y dice la verdad: `aplicacion/` y
 `entrada/` están entre 7% y 30%. Es lo que sigue.
 
-Falta también el segundo usuario por Gmail.
+El segundo usuario ya está: su Gmail por IMAP, su Firefly, y el Actual de su
+negocio, con la regla de que nada se publica hasta que ella diga a qué libro va.
+Ver [`docs/otra-persona.md`](docs/otra-persona.md).
 
 ## Licencia
 

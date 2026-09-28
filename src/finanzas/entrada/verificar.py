@@ -304,7 +304,103 @@ def probar_telegram():
     return True
 
 
+def probar_personas():
+    """Cada persona configurada: que se entienda la configuracion, y que cada
+    libro y cada buzon conteste con SU credencial. Un libro que no contesta no
+    tumba a los demas."""
+    print('\n[personas]')
+    from finanzas.adaptadores import actual, firefly, imap
+    from finanzas.aplicacion import libros, personas, ruteo
+
+    try:
+        gente = personas.leer()
+    except personas.ConfiguracionInvalida as ex:
+        mal(f'la configuracion de personas no sirve: {ex}')
+        return False
+    if not gente:
+        aviso('no hay otras personas configuradas (personas.toml / PERSONAS_JSON)')
+        return True
+    todo_bien = True
+    for p in gente:
+        nota(f'{p.nombre}: chat {p.telegram or "SIN CHAT todavia"}')
+        for lb in p.libros:
+            fila = {
+                'tipo': lb.tipo,
+                'nombre': lb.nombre,
+                'url': lb.url,
+                'secreto_env': lb.secreto,
+                'ajustes': json.dumps(lb.ajustes),
+            }
+            try:
+                c = libros.cliente(fila)
+                if isinstance(c, actual.Cliente):
+                    cuentas = [x['name'] for x in c.cuentas()]
+                    ok(f'  {lb.nombre} (Actual): cuentas {", ".join(cuentas)}')
+                    usadas = {
+                        cta
+                        for ins in p.instrumentos
+                        for k, cta in ins.cuentas.items()
+                        if k == lb.clave
+                    }
+                    for falta in sorted(usadas - set(cuentas)):
+                        mal(f'  {lb.nombre}: la cuenta «{falta}» no existe en Actual')
+                        todo_bien = False
+                    # lo que usan los aportes y pagos de la duena en especie
+                    cta = ruteo.ajuste(fila, 'cuenta_aportes')
+                    if cta not in cuentas:
+                        aviso(
+                            f'  {lb.nombre}: sin la cuenta «{cta}» no se registran gastos '
+                            'del negocio pagados con plata personal'
+                        )
+                    for clave, ingreso in (
+                        ('categoria_aportes', True),
+                        ('categoria_pago_duena', False),
+                    ):
+                        cat = ruteo.ajuste(fila, clave)
+                        if not c.categoria_id(cat, ingreso):
+                            aviso(f'  {lb.nombre}: falta la categoria «{cat}»')
+                else:
+                    ok(f'  {lb.nombre} (Firefly): {c.whoami()}')
+                    nombres = set(c.accounts_index())
+                    usadas = {
+                        cta
+                        for ins in p.instrumentos
+                        for k, cta in ins.cuentas.items()
+                        if k == lb.clave
+                    }
+                    for falta in sorted(usadas - nombres):
+                        mal(f'  {lb.nombre}: la cuenta «{falta}» no existe en Firefly')
+                        todo_bien = False
+                    if ruteo.ajuste(fila, 'cuenta_negocio') not in nombres:
+                        aviso(
+                            f'  {lb.nombre}: falta la cuenta «{ruteo.ajuste(fila, "cuenta_negocio")}» '
+                            'para los aportes al negocio'
+                        )
+                estado = 'EN SERIO' if lb.en_serio else 'en seco'
+                nota(
+                    f'    publica {estado}'
+                    + (f', desde {lb.desde}' if lb.desde else '')
+                )
+            except (libros.LibroNoDisponible, actual.ApiError, firefly.ApiError) as ex:
+                mal(f'  {lb.nombre}: {ex}')
+                todo_bien = False
+        for bz in p.buzones:
+            clave = config.get(bz.secreto)
+            if not clave:
+                mal(f'  {bz.direccion}: falta {bz.secreto}')
+                todo_bien = False
+                continue
+            try:
+                correos, _ = imap.bajar(bz.host, bz.direccion, clave, dias=2)
+                ok(f'  {bz.direccion}: IMAP entra ({len(correos)} alertas en 2 dias)')
+            except imap.SinAutorizacion as ex:
+                mal(f'  {bz.direccion}: el app password no sirve: {ex}')
+                todo_bien = False
+    return todo_bien
+
+
 PRUEBAS = {
+    'personas': probar_personas,
     'firefly': probar_firefly,
     'graph': probar_graph,
     'gmail': probar_gmail,

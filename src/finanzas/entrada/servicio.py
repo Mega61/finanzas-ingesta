@@ -31,7 +31,7 @@ from finanzas import config, registro
 from finanzas.adaptadores import db, telegram
 from finanzas.aplicacion import conciliador
 from finanzas.dominio import fechas
-from finanzas.entrada import bot, demonio
+from finanzas.entrada import bot, bot_libros, demonio
 
 # Cada cuanto se revisa el correo.
 INTERVALO_MIN = int(config.get('INGESTA_INTERVALO_MIN', '15'))
@@ -88,6 +88,9 @@ def pasada(cx, uid):
     if nuevos:
         demonio.paso_procesar(cx, uid)
     conteo = demonio.paso_publicar(cx, en_serio=EN_SERIO) or {}
+    # Las transferencias de clientas que esperaban a Agendapro: si ya
+    # aparecieron, se enlazan antes de preguntar nada.
+    bot_libros.revisar_ventas_en_espera(cx)
     # lo que no se supo clasificar se pregunta de una
     mandadas = bot.preguntar_pendientes(cx)
     # Las facturas de supermercado van despues y con su propio cupo: son
@@ -132,13 +135,16 @@ def hilo_ingesta(uid):
 
             ahora = fechas.ahora()
             if proximo_resumen and ahora >= proximo_resumen:
-                try:
-                    chat = config.get('TELEGRAM_CHAT_ID_JUAN')
-                    if chat:
-                        bot.cmd_resumen(cx, chat)
-                        log('resumen', 'mandado')
-                except Exception as ex:
-                    log('resumen', f'ERROR: {ex}')
+                # A cada persona, el suyo. Antes solo Juan lo recibia, y con
+                # los numeros de todos.
+                for u in db.almacen(cx).usuarios():
+                    if not u['telegram_chat_id']:
+                        continue
+                    try:
+                        bot.cmd_resumen(cx, u['telegram_chat_id'])
+                        log('resumen', f'mandado a {u["nombre"]}')
+                    except Exception as ex:
+                        log('resumen', f'ERROR ({u["nombre"]}): {ex}')
                 proximo_resumen = _proxima_hora(HORA_RESUMEN)
 
             if proxima_concil and ahora >= proxima_concil:
@@ -283,6 +289,13 @@ def main(argv=None):
     db.inicializar()
     cx = db.conectar()
     uid, _ = demonio.paso_asegurar_usuario(cx)
+    if demonio.PROBLEMA_CON_PERSONAS:
+        log('inicio', f'personas: {demonio.PROBLEMA_CON_PERSONAS}')
+        _avisar(
+            '⚠️ La configuración de las otras personas está rota y no la apliqué. '
+            'Tu ingesta sigue normal; el bot no atiende a nadie más hasta que se '
+            f'arregle:\n<code>{demonio.PROBLEMA_CON_PERSONAS[:300]}</code>'
+        )
 
     n = db.almacen(cx).contar_reglas()
     if n == 0:

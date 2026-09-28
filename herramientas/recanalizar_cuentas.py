@@ -51,7 +51,9 @@ def main() -> int:
     # toca ni por error.
     candidatas = {}
     for nombre, info in cuentas.items():
-        tipo = (info.get('type') or info.get('attributes', {}).get('type') or '').lower()
+        tipo = (
+            info.get('type') or info.get('attributes', {}).get('type') or ''
+        ).lower()
         if 'expense' not in tipo:
             continue
         bueno = destino_bueno(nombre)
@@ -72,9 +74,7 @@ def main() -> int:
         if bueno not in cuentas:
             print(f'  OJO: «{bueno}» no existe en Firefly, me salto «{malo}»')
             continue
-        movs = firefly.get_all(
-            f'/api/v1/accounts/{cuentas[malo]["id"]}/transactions'
-        )
+        movs = firefly.get_all(f'/api/v1/accounts/{cuentas[malo]["id"]}/transactions')
         for t in movs:
             tid = t.get('id')
             for s in t.get('attributes', {}).get('transactions', []):
@@ -82,7 +82,7 @@ def main() -> int:
                     continue
                 total += 1
                 print(
-                    f'  {s.get("date","")[:10]}  {str(s.get("description"))[:34]:<36}'
+                    f'  {s.get("date", "")[:10]}  {str(s.get("description"))[:34]:<36}'
                     f'{float(s.get("amount") or 0):>11,.0f}  {malo} -> {bueno}'
                 )
                 if aplicar:

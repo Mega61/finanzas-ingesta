@@ -24,13 +24,17 @@ from finanzas.aplicacion import (
     catalogo,
     clasificador,
     interprete,
+    libros,
     movimientos,
+    personas,
     presupuestos,
     publicador,
+    ruteo,
 )
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import intencion
 from finanzas.dominio import texto as _texto_dom
+from finanzas.entrada import bot_libros
 
 
 def _a(cx):
@@ -114,10 +118,36 @@ def sugerir_categorias(cx, usuario_id, p, todas=None):
 
 
 def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
-    """Manda las preguntas abiertas. Devuelve cuantas mando."""
+    """Manda las preguntas abiertas, cada una con el Firefly de su persona.
+    Devuelve cuantas mando.
+
+    Antes era una sola pasada con las categorias del Firefly del entorno: a
+    cualquier persona se le ofrecian las categorias de Juan.
+    """
     filas = db.pendientes_por_preguntar(cx, limite=limite)
     if not filas:
         return 0
+    mandadas = 0
+    por_persona = {}
+    for p in filas:
+        por_persona.setdefault(p['usuario_id'], []).append(p)
+    for uid, suyas in por_persona.items():
+        with firefly.usar(libros.conexion_firefly_de(_a(cx), uid)):
+            if ruteo.usa_ruteo(_a(cx), uid):
+                mandadas += sum(
+                    1
+                    for p in suyas
+                    if p['telegram_chat_id']
+                    and bot_libros.preguntar(cx, p, p['telegram_chat_id'])
+                )
+            else:
+                mandadas += _preguntar_de_siempre(cx, suyas)
+    cx.commit()
+    return mandadas
+
+
+def _preguntar_de_siempre(cx, filas):
+    """Las preguntas de quien tiene un solo libro: el camino de Juan."""
     todas = _categorias_firefly()
     mandadas = 0
     for p in filas:
@@ -194,7 +224,6 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
             mandadas += 1
         except telegram.TelegramError as ex:
             print(f'  no pude preguntar por #{p["id"]}: {ex}')
-    cx.commit()
     return mandadas
 
 
@@ -500,8 +529,23 @@ AYUDA = (
 )
 
 
+def _uid(cx, chat):
+    """El usuario del chat, o None. Para filtrar: nadie ve lo de otro."""
+    u = _a(cx).usuario_por_chat(chat)
+    return u['id'] if u else None
+
+
+def _es_juan(cx, chat):
+    """Las facturas del super, el asesor y el mapa de tarjetas son de Juan."""
+    u = _a(cx).usuario_por_chat(chat)
+    return bool(u) and u['nombre'] == 'Juan'
+
+
 def cmd_resumen(cx, chat):
-    filas = db.resumen(cx)
+    uid = _uid(cx, chat)
+    if uid is None:
+        return
+    filas = db.resumen(cx, uid)
     if not filas:
         telegram.enviar(chat, 'Todo al día. No hay nada abierto. ✅')
         return
@@ -516,7 +560,7 @@ def cmd_resumen(cx, chat):
         lineas.append(f'{etq}: <b>{f["n"]}</b>')
         if f['pregunta'] != 'nada':
             total_preg += f['n']
-    sc = _a(cx).total_sin_confirmar()
+    sc = _a(cx).total_sin_confirmar(uid)
     if sc and sc['n']:
         lineas += [
             '',
@@ -528,7 +572,10 @@ def cmd_resumen(cx, chat):
 
 
 def cmd_sinconfirmar(cx, chat):
-    filas = _a(cx).sin_confirmar(20)
+    uid = _uid(cx, chat)
+    if uid is None:
+        return
+    filas = _a(cx).sin_confirmar(20, uid)
     if not filas:
         telegram.enviar(chat, 'No hay nada sin confirmar. ✅')
         return
@@ -538,7 +585,7 @@ def cmd_sinconfirmar(cx, chat):
             f'{p["fecha"]} {_plata(p["valor"], p["moneda"])} '
             f'— {_escapar(p["contraparte"])[:28]}'
         )
-    n_sosp = _a(cx).contar_sospechosos()
+    n_sosp = _a(cx).contar_sospechosos(uid)
     if n_sosp:
         lineas += [
             '',
@@ -2223,6 +2270,36 @@ def _toque_presupuesto_a_los_viejos(t):
     )
 
 
+def _el_toque_es_suyo(cx, t):
+    """Si lo que el boton nombra es de quien lo toca."""
+    if t.accion in TOQUES_DE_CATALOGO:
+        return _es_juan(cx, t.chat)
+    if t.accion in TOQUES_DE_PENDIENTE:
+        p = _a(cx).pendiente(t.pid)
+        return p is not None and p['usuario_id'] == _uid(cx, t.chat)
+    # Los que nombran un id de Firefly ya van contra el Firefly de quien toca
+    # (`manejar_update` lo fija): el de otra persona no existe ahi.
+    return True
+
+
+# Los botones cuyo numero es el id de un PENDIENTE de la cola.
+TOQUES_DE_PENDIENTE = {
+    'c',
+    'x',
+    'd',
+    'k',
+    'a',
+    'b',
+    't',
+    'm',
+    'sp',
+    # los de quien lleva varios libros (entrada/bot_libros.py)
+    *bot_libros.TOQUES,
+}
+# Los del catalogo de productos del super, que es de Juan.
+TOQUES_DE_CATALOGO = {'fg', 'fc', 'fv', 'fp', 'fx'}
+
+
 TOQUES = {
     'c': _toque_categoria,
     'x': _toque_descartar,
@@ -2265,6 +2342,7 @@ TOQUES = {
     'fp': _toque_producto_en_espera,
     'fx': _toque_producto_saltar,
 }
+TOQUES.update(bot_libros.TOQUES)
 
 
 def _cmd_start(cx, chat, _texto):
@@ -2315,6 +2393,11 @@ def _cmd_ultimos(cx, chat, texto):
 
 
 def _cmd_productos(cx, chat, _texto):
+    if not _es_juan(cx, chat):
+        telegram.enviar(
+            chat, 'Las facturas del supermercado son de Juan: aquí no hay nada tuyo.'
+        )
+        return
     cmd_productos(cx, chat)
 
 
@@ -2358,11 +2441,12 @@ def chats_autorizados():
     Se lee en cada llamada y no se cachea: el conjunto sale del entorno y en
     las pruebas se cambia con monkeypatch.
     """
-    return {
+    de_siempre = {
         str(config.get(clave))
         for clave in ('TELEGRAM_CHAT_ID_JUAN', 'TELEGRAM_CHAT_ID_NOVIA')
         if config.get(clave)
     }
+    return de_siempre | set(personas.chats())
 
 
 def autorizado(chat):
@@ -2380,10 +2464,10 @@ def autorizado(chat):
     return bool(permitidos) and str(chat) in permitidos
 
 
-# De que usuario es cada variable de chat. Solo Juan por ahora: TELEGRAM_CHAT_ID_NOVIA
-# deja entrar al chat pero no le da cuenta, porque todavia no hay usuario ni
-# libro para ella. Cuando se le daba, su /start la ataba al primer usuario sin
-# chat -- que podia ser Juan -- y desde ahi veia y editaba su Firefly.
+# De que usuario es cada variable de chat. Solo Juan: TELEGRAM_CHAT_ID_NOVIA deja
+# entrar al chat pero no le da cuenta. Cuando se le daba, su /start la ataba al
+# primer usuario sin chat -- que podia ser Juan -- y desde ahi veia y editaba su
+# Firefly. Las demas personas dicen su chat en la configuracion de personas.
 DUENO_DE_LA_VARIABLE = {'TELEGRAM_CHAT_ID_JUAN': 'Juan'}
 
 SIN_CUENTA = (
@@ -2397,14 +2481,39 @@ def dueno_configurado(chat):
     for clave, nombre in DUENO_DE_LA_VARIABLE.items():
         if config.get(clave) and str(config.get(clave)) == str(chat):
             return nombre
-    return None
+    return personas.chats().get(str(chat))
 
 
 def _tiene_cuenta(cx, chat):
     return _a(cx).usuario_por_chat(chat) is not None
 
 
+def _chat_del_update(u):
+    if 'callback_query' in u:
+        return ((u['callback_query'].get('message') or {}).get('chat') or {}).get('id')
+    msg = u.get('message') or u.get('edited_message') or {}
+    return (msg.get('chat') or {}).get('id')
+
+
 def manejar_update(cx, u):
+    """Reparte un update de Telegram, con el Firefly de quien escribe.
+
+    Todo lo que corre adentro -- los ultimos movimientos, una edicion, las
+    categorias que se ofrecen -- le habla al Firefly de ESA persona. Sin esto
+    le hablaba siempre al del entorno, que es el de Juan.
+    """
+    chat = _chat_del_update(u)
+    usuario = _a(cx).usuario_por_chat(chat) if chat else None
+    if usuario is None:
+        # Sin cuenta, el despacho lo rechaza antes de tocar nada; igual se fija
+        # un Firefly que falla, por si algun camino se adelanta.
+        with firefly.usar(firefly.SIN_FIREFLY):
+            return _despachar(cx, u)
+    with firefly.usar(libros.conexion_firefly_de(_a(cx), usuario['id'])):
+        return _despachar(cx, u)
+
+
+def _despachar(cx, u):
     """Reparte un update de Telegram. Solo enruta: la logica vive en los
     manejadores, que se pueden probar uno por uno."""
     if 'callback_query' in u:
@@ -2432,6 +2541,13 @@ def manejar_update(cx, u):
         manejador = TOQUES.get(toque.accion)
         if manejador is None:
             toque.aviso('no entendí ese botón')
+            return
+        # El callback trae el id del movimiento, y nada verificaba que fuera de
+        # quien toca: un boton forjado desde un chat autorizado resolvia -- y
+        # publicaba -- el movimiento de otra persona.
+        if not _el_toque_es_suyo(cx, toque):
+            print(f'  toque rechazado: {toque.accion}:{toque.pid} no es de {de_chat}')
+            toque.aviso('eso no es tuyo')
             return
         # El callback SIEMPRE se contesta: si el manejador revienta antes de
         # avisar, el botoncito se queda girando en Telegram para siempre y no
@@ -2463,6 +2579,12 @@ def manejar_update(cx, u):
     if not es_start and not _tiene_cuenta(cx, chat):
         print(f'  mensaje ignorado, chat sin cuenta: {chat}')
         telegram.enviar(chat, SIN_CUENTA)
+        return
+    # Quien lleva varios libros tiene su propia conversacion: registrar lo que
+    # cuenta, por escrito o en audio, y preguntar a que libro va cada cosa.
+    usuario = _a(cx).usuario_por_chat(chat)
+    if usuario is not None and ruteo.usa_ruteo(_a(cx), usuario['id']) and not es_start:
+        bot_libros.manejar_mensaje(cx, chat, msg)
         return
     # El `caption` de una foto o un PDF tambien es texto que el usuario
     # escribio: mandar la foto de una factura con «esto fue mercado» dejaba al

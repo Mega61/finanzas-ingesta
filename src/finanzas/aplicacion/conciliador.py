@@ -175,7 +175,7 @@ def _parecido(p, m):
     return any(len(t) >= 4 for t in (a & b))
 
 
-def tasa_global_implicita(cx, extractos):
+def tasa_global_implicita(cx, extractos, usuario_id=None):
     """La tasa COP/USD juntando todos los extractos, como respaldo.
 
     Se usa la mediana de las razones de todos los pares creibles del historico.
@@ -195,7 +195,11 @@ def tasa_global_implicita(cx, extractos):
         if not usd:
             continue
         pend = db.almacen(cx).pendientes_del_instrumento(
-            ext.instrumento, str(ext.desde), str(ext.hasta), moneda='COP'
+            ext.instrumento,
+            str(ext.desde),
+            str(ext.hasta),
+            moneda='COP',
+            usuario_id=usuario_id or _dueno_de_los_extractos(cx),
         )
         for p in pend:
             fp = _f(p['fecha'])
@@ -215,7 +219,7 @@ def tasa_global_implicita(cx, extractos):
 # --------------------------------------------------------------- conciliar
 
 
-def conciliar_extracto(cx, ext, dry_run=True, tasa_respaldo=None):
+def conciliar_extracto(cx, ext, dry_run=True, tasa_respaldo=None, usuario_id=None):
     """Cruza un extracto contra los pendientes publicados de esa tarjeta."""
     if ext.error or not ext.movimientos:
         return {}
@@ -223,7 +227,11 @@ def conciliar_extracto(cx, ext, dry_run=True, tasa_respaldo=None):
         return {'sin_periodo': 1}
 
     pend = db.almacen(cx).pendientes_del_instrumento(
-        ext.instrumento, str(ext.desde), str(ext.hasta), estado='publicado'
+        ext.instrumento,
+        str(ext.desde),
+        str(ext.hasta),
+        estado='publicado',
+        usuario_id=usuario_id or _dueno_de_los_extractos(cx),
     )
     if not pend:
         return {}
@@ -370,6 +378,15 @@ def _marcar_fantasma(cx, p, ext):
 
 
 # -------------------------------------------------------------------- main
+
+
+def _dueno_de_los_extractos(cx):
+    """De quien son los extractos: de Juan. La carpeta, la clave de los PDF y
+    el Firefly del entorno son suyos. Si el extracto se cruzara contra los
+    movimientos de otra persona, se le quitaria la etiqueta -- con el token de
+    Juan -- a un id de Firefly de otro libro."""
+    u = db.almacen(cx).usuario_por_nombre('Juan')
+    return u['id'] if u else -1
 
 
 def correr(cx, carpeta=None, dry_run=True, solo=None):

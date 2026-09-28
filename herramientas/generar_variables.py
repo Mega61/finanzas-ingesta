@@ -61,26 +61,40 @@ def productos_en_una_linea():
 
 
 def variables_del_stack():
-    """Los nombres que el stack le pasa al contenedor, en su orden.
+    """Los nombres de las variables que el stack usa, en su orden.
 
     Se leen del stack y NO de una lista escrita aqui. La lista a mano se
     desincronizo: le faltaban GEMINI_API_KEY y otras diez, y el archivo generado
     quedaba incompleto sin que nada lo dijera. Se noto el dia que hubo que
     recrear el stack desde cero.
+
+    Son las referencias `${NOMBRE...}` de TODO el archivo, no las llaves de un
+    bloque `environment:`: el puente de Actual tiene su propio bloque, y ahi la
+    llave del contenedor (API_KEY) no es la variable de Portainer
+    (ACTUAL_API_KEY).
     """
     texto = Path(STACK).read_text(encoding='utf-8')
-    dentro, fuera = False, []
-    for linea in texto.split('\n'):
-        if re.match(r'^\s{4}environment:', linea):
-            dentro = True
-            continue
-        if dentro:
-            if re.match(r'^\s{0,4}\S', linea):
-                break
-            m = re.match(r'^\s{6}([A-Z][A-Z0-9_]+):', linea)
-            if m:
-                fuera.append(m.group(1))
-    return fuera
+    llaves = re.findall(r'^\s{6}([A-Z][A-Z0-9_]+):', texto, re.M)
+    referencias = re.findall(r'\$\{([A-Z][A-Z0-9_]+)', texto)
+    # Las llaves de los otros servicios (API_KEY, NODE_ENV del puente) no son
+    # variables de Portainer: solo cuentan las de la ingesta y las referencias.
+    del_puente = {'ACTUAL_SERVER_PASSWORD', 'API_KEY', 'NODE_ENV'}
+    return list(
+        dict.fromkeys([*(k for k in llaves if k not in del_puente), *referencias])
+    )
+
+
+def personas_en_una_linea():
+    import tomllib
+
+    ruta = config.ruta_proyecto('personas.toml')
+    if config.get('PERSONAS_JSON'):
+        return config.get('PERSONAS_JSON')
+    if not os.path.exists(ruta):
+        return None
+    with open(ruta, 'rb') as fh:
+        datos = tomllib.load(fh)
+    return json.dumps(datos, ensure_ascii=False, separators=(',', ':'))
 
 
 # De donde sale cada valor que no es un simple config.get(). Lo que no este
@@ -94,7 +108,16 @@ ESPECIALES = {
     'PRODUCTOS_CSV': productos_en_una_linea,
     'EXTRACTO_CLAVE': lambda: config.get('EXTRACTO_CLAVE') or config.get('CLAVE'),
     'TZ': lambda: config.get('TZ', 'America/Bogota'),
+    # Las otras personas, del personas.toml de la raiz, en UNA linea de JSON.
+    # Las referencias "${...}" se dejan como estan: se expanden en el
+    # contenedor, con SUS variables.
+    'PERSONAS_JSON': personas_en_una_linea,
+    # El TOML ocupa varias lineas y Portainer lo partiria: no va.
+    'PERSONAS_TOML': lambda: None,
+    # La imagen de la ingesta; por defecto la del stack.
+    'IMAGEN': lambda: None,
 }
+
 
 # Estas NO se leen del .env local a proposito: el valor de desarrollo y el del
 # contenedor son distintos.
@@ -108,6 +131,9 @@ ESPECIALES = {
 # Se pueden fijar con FIREFLY_URL_CONTENEDOR y RED_FIREFLY en el .env.
 SOLO_DESPLIEGUE = {
     'RED_FIREFLY': lambda: config.get('RED_FIREFLY') or 'proxied',
+    # En desarrollo el puente corre en localhost; en el stack es el servicio
+    # actual-api, por la red interna.
+    'ACTUAL_API_URL': lambda: 'http://actual-api:5007',
     'FIREFLY_URL': lambda: (
         config.get('FIREFLY_URL_CONTENEDOR') or 'http://firefly_iii_core:8080'
     ),
@@ -118,7 +144,7 @@ def construir():
     """(nombre, valor) para cada variable del stack que tenga algo que poner."""
     pares = []
     # RED_FIREFLY no esta en el bloque environment: es la red del stack.
-    for nombre in ['RED_FIREFLY', *variables_del_stack()]:
+    for nombre in dict.fromkeys(['RED_FIREFLY', *variables_del_stack()]):
         if nombre in SOLO_DESPLIEGUE:
             valor = SOLO_DESPLIEGUE[nombre]()
         elif nombre in ESPECIALES:

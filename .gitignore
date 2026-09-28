@@ -26,6 +26,8 @@ telegram_offset
 *.csv
 !productos.ejemplo.csv
 productos.csv
+# Quien mas usa el bot: nombres, correos y ultimos digitos de sus tarjetas.
+personas.toml
 datos/
 /pdf/
 
