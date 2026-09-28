@@ -27,7 +27,14 @@ from email import policy
 
 from finanzas import config
 from finanzas.adaptadores import db, graph, imap
-from finanzas.aplicacion import clasificador, conciliador, libros, personas, publicador
+from finanzas.aplicacion import (
+    clasificador,
+    conciliador,
+    libros,
+    personas,
+    publicador,
+    ruteo,
+)
 from finanzas.dominio import fechas
 from finanzas.parsers import bancolombia_alertas as alertas
 
@@ -331,6 +338,36 @@ def paso_procesar(cx, uid):
             },
             indice=idx,
         )
+
+        # Quien lleva varios libros no pasa por el clasificador de Juan: su
+        # movimiento nace preguntando a que libro va, y lo demas se decide
+        # despues de esa respuesta (ver aplicacion/ruteo.py).
+        alm = db.almacen(cx)
+        if ruteo.usa_ruteo(alm, c['usuario_id']):
+            if fecha_ev < ruteo.marca_de_agua(alm, c['usuario_id'], marca):
+                db.pendiente_crear(
+                    cx,
+                    correo_id=c['id'],
+                    usuario_id=c['usuario_id'],
+                    tipo=ev.tipo,
+                    fecha=fecha_ev,
+                    valor=ev.valor,
+                    instrumento=ev.instrumento,
+                    contraparte=ev.contraparte,
+                    descripcion=ev.descripcion,
+                    plantilla=ev.plantilla,
+                    external_id=publicador.external_id(c['message_id']),
+                    estado='descartado',
+                    decidido_por='anterior_a_la_marca_de_agua',
+                )
+                conteo['historico'] = conteo.get('historico', 0) + 1
+            else:
+                _, era_nuevo = ruteo.crear_desde_alerta(
+                    alm, c, ev, publicador.external_id(c['message_id'])
+                )
+                conteo['movimiento' if era_nuevo else 'repetido'] += 1
+            db.correo_marcar_procesado(cx, c['id'])
+            continue
 
         if c['usuario_id'] not in destinos:
             destinos[c['usuario_id']] = libros.destino_seguro(

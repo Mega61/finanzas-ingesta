@@ -23,8 +23,9 @@ import hashlib
 from datetime import timedelta
 
 from finanzas import registro
-from finanzas.adaptadores import db, firefly
+from finanzas.adaptadores import actual, db, firefly
 from finanzas.aplicacion import libros as _libros
+from finanzas.aplicacion import publicador_actual, ruteo
 from finanzas.dominio import fechas
 from finanzas.dominio import texto as _texto
 
@@ -382,7 +383,8 @@ def publicar_pendientes(cx, desde=None, dry_run=True, limite=500):
     por_libro = {}
     for p in filas:
         por_libro.setdefault(p['libro_id'], []).append(p)
-    for libro_id, del_libro in por_libro.items():
+    for libro_id, filas_del_libro in por_libro.items():
+        del_libro = filas_del_libro
         libro = alm.libro(libro_id)
         if libro is None or not libro['activo']:
             registro.aviso(f'  libro {libro_id} inactivo o inexistente: no publico')
@@ -394,33 +396,95 @@ def publicar_pendientes(cx, desde=None, dry_run=True, limite=500):
             registro.aviso(f'  {ex}')
             conteo['sin_libro'] = conteo.get('sin_libro', 0) + len(del_libro)
             continue
+        if ruteo.usa_ruteo(alm, libro['usuario_id']):
+            # Quien lleva varios libros publica solo lo que ya contesto del
+            # todo: con una pregunta abierta, o esperando a Agendapro, no.
+            del_libro = [
+                p
+                for p in del_libro
+                if not p['pregunta'] and p['decidido_por'] != 'espera_agendapro'
+            ]
+            if not del_libro:
+                continue
         seco = dry_run or not libro['en_serio']
         marca = libro['desde'] or desde
-        for accion, n in _publicar_libro(
-            cx, del_libro, marca, seco, cliente, libro
-        ).items():
+        publicar = (
+            _publicar_libro_actual
+            if isinstance(cliente, actual.Cliente)
+            else _publicar_libro
+        )
+        for accion, n in publicar(cx, del_libro, marca, seco, cliente, libro).items():
             conteo[accion] = conteo.get(accion, 0) + n
     return conteo
 
 
-def _publicar_libro(cx, filas, desde, dry_run, cliente, libro):
-    if desde:
-        antes = [p for p in filas if str(p['fecha']) < str(desde)]
-        for p in antes:
-            db.pendiente_actualizar(
-                cx,
-                p['id'],
-                estado='descartado',
-                pregunta=None,
-                decidido_por='anterior_a_la_marca_de_agua',
-            )
-        cx.commit()
-        filas = [p for p in filas if str(p['fecha']) >= str(desde)]
-        if antes:
-            registro.aviso(
-                f'  {len(antes)} anteriores a {desde}: guardados, no publicados'
-            )
+def _descartar_anteriores(cx, filas, desde):
+    if not desde:
+        return filas
+    antes = [p for p in filas if str(p['fecha']) < str(desde)]
+    for p in antes:
+        db.pendiente_actualizar(
+            cx,
+            p['id'],
+            estado='descartado',
+            pregunta=None,
+            decidido_por='anterior_a_la_marca_de_agua',
+        )
+    cx.commit()
+    if antes:
+        registro.aviso(f'  {len(antes)} anteriores a {desde}: guardados, no publicados')
+    return [p for p in filas if str(p['fecha']) >= str(desde)]
 
+
+def _publicar_libro_actual(cx, filas, desde, dry_run, cliente, libro):
+    """Lo mismo, contra Actual. Un 'parecido' no se resuelve aqui: lo pregunta
+    el bot, porque decidir solo si es el mismo es justo lo que no se puede."""
+    conteo = {}
+    for p in _descartar_anteriores(cx, filas, desde):
+        accion, detalle = publicador_actual.publicar_uno(
+            cx, p, cliente, libro, dry_run=dry_run
+        )
+        conteo[accion] = conteo.get(accion, 0) + 1
+        if accion != 'parecido':
+            registro.aviso(f'  {accion:9} [{libro["nombre"]}] {detalle}')
+    return conteo
+
+
+def publicar_en_su_libro(cx, pendiente_id, aunque_se_parezca=False):
+    """Publica UN movimiento en el libro que tiene asignado, sea Firefly o
+    Actual. Es lo que llama el bot apenas la persona termina de contestar.
+
+    Devuelve (accion, detalle). En seco si el libro no esta en serio.
+    """
+    alm = db.almacen(cx)
+    p = alm.pendiente(pendiente_id)
+    if p is None:
+        return 'error', 'ese movimiento ya no existe'
+    if not p['libro_id'] or not p['destino_por']:
+        return 'sin_destino', 'falta elegir el libro'
+    libro = alm.libro(p['libro_id'])
+    try:
+        cliente = _libros.cliente(libro)
+    except _libros.LibroNoDisponible as ex:
+        alm.libro_error(libro['id'], str(ex))
+        return 'error', str(ex)
+    seco = not libro['en_serio']
+    if libro['desde'] and str(p['fecha']) < str(libro['desde']):
+        return (
+            'error',
+            f'es anterior a {libro["desde"]}, la fecha desde la que se publica en {libro["nombre"]}',
+        )
+    if isinstance(cliente, actual.Cliente):
+        return publicador_actual.publicar_uno(
+            cx, p, cliente, libro, dry_run=seco, aunque_se_parezca=aunque_se_parezca
+        )
+    f = str(p['fecha'])
+    idx = IndiceFirefly(desde=f, hasta=f, cliente=cliente)
+    return publicar_uno(cx, p, idx=idx, dry_run=seco, cliente=cliente, libro=libro)
+
+
+def _publicar_libro(cx, filas, desde, dry_run, cliente, libro):
+    filas = _descartar_anteriores(cx, filas, desde)
     if not filas:
         return {}
 

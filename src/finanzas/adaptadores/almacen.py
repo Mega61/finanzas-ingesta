@@ -606,6 +606,16 @@ class Almacen:
             (*ESTADOS_ABIERTOS, str(chat_id)),
         ).fetchall()
 
+    def en_espera_de_agendapro(self) -> list[sqlite3.Row]:
+        """Las transferencias que son de una clienta y esperan a que Agendapro
+        suba la venta, con el chat de su persona."""
+        return self.cx.execute(
+            """SELECT p.*, u.telegram_chat_id FROM pendientes p
+               JOIN usuarios u ON u.id = p.usuario_id
+               WHERE p.decidido_por = 'espera_agendapro'
+                 AND p.estado IN ('nuevo', 'error') AND p.libro_id IS NOT NULL"""
+        ).fetchall()
+
     def marcar_preguntado(self, pendiente_id: int) -> None:
         self.cx.execute(
             "UPDATE pendientes SET preguntado_en = datetime('now') WHERE id = ?",
@@ -750,6 +760,39 @@ class Almacen:
         if solo_texto:
             sql.append("AND es_regex = 0 AND patron <> ''")
         return self.cx.execute(' '.join(sql), args).fetchall()
+
+    def regla_de_libro(self, usuario_id: int, patron: str) -> sqlite3.Row | None:
+        """La regla de ese comercio para una persona de varios libros. Dice el
+        libro donde se aprendio: una categoria de un libro no existe en el otro."""
+        return self.cx.execute(
+            'SELECT * FROM reglas WHERE usuario_id = ? AND patron = ? AND libro_id IS NOT NULL',
+            (usuario_id, patron),
+        ).fetchone()
+
+    def guardar_regla_de_libro(
+        self,
+        usuario_id: int,
+        libro_id: int,
+        patron: str,
+        categoria: str,
+        direccion: str,
+    ) -> bool:
+        """Lo que la persona contesto, atado al libro donde lo contesto. Pisa lo
+        anterior: la ultima respuesta es la que vale."""
+        if not patron or texto.es_pasarela_pura(patron):
+            return False
+        self.cx.execute(
+            """INSERT INTO reglas (usuario_id, libro_id, patron, categoria, direccion,
+                  origen, aciertos)
+               VALUES (?, ?, ?, ?, ?, 'usuario', 1)
+               ON CONFLICT (usuario_id, patron) DO UPDATE SET
+                  libro_id = excluded.libro_id, categoria = excluded.categoria,
+                  direccion = excluded.direccion, origen = 'usuario',
+                  aciertos = reglas.aciertos + 1""",
+            (usuario_id, libro_id, patron, categoria, direccion),
+        )
+        self.cx.commit()
+        return True
 
     def guardar_regla(
         self,

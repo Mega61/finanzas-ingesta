@@ -29,10 +29,12 @@ from finanzas.aplicacion import (
     personas,
     presupuestos,
     publicador,
+    ruteo,
 )
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import intencion
 from finanzas.dominio import texto as _texto_dom
+from finanzas.entrada import bot_libros
 
 
 def _a(cx):
@@ -116,10 +118,36 @@ def sugerir_categorias(cx, usuario_id, p, todas=None):
 
 
 def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
-    """Manda las preguntas abiertas. Devuelve cuantas mando."""
+    """Manda las preguntas abiertas, cada una con el Firefly de su persona.
+    Devuelve cuantas mando.
+
+    Antes era una sola pasada con las categorias del Firefly del entorno: a
+    cualquier persona se le ofrecian las categorias de Juan.
+    """
     filas = db.pendientes_por_preguntar(cx, limite=limite)
     if not filas:
         return 0
+    mandadas = 0
+    por_persona = {}
+    for p in filas:
+        por_persona.setdefault(p['usuario_id'], []).append(p)
+    for uid, suyas in por_persona.items():
+        with firefly.usar(libros.conexion_firefly_de(_a(cx), uid)):
+            if ruteo.usa_ruteo(_a(cx), uid):
+                mandadas += sum(
+                    1
+                    for p in suyas
+                    if p['telegram_chat_id']
+                    and bot_libros.preguntar(cx, p, p['telegram_chat_id'])
+                )
+            else:
+                mandadas += _preguntar_de_siempre(cx, suyas)
+    cx.commit()
+    return mandadas
+
+
+def _preguntar_de_siempre(cx, filas):
+    """Las preguntas de quien tiene un solo libro: el camino de Juan."""
     todas = _categorias_firefly()
     mandadas = 0
     for p in filas:
@@ -196,7 +224,6 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
             mandadas += 1
         except telegram.TelegramError as ex:
             print(f'  no pude preguntar por #{p["id"]}: {ex}')
-    cx.commit()
     return mandadas
 
 
@@ -2266,10 +2293,8 @@ TOQUES_DE_PENDIENTE = {
     't',
     'm',
     'sp',
-    'ld',
-    'kc',
-    'va',
-    'kt',
+    # los de quien lleva varios libros (entrada/bot_libros.py)
+    *bot_libros.TOQUES,
 }
 # Los del catalogo de productos del super, que es de Juan.
 TOQUES_DE_CATALOGO = {'fg', 'fc', 'fv', 'fp', 'fx'}
@@ -2317,6 +2342,7 @@ TOQUES = {
     'fp': _toque_producto_en_espera,
     'fx': _toque_producto_saltar,
 }
+TOQUES.update(bot_libros.TOQUES)
 
 
 def _cmd_start(cx, chat, _texto):
@@ -2553,6 +2579,12 @@ def _despachar(cx, u):
     if not es_start and not _tiene_cuenta(cx, chat):
         print(f'  mensaje ignorado, chat sin cuenta: {chat}')
         telegram.enviar(chat, SIN_CUENTA)
+        return
+    # Quien lleva varios libros tiene su propia conversacion: registrar lo que
+    # cuenta, por escrito o en audio, y preguntar a que libro va cada cosa.
+    usuario = _a(cx).usuario_por_chat(chat)
+    if usuario is not None and ruteo.usa_ruteo(_a(cx), usuario['id']) and not es_start:
+        bot_libros.manejar_mensaje(cx, chat, msg)
         return
     # El `caption` de una foto o un PDF tambien es texto que el usuario
     # escribio: mandar la foto de una factura con «esto fue mercado» dejaba al

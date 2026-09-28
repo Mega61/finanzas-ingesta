@@ -192,6 +192,34 @@ def _sin_etiquetas(texto: str) -> str:
     )
 
 
+# Una nota de voz de un minuto pesa unos 100 KB. Esto es el techo de la API de
+# bots (20 MB) y ademas un freno: nadie cuenta un gasto en un audio de una hora.
+TOPE_DESCARGA = 20 * 1024 * 1024
+
+
+def descargar(file_id: str) -> bytes:
+    """El archivo de un mensaje (una nota de voz), en bytes.
+
+    Dos pasos: getFile da la ruta, y el archivo se baja de /file/bot<token>/.
+    La URL lleva el token: nunca se registra.
+    """
+    info = call('getFile', {'file_id': file_id}) or {}
+    ruta = info.get('file_path')
+    if not ruta:
+        raise TelegramError('getFile no devolvio la ruta del archivo')
+    if (info.get('file_size') or 0) > TOPE_DESCARGA:
+        raise TelegramError('el archivo es demasiado grande')
+    url = f'{API}/file/bot{_token()}/{ruta}'
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            datos = r.read(TOPE_DESCARGA + 1)
+    except urllib.error.HTTPError as ex:
+        raise TelegramError(f'HTTP {ex.code} bajando el archivo') from None
+    if len(datos) > TOPE_DESCARGA:
+        raise TelegramError('el archivo es demasiado grande')
+    return datos
+
+
 def responder_callback(callback_id: str, texto: str | None = None) -> Any:
     """Hay que llamarlo SIEMPRE, incluso cuando no se entendio el boton:
     Telegram deja el botoncito girando hasta que se contesta el callback."""
