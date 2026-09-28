@@ -310,7 +310,7 @@ class Almacen:
         if fila:
             self.cx.execute(
                 """UPDATE libros SET nombre = ?, tipo = ?, url = ?, secreto_env = ?,
-                   en_serio = ?, desde = ?, ajustes = ? WHERE id = ?""",
+                   en_serio = ?, desde = ?, ajustes = ?, activo = 1 WHERE id = ?""",
                 (*valores, fila['id']),
             )
             self.cx.commit()
@@ -332,6 +332,39 @@ class Almacen:
         filtro = ' AND activo = 1' if activos else ''
         return self.cx.execute(
             f'SELECT * FROM libros WHERE usuario_id = ?{filtro} ORDER BY id',
+            (usuario_id,),
+        ).fetchall()
+
+    def desactivar_libros_salvo(self, usuario_id: int, activos: list[int]) -> None:
+        """Los libros de esa persona que ya no estan en la configuracion quedan
+        inactivos. No se borran: sus movimientos los siguen nombrando."""
+        marcas = ', '.join('?' for _ in activos) or 'NULL'
+        self.cx.execute(
+            f'UPDATE libros SET activo = 0 WHERE usuario_id = ? AND id NOT IN ({marcas})',
+            (usuario_id, *activos),
+        )
+        self.cx.commit()
+
+    # --------------------------------------------------------- instrumentos
+
+    def reemplazar_instrumentos(
+        self, usuario_id: int, filas: list[tuple[Any, ...]]
+    ) -> None:
+        """Deja exactamente esas filas: (clave, clase, alias, libro_id, cuenta,
+        desde, hasta). Se reemplazan completas porque nada las referencia."""
+        self.cx.execute('DELETE FROM instrumentos WHERE usuario_id = ?', (usuario_id,))
+        self.cx.executemany(
+            """INSERT INTO instrumentos (usuario_id, clave, clase, alias, libro_id,
+               cuenta, desde, hasta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(usuario_id, *f) for f in filas],
+        )
+        self.cx.commit()
+
+    def instrumentos_de(self, usuario_id: int) -> list[sqlite3.Row]:
+        return self.cx.execute(
+            """SELECT i.*, l.clave AS libro_clave, l.nombre AS libro_nombre
+               FROM instrumentos i JOIN libros l ON l.id = i.libro_id
+               WHERE i.usuario_id = ? AND l.activo = 1 ORDER BY i.id""",
             (usuario_id,),
         ).fetchall()
 
@@ -379,6 +412,44 @@ class Almacen:
         )
         self.cx.commit()
         return cur.lastrowid
+
+    def guardar_buzon_configurado(
+        self,
+        usuario_id: int,
+        proveedor: str,
+        direccion: str,
+        secreto_env: str,
+        imap_host: str | None,
+        facturas: bool,
+    ) -> int:
+        """Un buzon declarado en la configuracion de personas. A diferencia de
+        `guardar_buzon`, actualiza lo que ya estaba: la configuracion manda."""
+        fila = self.cx.execute(
+            'SELECT id FROM buzones WHERE usuario_id = ? AND direccion = ?',
+            (usuario_id, direccion),
+        ).fetchone()
+        valores = (proveedor, secreto_env, imap_host, 1 if facturas else 0)
+        if fila:
+            self.cx.execute(
+                """UPDATE buzones SET proveedor = ?, secreto_env = ?, imap_host = ?,
+                   facturas = ?, activo = 1 WHERE id = ?""",
+                (*valores, fila['id']),
+            )
+            self.cx.commit()
+            return fila['id']
+        cur = self.cx.execute(
+            """INSERT INTO buzones (proveedor, secreto_env, imap_host, facturas,
+               usuario_id, direccion) VALUES (?, ?, ?, ?, ?, ?)""",
+            (*valores, usuario_id, direccion),
+        )
+        self.cx.commit()
+        return cur.lastrowid
+
+    def guardar_cursor(self, buzon_id: int, cursor: str) -> None:
+        self.cx.execute(
+            'UPDATE buzones SET cursor = ? WHERE id = ?', (cursor, buzon_id)
+        )
+        self.cx.commit()
 
     def marcar_sync(self, buzon_id: int) -> None:
         self.cx.execute(

@@ -25,6 +25,7 @@ from finanzas.aplicacion import (
     clasificador,
     interprete,
     movimientos,
+    personas,
     presupuestos,
     publicador,
 )
@@ -2358,11 +2359,12 @@ def chats_autorizados():
     Se lee en cada llamada y no se cachea: el conjunto sale del entorno y en
     las pruebas se cambia con monkeypatch.
     """
-    return {
+    de_siempre = {
         str(config.get(clave))
         for clave in ('TELEGRAM_CHAT_ID_JUAN', 'TELEGRAM_CHAT_ID_NOVIA')
         if config.get(clave)
     }
+    return de_siempre | set(personas.chats())
 
 
 def autorizado(chat):
@@ -2380,10 +2382,10 @@ def autorizado(chat):
     return bool(permitidos) and str(chat) in permitidos
 
 
-# De que usuario es cada variable de chat. Solo Juan por ahora: TELEGRAM_CHAT_ID_NOVIA
-# deja entrar al chat pero no le da cuenta, porque todavia no hay usuario ni
-# libro para ella. Cuando se le daba, su /start la ataba al primer usuario sin
-# chat -- que podia ser Juan -- y desde ahi veia y editaba su Firefly.
+# De que usuario es cada variable de chat. Solo Juan: TELEGRAM_CHAT_ID_NOVIA deja
+# entrar al chat pero no le da cuenta. Cuando se le daba, su /start la ataba al
+# primer usuario sin chat -- que podia ser Juan -- y desde ahi veia y editaba su
+# Firefly. Las demas personas dicen su chat en la configuracion de personas.
 DUENO_DE_LA_VARIABLE = {'TELEGRAM_CHAT_ID_JUAN': 'Juan'}
 
 SIN_CUENTA = (
@@ -2397,7 +2399,7 @@ def dueno_configurado(chat):
     for clave, nombre in DUENO_DE_LA_VARIABLE.items():
         if config.get(clave) and str(config.get(clave)) == str(chat):
             return nombre
-    return None
+    return personas.chats().get(str(chat))
 
 
 def _tiene_cuenta(cx, chat):

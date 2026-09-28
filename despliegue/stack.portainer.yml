@@ -125,6 +125,17 @@ services:
       # antes de escribir en la base de produccion de Firefly.
       EXPORT_EN_SERIO: ${EXPORT_EN_SERIO:-no}
 
+      # Las otras personas: sus libros, buzones y tarjetas, en UNA linea de
+      # JSON. Lo genera `python herramientas/generar_variables.py personas`.
+      PERSONAS_JSON: ${PERSONAS_JSON:-}
+      PERSONAS_TOML: ${PERSONAS_TOML:-}
+      # Los secretos que esa configuracion nombra. Van uno por uno porque el
+      # contenedor solo ve lo que se le pasa aqui.
+      FIREFLY_TOKEN_NOVIA: ${FIREFLY_TOKEN_NOVIA:-}
+      GMAIL_APP_PASSWORD_NOVIA: ${GMAIL_APP_PASSWORD_NOVIA:-}
+      ACTUAL_API_URL: ${ACTUAL_API_URL:-http://actual-api:5007}
+      ACTUAL_API_KEY: ${ACTUAL_API_KEY:-}
+
     # Sin puertos publicados: nadie tiene que entrarle de afuera.
     security_opt:
       - no-new-privileges:true

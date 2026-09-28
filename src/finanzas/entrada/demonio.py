@@ -27,7 +27,7 @@ from email import policy
 
 from finanzas import config
 from finanzas.adaptadores import db, graph
-from finanzas.aplicacion import clasificador, conciliador, libros, publicador
+from finanzas.aplicacion import clasificador, conciliador, libros, personas, publicador
 from finanzas.dominio import fechas
 from finanzas.parsers import bancolombia_alertas as alertas
 
@@ -78,6 +78,18 @@ def paso_asegurar_usuario(cx):
     url, tok = config.requerir('FIREFLY_URL', 'FIREFLY_TOKEN')
     uid = db.usuario_upsert(cx, 'Juan', url, tok, config.get('TELEGRAM_CHAT_ID_JUAN'))
     libros.asegurar_libro_del_entorno(db.almacen(cx), uid)
+    # Los demas, de la configuracion de personas. Una configuracion rota tumba
+    # el arranque a proposito: arrancar a medias podria dejar a alguien con los
+    # libros de otra persona.
+    otras = personas.leer()
+    if otras:
+        chat_juan = config.get('TELEGRAM_CHAT_ID_JUAN')
+        for p in otras:
+            if chat_juan and p.telegram == str(chat_juan):
+                raise personas.ConfiguracionInvalida(
+                    f'{p.nombre} tiene el mismo chat de Telegram que Juan'
+                )
+        personas.aplicar(db.almacen(cx), otras)
     cuenta = config.get('GRAPH_CUENTA')
     bid = None
     if cuenta and config.get('GRAPH_CLIENT_ID'):
