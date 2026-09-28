@@ -15,6 +15,16 @@ import pytest
 from finanzas.adaptadores import db
 from finanzas.adaptadores.almacen import Almacen
 
+
+def _libro(alm, usuario_id):
+    """El unico libro de la persona. Desde la migracion 001 la base no deja
+    publicar nada sin destino confirmado, y con un solo libro el destino es
+    cierto ('unico'). Es idempotente: devuelve siempre el mismo."""
+    return alm.guardar_libro(
+        usuario_id, 'personal', 'Personal', 'firefly', 'https://f', 'FIREFLY_TOKEN'
+    )
+
+
 # La ruta la sabe db, que es su dueño: recalcularla aqui es lo que se
 # rompio cuando el esquema paso a ser un dato del paquete.
 ESQUEMA = db.ESQUEMA
@@ -48,6 +58,8 @@ def _mov(alm, usuario, correo, **extra):
     args = {
         'correo_id': correo,
         'usuario_id': usuario,
+        'libro_id': _libro(alm, usuario),
+        'destino_por': 'unico',
         'tipo': 'compra_tarjeta',
         'fecha': '2026-09-01',
         'valor': -50000.0,
@@ -432,6 +444,8 @@ class TestCamposEstrictos:
             alm.crear_pendiente(
                 correo_id=correo,
                 usuario_id=usuario,
+                libro_id=_libro(alm, usuario),
+                destino_por='unico',
                 tipo='c',
                 fecha='2026-09-01',
                 valor=-1.0,
@@ -444,6 +458,8 @@ class TestCamposEstrictos:
             alm.crear_pendiente(
                 correo_id=correo,
                 usuario_id=usuario,
+                libro_id=_libro(alm, usuario),
+                destino_por='unico',
                 tipo='c',
                 fecha='2026-09-01',
                 valor=-1.0,
@@ -457,6 +473,8 @@ class TestCamposEstrictos:
             alm.crear_pendiente(
                 correo_id=correo,
                 usuario_id=usuario,
+                libro_id=_libro(alm, usuario),
+                destino_por='unico',
                 tipo='c',
                 fecha='2026-09-01',
                 valor=-1.0,
@@ -466,6 +484,8 @@ class TestCamposEstrictos:
         pid, _ = alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-1.0,
@@ -478,6 +498,8 @@ class TestCamposEstrictos:
         pid, _ = alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-1.0,

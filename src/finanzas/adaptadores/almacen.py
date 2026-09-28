@@ -47,6 +47,8 @@ CAMPOS_PENDIENTE = (
     'estado',
     'pregunta',
     'external_id',
+    'libro_id',
+    'destino_por',
 )
 
 # Lo que se puede ACTUALIZAR de un pendiente: los campos de creacion mas los
@@ -113,10 +115,70 @@ class Almacen:
             alm.inicializar(esquema)
         return alm
 
-    def inicializar(self, esquema: str | Path) -> None:
-        """Crea el esquema. Es idempotente."""
+    def inicializar(
+        self, esquema: str | Path, migraciones: str | Path | None = None
+    ) -> list[int]:
+        """Crea el esquema base y aplica las migraciones que falten. Idempotente.
+
+        `esquema.sql` es la version 0, con CREATE ... IF NOT EXISTS. Todo cambio
+        posterior va en `migraciones/NNN_*.sql`, porque CREATE IF NOT EXISTS no
+        sabe agregarle una columna a una tabla que ya existe: la base de
+        produccion se quedaba con la forma vieja y nadie se enteraba.
+
+        Devuelve los numeros de las migraciones que aplico.
+        """
         self.cx.executescript(Path(esquema).read_text(encoding='utf-8'))
         self.cx.commit()
+        carpeta = (
+            Path(migraciones) if migraciones else Path(esquema).parent / 'migraciones'
+        )
+        return self.migrar(carpeta)
+
+    def version(self) -> int:
+        return self.cx.execute('PRAGMA user_version').fetchone()[0]
+
+    @staticmethod
+    def migraciones_de(carpeta: str | Path) -> list[tuple[int, Path]]:
+        """Las migraciones de la carpeta, en orden: (numero, archivo)."""
+        carpeta = Path(carpeta)
+        if not carpeta.is_dir():
+            return []
+        fuera = []
+        for archivo in carpeta.glob('*.sql'):
+            numero = archivo.name.split('_', 1)[0]
+            if numero.isdigit():
+                fuera.append((int(numero), archivo))
+        numeros = [n for n, _ in fuera]
+        if len(numeros) != len(set(numeros)):
+            raise ValueError(f'dos migraciones con el mismo numero en {carpeta}')
+        return sorted(fuera)
+
+    def migraciones_pendientes(self, carpeta: str | Path) -> list[int]:
+        v = self.version()
+        return [n for n, _ in self.migraciones_de(carpeta) if n > v]
+
+    def migrar(self, carpeta: str | Path) -> list[int]:
+        """Aplica, en orden, las migraciones con numero mayor que la version.
+
+        Cada una va en SU transaccion, junto con el cambio de `user_version`:
+        si falla a mitad, la base queda exactamente como estaba antes de esa
+        migracion y la version no avanza.
+        """
+        aplicadas = []
+        for numero, archivo in self.migraciones_de(carpeta):
+            if numero <= self.version():
+                continue
+            sql = archivo.read_text(encoding='utf-8')
+            try:
+                self.cx.executescript(
+                    f'BEGIN;\n{sql}\nPRAGMA user_version = {numero};\nCOMMIT;'
+                )
+            except sqlite3.Error:
+                if self.cx.in_transaction:
+                    self.cx.execute('ROLLBACK')
+                raise
+            aplicadas.append(numero)
+        return aplicadas
 
     def cerrar(self) -> None:
         self.cx.close()
@@ -178,6 +240,74 @@ class Almacen:
         )
         self.cx.commit()
         return fila['id']
+
+    # --------------------------------------------------------------- libros
+
+    def guardar_libro(
+        self,
+        usuario_id: int,
+        clave: str,
+        nombre: str,
+        tipo: str,
+        url: str,
+        secreto_env: str,
+        en_serio: bool = False,
+        desde: str | None = None,
+        ajustes: dict[str, Any] | None = None,
+    ) -> int:
+        """Crea o actualiza el libro (usuario, clave). Devuelve su id.
+
+        `secreto_env` es el NOMBRE de la variable de entorno con el token, no
+        el token: los secretos no se guardan en la base.
+        """
+        valores = (
+            nombre,
+            tipo,
+            url,
+            secreto_env,
+            1 if en_serio else 0,
+            desde,
+            json.dumps(ajustes, ensure_ascii=False) if ajustes else None,
+        )
+        fila = self.cx.execute(
+            'SELECT id FROM libros WHERE usuario_id = ? AND clave = ?',
+            (usuario_id, clave),
+        ).fetchone()
+        if fila:
+            self.cx.execute(
+                """UPDATE libros SET nombre = ?, tipo = ?, url = ?, secreto_env = ?,
+                   en_serio = ?, desde = ?, ajustes = ? WHERE id = ?""",
+                (*valores, fila['id']),
+            )
+            self.cx.commit()
+            return fila['id']
+        cur = self.cx.execute(
+            """INSERT INTO libros (nombre, tipo, url, secreto_env, en_serio, desde,
+               ajustes, usuario_id, clave) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (*valores, usuario_id, clave),
+        )
+        self.cx.commit()
+        return cur.lastrowid
+
+    def libro(self, libro_id: int) -> sqlite3.Row | None:
+        return self.cx.execute(
+            'SELECT * FROM libros WHERE id = ?', (libro_id,)
+        ).fetchone()
+
+    def libros_de(self, usuario_id: int, activos: bool = True) -> list[sqlite3.Row]:
+        filtro = ' AND activo = 1' if activos else ''
+        return self.cx.execute(
+            f'SELECT * FROM libros WHERE usuario_id = ?{filtro} ORDER BY id',
+            (usuario_id,),
+        ).fetchall()
+
+    def libro_error(self, libro_id: int, mensaje: str | None) -> None:
+        """El ultimo error del libro, o None para limpiarlo."""
+        self.cx.execute(
+            'UPDATE libros SET ultimo_error = ? WHERE id = ?',
+            ((mensaje or '')[:500] or None, libro_id),
+        )
+        self.cx.commit()
 
     # -------------------------------------------------------------- buzones
 
@@ -334,9 +464,14 @@ class Almacen:
         )
 
     def pendientes_por_publicar(self, limite: int = 200) -> list[sqlite3.Row]:
+        """Lo listo para publicar. Sin destino confirmado no esta listo, aunque
+        tenga cuenta: esperar una respuesta es mejor que publicar en el libro
+        equivocado. La base lo exige tambien (triggers de la migracion 001);
+        esto es para que ni siquiera se intente."""
         return self.cx.execute(
             """SELECT * FROM pendientes
                WHERE estado IN ('nuevo', 'error') AND cuenta_firefly IS NOT NULL
+                 AND libro_id IS NOT NULL AND destino_por IS NOT NULL
                ORDER BY fecha, id LIMIT ?""",
             (limite,),
         ).fetchall()

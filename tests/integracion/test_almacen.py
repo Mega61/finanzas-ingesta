@@ -15,6 +15,16 @@ import pytest
 from finanzas.adaptadores import db
 from finanzas.adaptadores.almacen import Almacen
 
+
+def _libro(alm, usuario_id):
+    """El unico libro de la persona. Desde la migracion 001 la base no deja
+    publicar nada sin destino confirmado, y con un solo libro el destino es
+    cierto ('unico'). Es idempotente: devuelve siempre el mismo."""
+    return alm.guardar_libro(
+        usuario_id, 'personal', 'Personal', 'firefly', 'https://f', 'FIREFLY_TOKEN'
+    )
+
+
 # La ruta la sabe db, que es su dueño: recalcularla aqui es lo que se
 # rompio cuando el esquema paso a ser un dato del paquete.
 ESQUEMA = db.ESQUEMA
@@ -100,6 +110,8 @@ class TestIdempotencia:
         args = {
             'correo_id': correo,
             'usuario_id': usuario,
+            'libro_id': _libro(alm, usuario),
+            'destino_por': 'unico',
             'tipo': 'compra_tarjeta',
             'fecha': '2026-09-01',
             'valor': -1000.0,
@@ -125,6 +137,8 @@ class TestLaCola:
         alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-1.0,
@@ -134,6 +148,8 @@ class TestLaCola:
         alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-2.0,
@@ -148,6 +164,8 @@ class TestLaCola:
         pid, _ = alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-1.0,
@@ -165,6 +183,8 @@ class TestLaCola:
         alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-1.0,
@@ -179,6 +199,8 @@ class TestLaCola:
         alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-07-15',
             valor=-1.0,
@@ -188,6 +210,8 @@ class TestLaCola:
         alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-2.0,
@@ -204,6 +228,8 @@ class TestLaCola:
         alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             valor=-1.0,
             external_id='sf',
@@ -219,6 +245,8 @@ class TestLaCola:
             alm.crear_pendiente(
                 correo_id=correo,
                 usuario_id=usuario,
+                libro_id=_libro(alm, usuario),
+                destino_por='unico',
                 tipo='c',
                 fecha='2026-09-01',
                 valor=-1.0,
@@ -265,6 +293,8 @@ class TestConversacion:
         a, _ = alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-1.0,
@@ -273,6 +303,8 @@ class TestConversacion:
         b, _ = alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-2.0,
@@ -289,6 +321,8 @@ class TestConversacion:
         pid, _ = alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-1.0,
@@ -308,6 +342,8 @@ class TestConversacion:
         pid, _ = alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='c',
             fecha='2026-09-01',
             valor=-1.0,
@@ -360,6 +396,8 @@ class TestLosAbiertosSinFiltroDeTiempo:
         pid, _ = alm.crear_pendiente(
             correo_id=correo,
             usuario_id=usuario,
+            libro_id=_libro(alm, usuario),
+            destino_por='unico',
             tipo='compra_tarjeta',
             fecha='2026-09-02',
             valor=-1000.0,

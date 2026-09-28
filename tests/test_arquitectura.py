@@ -90,9 +90,16 @@ def test_nadie_crea_tablas_en_tiempo_de_ejecucion(archivo: Path):
     )
 
 
+MIGRACIONES = PAQUETE / 'migraciones'
+
+
 def test_el_esquema_declara_todas_las_tablas_que_usa_el_almacen():
-    """Cada tabla que el almacen nombra tiene que existir en esquema.sql."""
-    esquema = Path(db.ESQUEMA).read_text(encoding='utf-8')
+    """Cada tabla que el almacen nombra tiene que existir en esquema.sql o en
+    una migracion: desde la 001 el esquema es la version 0 y lo que se agrega
+    despues vive en `migraciones/`."""
+    esquema = Path(db.ESQUEMA).read_text(encoding='utf-8') + ''.join(
+        m.read_text(encoding='utf-8') for m in sorted(MIGRACIONES.glob('*.sql'))
+    )
     declaradas = set(
         re.findall(
             r'CREATE\s+(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_]+)',
@@ -188,3 +195,17 @@ def test_no_quedan_remiendos_de_sys_path():
         if 'sys.path.insert' in linea
     ]
     assert not culpables, f'sys.path remendado en {culpables}'
+
+
+def test_las_migraciones_estan_numeradas_sin_huecos():
+    """La version de la base es el numero de la ultima migracion aplicada. Un
+    hueco o un numero repetido deja una base que cree estar al dia sin estarlo."""
+    numeros = sorted(int(m.name.split('_', 1)[0]) for m in MIGRACIONES.glob('*.sql'))
+    assert numeros == list(range(1, len(numeros) + 1)), numeros
+
+
+def test_las_migraciones_viajan_en_el_paquete():
+    """Si la imagen no las lleva, el contenedor arranca con el esquema viejo y
+    los triggers del destino no existen: se publicaria sin preguntar."""
+    pyproject = (RAIZ / 'pyproject.toml').read_text(encoding='utf-8')
+    assert 'src/finanzas/migraciones/*.sql' in pyproject

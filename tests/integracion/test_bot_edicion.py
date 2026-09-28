@@ -23,6 +23,15 @@ from finanzas.aplicacion import movimientos
 from finanzas.entrada import bot
 
 
+def _libro(alm, usuario_id):
+    """El unico libro de la persona. Desde la migracion 001 la base no deja
+    publicar nada sin destino confirmado, y con un solo libro el destino es
+    cierto ('unico'). Es idempotente: devuelve siempre el mismo."""
+    return alm.guardar_libro(
+        usuario_id, 'personal', 'Personal', 'firefly', 'https://f', 'FIREFLY_TOKEN'
+    )
+
+
 def _tx(tx_id, monto, destino, categoria, fecha='2026-09-01', etiquetas=None):
     return {
         'id': str(tx_id),
@@ -107,7 +116,7 @@ def entorno(monkeypatch):
         'etiquetas_quitadas': [],
     }
 
-    def call(metodo, ruta, payload=None):
+    def call(metodo, ruta, payload=None, conexion=None):
         if metodo == 'GET' and '/transactions/' in ruta:
             tid = ruta.rsplit('/', 1)[-1]
             for t in estado['txs']:
@@ -134,7 +143,7 @@ def entorno(monkeypatch):
             return {}
         return {}
 
-    def get_all(ruta):
+    def get_all(ruta, conexion=None):
         """El doble atiende las dos rutas que se usan. Sin la de categorias, el
         menu de un movimiento salia SIN ningun boton cuando no hay reglas
         aprendidas todavia."""
@@ -329,6 +338,8 @@ class TestListo:
             pid, _ = alm.crear_pendiente(
                 correo_id=cid,
                 usuario_id=uid,
+                libro_id=_libro(alm, uid),
+                destino_por='unico',
                 tipo='c',
                 fecha='2026-09-01',
                 valor=-1000.0 * (i + 1),
