@@ -10,6 +10,11 @@ on:
     branches: [main]
     paths:
       - '**.py'
+      # Las migraciones y el esquema viajan en la imagen. Un cambio que solo
+      # toque una migracion no construia imagen nueva: produccion se quedaba
+      # con el esquema viejo sin que nada lo dijera.
+      - '**.sql'
+      - pyproject.toml
       - requirements.txt
       - Dockerfile
       - .github/workflows/docker.yml

@@ -11,10 +11,11 @@ esta capa se puede borrar.
 import sqlite3
 from importlib import resources
 
-from finanzas import config
+from finanzas import config, registro
 
 # CAMPOS_PENDIENTE se reexporta: hay codigo que lo lee como db.CAMPOS_PENDIENTE.
 from finanzas.adaptadores.almacen import CAMPOS_PENDIENTE, Almacen  # noqa: F401
+from finanzas.dominio import fechas
 
 # El esquema es un dato del paquete: se localiza con importlib.resources, no
 # con dirname(__file__), que deja de servir si el paquete se instala en un zip.
@@ -37,12 +38,57 @@ def almacen(cx):
     return Almacen(cx)
 
 
+MIGRACIONES = resources.files('finanzas') / 'migraciones'
+
+
+def respaldar(cx, destino):
+    """Copia la base COMPLETA a `destino` con la API de respaldo de SQLite.
+
+    No sirve copiar el archivo: con WAL, lo ultimo escrito puede estar todavia
+    en finanzas.db-wal y la copia saldria sin eso.
+    """
+    copia = sqlite3.connect(destino)
+    try:
+        cx.backup(copia)
+    finally:
+        copia.close()
+    return destino
+
+
 def inicializar(cx=None):
+    """Crea el esquema y aplica las migraciones que falten.
+
+    Antes de migrar una base que ya tiene datos, la respalda al lado:
+    `finanzas.db.antes-de-v<N>-<fecha>`. Una migracion reescribe la tabla de la
+    cola; si algo sale mal, esa copia es la forma de volver.
+    """
     propio = cx is None
     cx = cx or conectar()
-    Almacen(cx).inicializar(ESQUEMA)
+    alm = Almacen(cx)
+    faltan = alm.migraciones_pendientes(MIGRACIONES)
+    if faltan and _tiene_datos(cx):
+        _respaldar_antes_de(cx, faltan[-1])
+    alm.inicializar(ESQUEMA, MIGRACIONES)
     if propio:
         cx.close()
+
+
+def _tiene_datos(cx):
+    """Una base ya usada: tiene la tabla de la cola. Una recien creada no."""
+    return (
+        cx.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pendientes'"
+        ).fetchone()
+        is not None
+    )
+
+
+def _respaldar_antes_de(cx, version):
+    marca = fechas.ahora().strftime('%Y%m%d-%H%M%S')
+    destino = f'{ruta()}.antes-de-v{version}-{marca}'
+    respaldar(cx, destino)
+    registro.aviso(f'base respaldada antes de migrar a v{version}: {destino}')
+    return destino
 
 
 # ------------------------------------------------------------------ usuarios

@@ -74,10 +74,10 @@ def firefly_falso(monkeypatch):
         'borrados': [],
     }
 
-    def get_all(ruta):
+    def get_all(ruta, conexion=None):
         return estado['transacciones']
 
-    def call(metodo, ruta, payload=None):
+    def call(metodo, ruta, payload=None, conexion=None):
         if metodo == 'GET' and '/transactions/' in ruta:
             tid = ruta.rsplit('/', 1)[-1]
             for t in estado['transacciones']:

@@ -21,6 +21,16 @@ from finanzas.adaptadores.almacen import Almacen
 from finanzas.aplicacion import movimientos
 from finanzas.entrada import bot
 
+
+def _libro(alm, usuario_id):
+    """El unico libro de la persona. Desde la migracion 001 la base no deja
+    publicar nada sin destino confirmado, y con un solo libro el destino es
+    cierto ('unico'). Es idempotente: devuelve siempre el mismo."""
+    return alm.guardar_libro(
+        usuario_id, 'personal', 'Personal', 'firefly', 'https://f', 'FIREFLY_TOKEN'
+    )
+
+
 RAIZ = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ))
 
@@ -88,6 +98,8 @@ def _pendiente(alm, uid, cid, **extra):
     args = {
         'correo_id': cid,
         'usuario_id': uid,
+        'libro_id': _libro(alm, uid),
+        'destino_por': 'unico',
         'tipo': 'compra_tarjeta',
         'fecha': '2026-09-01',
         'valor': -50000.0,

@@ -13,6 +13,10 @@ Tres redes de seguridad, porque aqui es donde se puede hacer dano de verdad:
 3. **Anti-duplicado por monto y fecha.** Aunque el correo sea nuevo, el
    movimiento pudo haberse registrado a mano. Se busca en Firefly la misma
    cuenta con el mismo monto y fecha cercana antes de crear.
+
+Y una cuarta, anterior a las tres: **el destino**. Se publica libro por libro,
+cada uno con SU conexion, y solo lo que tiene destino confirmado. Un movimiento
+sin libro no se toca: espera a que la persona elija. La base lo exige tambien.
 """
 
 import hashlib
@@ -20,6 +24,7 @@ from datetime import timedelta
 
 from finanzas import registro
 from finanzas.adaptadores import db, firefly
+from finanzas.aplicacion import libros as _libros
 from finanzas.dominio import fechas
 from finanzas.dominio import texto as _texto
 
@@ -53,7 +58,9 @@ class IndiceFirefly:
     peso porque la alerta y el extracto a veces difieren en centavos.
     """
 
-    def __init__(self, desde=None, hasta=None):
+    def __init__(self, desde=None, hasta=None, cliente=None):
+        # El Firefly de ESE libro. Sin cliente, el del entorno: es el de antes.
+        ff = cliente or firefly
         ruta = '/api/v1/transactions'
         params = []
         if desde:
@@ -77,10 +84,10 @@ class IndiceFirefly:
         # Si Firefly no responde esto, se sigue sin ello: perder el chequeo de
         # recibos es mucho menos grave que no poder publicar nada.
         try:
-            self.recurrentes = firefly.destinos_recurrentes()
+            self.recurrentes = ff.destinos_recurrentes()
         except Exception:
             self.recurrentes = {}
-        for t in firefly.get_all(ruta):
+        for t in ff.get_all(ruta):
             for s in t.get('attributes', {}).get('transactions', []):
                 self.n += 1
                 ext = s.get('external_id')
@@ -251,9 +258,25 @@ def _adoptar_lo_de_firefly(cx, p, ya):
     return 'ya_estaba', detalle
 
 
-def publicar_uno(cx, p, idx=None, dry_run=True):
+def publicar_uno(cx, p, idx=None, dry_run=True, cliente=None, libro=None):
     """Devuelve (accion, detalle). accion: creado | duplicado | ya_estaba |
-    seco | error."""
+    seco | sin_destino | error.
+
+    `cliente` es el Firefly del libro del movimiento y `libro` su fila. Sin
+    destino confirmado no se hace NADA, ni siquiera en seco: ni el indice ni
+    los anti-duplicados, que tambien escriben en la cola.
+    """
+    if not p['libro_id'] or not p['destino_por']:
+        return 'sin_destino', 'espera a que la persona elija el libro'
+    if libro is not None and (
+        libro['id'] != p['libro_id'] or libro['usuario_id'] != p['usuario_id']
+    ):
+        # No deberia pasar: `publicar_pendientes` agrupa por libro. Si pasa, es
+        # un bug, y lo que NO se puede hacer es publicar con el cliente de otro.
+        return (
+            'error',
+            f'el movimiento es del libro {p["libro_id"]}, no del {libro["id"]}',
+        )
     if not p['cuenta_firefly']:
         return 'error', 'sin cuenta de Firefly resuelta'
     if not p['fecha']:
@@ -313,7 +336,7 @@ def publicar_uno(cx, p, idx=None, dry_run=True):
         )
 
     try:
-        r = firefly.call('POST', '/api/v1/transactions', payload)
+        r = (cliente or firefly).call('POST', '/api/v1/transactions', payload)
         fid = (r.get('data') or {}).get('id')
         db.pendiente_actualizar(cx, p['id'], estado='publicado', firefly_id=fid)
         db.bitacora(
@@ -344,9 +367,43 @@ def publicar_uno(cx, p, idx=None, dry_run=True):
 
 
 def publicar_pendientes(cx, desde=None, dry_run=True, limite=500):
-    """Publica lo que este listo. `desde` es la marca de agua: nada anterior
-    se sube."""
+    """Publica lo que este listo, libro por libro. `desde` es la marca de agua
+    del proceso: nada anterior se sube. Cada libro puede tener la suya, y la
+    suya gana.
+
+    Un libro se publica en serio solo si el proceso Y el libro lo dicen: el de
+    una persona nueva puede andar en seco mientras el de siempre publica.
+    """
     filas = db.pendientes_por_publicar(cx, limite=limite)
+    if not filas:
+        return {}
+    alm = db.almacen(cx)
+    conteo = {}
+    por_libro = {}
+    for p in filas:
+        por_libro.setdefault(p['libro_id'], []).append(p)
+    for libro_id, del_libro in por_libro.items():
+        libro = alm.libro(libro_id)
+        if libro is None or not libro['activo']:
+            registro.aviso(f'  libro {libro_id} inactivo o inexistente: no publico')
+            continue
+        try:
+            cliente = _libros.cliente(libro)
+        except _libros.LibroNoDisponible as ex:
+            alm.libro_error(libro_id, str(ex))
+            registro.aviso(f'  {ex}')
+            conteo['sin_libro'] = conteo.get('sin_libro', 0) + len(del_libro)
+            continue
+        seco = dry_run or not libro['en_serio']
+        marca = libro['desde'] or desde
+        for accion, n in _publicar_libro(
+            cx, del_libro, marca, seco, cliente, libro
+        ).items():
+            conteo[accion] = conteo.get(accion, 0) + n
+    return conteo
+
+
+def _publicar_libro(cx, filas, desde, dry_run, cliente, libro):
     if desde:
         antes = [p for p in filas if str(p['fecha']) < str(desde)]
         for p in antes:
@@ -373,14 +430,16 @@ def publicar_pendientes(cx, desde=None, dry_run=True, limite=500):
     if ini:
         ini = str(_a_fecha(ini) - timedelta(days=TOLERANCIA_DIAS + 1))
         fin = str(_a_fecha(fin) + timedelta(days=TOLERANCIA_DIAS + 1))
-    idx = IndiceFirefly(desde=ini, hasta=fin)
+    idx = IndiceFirefly(desde=ini, hasta=fin, cliente=cliente)
 
     conteo = {}
     for p in filas:
-        accion, detalle = publicar_uno(cx, p, idx=idx, dry_run=dry_run)
+        accion, detalle = publicar_uno(
+            cx, p, idx=idx, dry_run=dry_run, cliente=cliente, libro=libro
+        )
         conteo[accion] = conteo.get(accion, 0) + 1
         if accion in ('seco', 'creado', 'error'):
-            registro.aviso(f'  {accion:9} {detalle}')
+            registro.aviso(f'  {accion:9} [{libro["nombre"]}] {detalle}')
         elif accion == 'duplicado':
             registro.aviso(
                 f'  {accion:9} {p["fecha"]} {p["valor"]:>12,.0f} '

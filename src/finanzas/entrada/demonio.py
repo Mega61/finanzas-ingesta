@@ -27,7 +27,7 @@ from email import policy
 
 from finanzas import config
 from finanzas.adaptadores import db, graph
-from finanzas.aplicacion import clasificador, conciliador, publicador
+from finanzas.aplicacion import clasificador, conciliador, libros, publicador
 from finanzas.dominio import fechas
 from finanzas.parsers import bancolombia_alertas as alertas
 
@@ -74,9 +74,10 @@ def paso_estado(cx):
 
 
 def paso_asegurar_usuario(cx):
-    """Crea el usuario y el buzon a partir del .env si no existen."""
+    """Crea el usuario, su libro y su buzon a partir del .env si no existen."""
     url, tok = config.requerir('FIREFLY_URL', 'FIREFLY_TOKEN')
     uid = db.usuario_upsert(cx, 'Juan', url, tok, config.get('TELEGRAM_CHAT_ID_JUAN'))
+    libros.asegurar_libro_del_entorno(db.almacen(cx), uid)
     cuenta = config.get('GRAPH_CUENTA')
     bid = None
     if cuenta and config.get('GRAPH_CLIENT_ID'):
@@ -182,6 +183,9 @@ def paso_procesar(cx, uid):
     idx = clasificador.Indice(cx, uid)
     marca = marca_de_agua()
     conteo = {'movimiento': 0, 'descartado': 0, 'sin_reconocer': 0, 'repetido': 0}
+    # El destino de cada persona, solo si es cierto sin preguntar. Si no lo es
+    # queda vacio, el movimiento nace sin libro, y sin libro no se publica.
+    destinos = {}
     for c in filas:
         try:
             ev = alertas.parse_texto(c['cuerpo'], asunto=c['asunto'])
@@ -272,8 +276,13 @@ def paso_procesar(cx, uid):
             indice=idx,
         )
 
+        if c['usuario_id'] not in destinos:
+            destinos[c['usuario_id']] = libros.destino_seguro(
+                db.almacen(cx), c['usuario_id']
+            )
         _, era_nuevo = db.pendiente_crear(
             cx,
+            **destinos[c['usuario_id']],
             correo_id=c['id'],
             usuario_id=c['usuario_id'],
             tipo=ev.tipo,

@@ -33,7 +33,8 @@ finanzas = "finanzas.cli:main"
 packages = ["src/finanzas"]
 # esquema.sql viaja DENTRO del paquete: es la definicion de la base, no un
 # archivo de configuracion que el usuario monte. Se lee con importlib.resources.
-artifacts = ["src/finanzas/esquema.sql"]
+# Las migraciones tambien: sin ellas la base se queda en la version 0.
+artifacts = ["src/finanzas/esquema.sql", "src/finanzas/migraciones/*.sql"]
 
 
 # ----------------------------------------------------------------- pytest

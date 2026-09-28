@@ -23,6 +23,16 @@ from finanzas.adaptadores import db
 from finanzas.adaptadores.almacen import Almacen
 from finanzas.entrada import bot
 
+
+def _libro(alm, usuario_id):
+    """El unico libro de la persona. Desde la migracion 001 la base no deja
+    publicar nada sin destino confirmado, y con un solo libro el destino es
+    cierto ('unico'). Es idempotente: devuelve siempre el mismo."""
+    return alm.guardar_libro(
+        usuario_id, 'personal', 'Personal', 'firefly', 'https://f', 'FIREFLY_TOKEN'
+    )
+
+
 ESQUEMA = db.ESQUEMA
 
 # Los tres que el bot le estaba preguntando a la vez.
@@ -142,6 +152,8 @@ def entorno(monkeypatch):
         pid, _ = alm.crear_pendiente(
             correo_id=cid,
             usuario_id=uid,
+            libro_id=_libro(alm, uid),
+            destino_por='unico',
             tipo='compra_tarjeta',
             fecha='2026-09-01',
             valor=valor,
