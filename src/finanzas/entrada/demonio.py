@@ -38,6 +38,10 @@ from finanzas.aplicacion import (
 from finanzas.dominio import fechas
 from finanzas.parsers import bancolombia_alertas as alertas
 
+# Si la configuracion de personas no se pudo aplicar, el motivo. El servicio
+# se lo cuenta a Juan por Telegram al arrancar.
+PROBLEMA_CON_PERSONAS = None
+
 
 def marca_de_agua():
     """Solo se publica lo que sea de esta fecha en adelante."""
@@ -85,18 +89,20 @@ def paso_asegurar_usuario(cx):
     url, tok = config.requerir('FIREFLY_URL', 'FIREFLY_TOKEN')
     uid = db.usuario_upsert(cx, 'Juan', url, tok, config.get('TELEGRAM_CHAT_ID_JUAN'))
     libros.asegurar_libro_del_entorno(db.almacen(cx), uid)
-    # Los demas, de la configuracion de personas. Una configuracion rota tumba
-    # el arranque a proposito: arrancar a medias podria dejar a alguien con los
-    # libros de otra persona.
-    otras = personas.leer()
-    if otras:
-        chat_juan = config.get('TELEGRAM_CHAT_ID_JUAN')
-        for p in otras:
-            if chat_juan and p.telegram == str(chat_juan):
-                raise personas.ConfiguracionInvalida(
-                    f'{p.nombre} tiene el mismo chat de Telegram que Juan'
-                )
-        personas.aplicar(db.almacen(cx), otras)
+    # Los demas, de la configuracion de personas. Si esta rota no se aplica
+    # NADA de ella y el bot no atiende a nadie nuevo (`personas.chats()` da
+    # vacio): aplicar a medias podria dejar a alguien con los libros de otra
+    # persona. Pero Juan sigue andando: tumbar el arranque lo dejaba a el sin
+    # ingesta por un error en la configuracion de otro.
+    global PROBLEMA_CON_PERSONAS  # noqa: PLW0603
+    PROBLEMA_CON_PERSONAS = None
+    try:
+        otras = personas.leer_para_aplicar()
+        if otras:
+            personas.aplicar(db.almacen(cx), otras)
+    except personas.ConfiguracionInvalida as ex:
+        PROBLEMA_CON_PERSONAS = str(ex)
+        print(f'  CONFIGURACION DE PERSONAS ROTA, no se aplico: {ex}')
     cuenta = config.get('GRAPH_CUENTA')
     bid = None
     if cuenta and config.get('GRAPH_CLIENT_ID'):

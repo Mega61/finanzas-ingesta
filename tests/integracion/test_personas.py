@@ -16,6 +16,7 @@ import pytest
 from finanzas.adaptadores import db
 from finanzas.adaptadores.almacen import Almacen
 from finanzas.aplicacion import personas
+from finanzas.entrada import demonio
 
 EJEMPLO = tomllib.loads(
     """
@@ -195,3 +196,29 @@ class TestAplicar:
         uid = alm.usuario_por_nombre('Mariana')['id']
         assert [lb['clave'] for lb in alm.libros_de(uid)] == ['personal']
         assert len(alm.libros_de(uid, activos=False)) == 2
+
+
+class TestUnaConfiguracionRotaNoTumbaAJuan:
+    def test_el_arranque_sigue_y_no_aplica_nada(self, monkeypatch, tmp_path):
+        """Tumbar el arranque dejaba a Juan sin ingesta por un error en la
+        configuracion de otra persona."""
+        monkeypatch.setattr(db, 'ruta', lambda: str(tmp_path / 'f.db'))
+        monkeypatch.setenv('FIREFLY_URL', 'https://ff')
+        monkeypatch.setenv('FIREFLY_TOKEN', 't')
+        monkeypatch.setattr(personas, '_texto_crudo', lambda: ('toml', '[[persona'))
+        db.inicializar()
+        cx = db.conectar()
+        uid, _ = demonio.paso_asegurar_usuario(cx)
+        assert uid
+        assert demonio.PROBLEMA_CON_PERSONAS
+        assert [u['nombre'] for u in Almacen(cx).usuarios()] == ['Juan']
+        cx.close()
+
+    def test_el_chat_de_juan_no_se_le_puede_dar_a_otra_persona(self, monkeypatch):
+        monkeypatch.setenv('TELEGRAM_CHAT_ID_JUAN', '777')
+        monkeypatch.setattr(
+            personas, '_texto_crudo', lambda: ('json', json.dumps(EJEMPLO))
+        )
+        with pytest.raises(personas.ConfiguracionInvalida, match='mismo chat'):
+            personas.leer_para_aplicar()
+        assert personas.chats() == {}, 'y el bot no la atiende'

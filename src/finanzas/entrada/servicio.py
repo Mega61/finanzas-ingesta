@@ -289,6 +289,13 @@ def main(argv=None):
     db.inicializar()
     cx = db.conectar()
     uid, _ = demonio.paso_asegurar_usuario(cx)
+    if demonio.PROBLEMA_CON_PERSONAS:
+        log('inicio', f'personas: {demonio.PROBLEMA_CON_PERSONAS}')
+        _avisar(
+            '⚠️ La configuración de las otras personas está rota y no la apliqué. '
+            'Tu ingesta sigue normal; el bot no atiende a nadie más hasta que se '
+            f'arregle:\n<code>{demonio.PROBLEMA_CON_PERSONAS[:300]}</code>'
+        )
 
     n = db.almacen(cx).contar_reglas()
     if n == 0:

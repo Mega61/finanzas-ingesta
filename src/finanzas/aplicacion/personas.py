@@ -328,11 +328,25 @@ def aplicar(alm: Almacen, personas: list[Persona]) -> dict[str, int]:
     return cuenta
 
 
+def leer_para_aplicar() -> list[Persona]:
+    """Las personas configuradas, verificando ademas lo que no se ve en el
+    archivo solo: que nadie use el chat de Juan. Con el mismo chat, sus
+    mensajes caerian en la cuenta de Juan."""
+    gente = leer()
+    chat_juan = config.get('TELEGRAM_CHAT_ID_JUAN')
+    for p in gente:
+        if chat_juan and p.telegram == str(chat_juan):
+            raise ConfiguracionInvalida(
+                f'{p.nombre} tiene el mismo chat de Telegram que Juan'
+            )
+    return gente
+
+
 def chats() -> dict[str, str]:
     """chat_id -> nombre, de las personas configuradas. Para autorizar el bot
     y para saber a quien atar cada chat."""
     try:
-        return {p.telegram: p.nombre for p in leer() if p.telegram}
+        return {p.telegram: p.nombre for p in leer_para_aplicar() if p.telegram}
     except ConfiguracionInvalida:
         # Una configuracion rota no abre el bot a nadie: se cierra.
         return {}
