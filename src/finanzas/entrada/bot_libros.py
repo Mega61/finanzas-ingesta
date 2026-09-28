@@ -151,6 +151,18 @@ def _preguntar_destino(cx: Any, p: Any, chat: Any) -> None:
         ]
         for lb in posibles
     ]
+    # Pagado con la plata del otro libro: la Nu pagando insumos del estudio,
+    # o la tarjeta del estudio pagando algo personal. Botones aparte, nunca
+    # preseleccionados.
+    for tipo, gasto, paga in ruteo.cruces(alm, p):
+        if tipo == ruteo.APORTE:
+            etiqueta, dato = f'{_nombre(gasto)} (lo pagué yo)', 'lp'
+        else:
+            etiqueta, dato = f'{_nombre(gasto)} (lo pagó {paga["nombre"]})', 'lq'
+        if gasto['id'] == p['sugerido_libro_id']:
+            etiqueta += ' ✓'
+            marcado = gasto['id']
+        botones.append([(etiqueta, f'{dato}:{p["id"]}:{gasto["id"]}')])
     botones.append([('🚫 No es un movimiento', f'x:{p["id"]}:0')])
     pie = '\n\n<b>¿A qué libro va?</b>'
     if marcado:
@@ -275,6 +287,14 @@ def _contar(cx: Any, pendiente_id: int, chat: Any, accion: str, detalle: Any) ->
     lb = _a(cx).libro(p['libro_id']) if p['libro_id'] else None
     donde = f'{_nombre(lb)}' if lb else ''
     cat = f' · {_e(p["categoria"])}' if p['categoria'] else ''
+    if p['pago_libro_id'] and accion == 'creado':
+        paga = _a(cx).libro(p['pago_libro_id'])
+        telegram.enviar(
+            chat,
+            f'✅ Guardado en {donde}{cat}, como aporte tuyo, y el cargo en '
+            f'{_nombre(paga)} · {_e(p["cuenta_pago"])}\n' + describir(cx, p),
+        )
+        return
     textos = {
         'creado': f'✅ Guardado en {donde}{cat}',
         'ya_estaba': f'✅ Ya estaba en {donde}',
@@ -345,6 +365,41 @@ def toque_destino(t: Any) -> None:
     siguiente(t.cx, t.pid, t.chat)
 
 
+def toque_aporte(t: Any) -> None:
+    """«Es del estudio, lo pague yo»."""
+    p = _es_suyo(t.cx, t)
+    if not p:
+        return
+    try:
+        p = ruteo.elegir_aporte(_a(t.cx), t.pid, t.idx)
+    except ValueError:
+        t.aviso('esa opción ya no está')
+        return
+    t.aviso('aporte tuyo')
+    t.reemplazar(
+        describir(t.cx, p) + '\n<i>Lo pagaste tú: queda como aporte al estudio.</i>'
+    )
+    siguiente(t.cx, t.pid, t.chat)
+
+
+def toque_pago_duena(t: Any) -> None:
+    """«Fue personal, lo pago el estudio»."""
+    p = _es_suyo(t.cx, t)
+    if not p:
+        return
+    try:
+        p = ruteo.elegir_pago_duena(_a(t.cx), t.pid, t.idx)
+    except ValueError:
+        t.aviso('esa opción ya no está')
+        return
+    t.aviso('pago a la dueña')
+    t.reemplazar(
+        describir(t.cx, p)
+        + f'\n<i>Lo pagó el estudio por ti: queda como {_e(p["categoria"])}.</i>'
+    )
+    siguiente(t.cx, t.pid, t.chat)
+
+
 def toque_otro_libro(t: Any) -> None:
     """Volver a elegir el libro, mientras no se haya publicado."""
     p = _es_suyo(t.cx, t)
@@ -361,6 +416,8 @@ def toque_otro_libro(t: Any) -> None:
         cuenta_destino=None,
         categoria=None,
         pregunta='destino',
+        pago_libro_id=None,
+        cuenta_pago=None,
     )
     t.cx.commit()
     t.aviso('elige otra vez')
@@ -450,6 +507,8 @@ def toque_parecido(t: Any) -> None:
 TOQUES = {
     'km': toque_medio,
     'ld': toque_destino,
+    'lp': toque_aporte,
+    'lq': toque_pago_duena,
     'lr': toque_otro_libro,
     'kc': toque_categoria,
     'kt': toque_escribir_categoria,

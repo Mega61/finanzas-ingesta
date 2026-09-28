@@ -52,6 +52,8 @@ CAMPOS_PENDIENTE = (
     'origen',
     'referencia',
     'sugerido_libro_id',
+    'pago_libro_id',
+    'cuenta_pago',
 )
 
 # Lo que se puede ACTUALIZAR de un pendiente: los campos de creacion mas los

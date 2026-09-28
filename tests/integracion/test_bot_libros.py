@@ -78,12 +78,25 @@ class ActualFalso:
         self.cuentas = [
             {'id': 'acc-banc', 'name': 'Bancolombia', 'closed': False},
             {'id': 'acc-tc', 'name': 'T.Cred *9919', 'closed': False},
+            {'id': 'acc-aportes', 'name': 'Aportes en especie', 'closed': False},
         ]
         self.categorias = [
             {'id': 'cat-ins', 'name': 'Insumos', 'is_income': False, 'hidden': False},
             {'id': 'cat-otros-g', 'name': 'Otros', 'is_income': False, 'hidden': False},
             {'id': 'cat-serv', 'name': 'Servicios', 'is_income': True, 'hidden': False},
             {'id': 'cat-otros-i', 'name': 'Otros', 'is_income': True, 'hidden': False},
+            {
+                'id': 'cat-aporte',
+                'name': 'Aportes de la dueña',
+                'is_income': True,
+                'hidden': False,
+            },
+            {
+                'id': 'cat-sal',
+                'name': 'Salario Dueña',
+                'is_income': False,
+                'hidden': False,
+            },
         ]
         self.tx: list[dict] = []
         self.creadas: list[dict] = []
@@ -114,6 +127,7 @@ class ActualFalso:
 class FireflyFalso:
     def __init__(self):
         self.llamadas = []
+        self.falla_al_crear = 0
 
     def call(self, metodo, ruta, payload=None, conexion=None):
         self.llamadas.append((metodo, ruta, conexion.token if conexion else None))
@@ -124,6 +138,9 @@ class FireflyFalso:
             ]
             return {'data': datos, 'meta': {'pagination': {'total_pages': 1}}}
         if metodo == 'POST':
+            if self.falla_al_crear:
+                self.falla_al_crear -= 1
+                raise firefly.ApiError(500, 'Firefly se cayo')
             return {'data': {'id': '901'}}
         return {'data': [], 'meta': {'pagination': {'total_pages': 1}}}
 
@@ -265,9 +282,11 @@ class TestLaAlertaPreguntaElLibroAntesDeTodo:
         bot.preguntar_pendientes(alm.cx)
         chat, texto, _ = tg.ultimo()
         assert chat == ELLA and '¿A qué libro va?' in texto
-        nombres = [b[0] for b in tg.botones()]
-        assert any('Golden Beauty' in n for n in nombres)
-        assert not any('Personal' in n for n in nombres)
+        directos = [b[0] for b in tg.botones() if b[1].startswith('ld:')]
+        assert len(directos) == 1 and 'Golden Beauty' in directos[0]
+        # «Personal» solo aparece como lo que es: algo suyo que pago el estudio.
+        cruzados = [b for b in tg.botones() if b[1].startswith('lq:')]
+        assert [b[0] for b in cruzados] == ['📒 Personal (lo pagó Golden Beauty)']
 
     def test_la_cuenta_de_ahorros_ofrece_los_dos(self, mundo):
         alm, tg, *_rest, ella = mundo
@@ -550,3 +569,102 @@ class TestNadieTocaLoDeOtro:
 
 def test_la_configuracion_de_prueba_es_valida():
     assert json.dumps(CONFIG) and personas.interpretar(CONFIG)
+
+
+# ------------------------------------------------------ pagado con la otra plata
+
+
+class TestPagadoConLaPlataDelOtroLibro:
+    """El estudio no se sostiene solo: la Nu, que es personal, le paga cosas."""
+
+    def _nu_para_el_estudio(self, alm, tg, ella):
+        _texto(alm, '65 mil de insumos con la nu')
+        (p,) = alm.cx.execute(
+            "SELECT * FROM pendientes WHERE origen = 'chat'"
+        ).fetchall()
+        aporte = [b for b in tg.botones() if b[1].startswith('lp:')]
+        assert [b[0] for b in aporte] == ['💅 Golden Beauty (lo pagué yo)']
+        _toque(alm, aporte[0][1])
+        cats = [b[0] for b in tg.botones()]
+        assert 'Insumos' in cats, 'se pregunta con las categorias del estudio'
+        return p['id'], cats
+
+    def test_un_gasto_del_estudio_con_la_nu_queda_en_los_dos_libros(self, mundo):
+        alm, tg, ff, act, _juan, ella = mundo
+        pid, cats = self._nu_para_el_estudio(alm, tg, ella)
+        _toque(alm, f'kc:{pid}:{cats.index("Insumos")}')
+
+        (tx,) = act.creadas
+        assert (tx['account'], tx['amount']) == ('acc-aportes', 0), (
+            'no mueve cuentas reales'
+        )
+        partes = {s['category']: s['amount'] for s in tx['subtransactions']}
+        assert partes == {'cat-aporte': 6500000, 'cat-ins': -6500000}
+        (creado,) = [x for x in ff.llamadas if x[0] == 'POST']
+        assert creado[2] == 'tok-mariana'
+        p = alm.pendiente(pid)
+        assert (p['estado'], p['pago_libro_id']) == (
+            'publicado',
+            _libro(alm, ella, 'personal'),
+        )
+        assert 'como aporte tuyo' in tg.ultimo()[1]
+
+    def test_si_firefly_falla_reintentar_no_duplica_actual(self, mundo):
+        alm, tg, ff, act, _juan, ella = mundo
+        ff.falla_al_crear = 1
+        pid, cats = self._nu_para_el_estudio(alm, tg, ella)
+        _toque(alm, f'kc:{pid}:{cats.index("Insumos")}')
+        assert alm.pendiente(pid)['estado'] == 'error'
+        assert len(act.creadas) == 1
+
+        publicador.publicar_pendientes(alm.cx, dry_run=False)
+
+        assert len(act.creadas) == 1, 'Actual ya lo tenia: no se escribe otra vez'
+        assert len([x for x in ff.llamadas if x[0] == 'POST']) == 2
+        assert alm.pendiente(pid)['estado'] == 'publicado'
+
+    def test_algo_personal_con_la_tarjeta_del_estudio_es_un_pago_a_la_duena(
+        self, mundo
+    ):
+        alm, tg, ff, act, _juan, ella = mundo
+        pid = _alerta(alm, ella, 'a1', contraparte='FARMACIA', descripcion='FARMACIA')
+        bot.preguntar_pendientes(alm.cx)
+        (b,) = [b for b in tg.botones() if b[1].startswith('lq:')]
+        _toque(alm, b[1])
+        (tx,) = act.creadas
+        assert (tx['account'], tx['category'], tx['amount']) == (
+            'acc-tc',
+            'cat-sal',
+            -6500000,
+        )
+        assert ff.creadas() == [], 'en Firefly no se movio plata suya'
+        assert alm.pendiente(pid)['estado'] == 'publicado'
+
+    def test_el_libro_que_paga_no_puede_ser_de_otra_persona(self, mundo):
+        alm, _tg, _ff, _act, juan, ella = mundo
+        pid = _alerta(alm, ella, 'a1')
+        with pytest.raises(sqlite3.IntegrityError, match='otra persona'):
+            alm.actualizar_pendiente(pid, pago_libro_id=_libro(alm, juan, 'personal'))
+
+
+def test_si_dijo_el_estudio_no_se_marca_el_personal(mundo):
+    """«65 mil de insumos con la nu para el salon»: la Nu solo tiene cuenta en
+    lo personal, pero ella dijo el salon. Se marca el boton del aporte, nunca
+    el personal."""
+    alm, tg, _ff, _act, _juan, ella = mundo
+    alm.crear_pendiente(
+        usuario_id=ella,
+        origen='chat',
+        referencia='777:1',
+        external_id='tg-x',
+        tipo='gasto_contado',
+        fecha='2026-09-27',
+        valor=-65000.0,
+        instrumento='nu',
+        sugerido_libro_id=_libro(alm, ella, 'estudio'),
+        pregunta='destino',
+    )
+    alm.cx.commit()
+    bot.preguntar_pendientes(alm.cx)
+    marcados = [b[0] for b in tg.botones() if '✓' in b[0]]
+    assert marcados == ['💅 Golden Beauty (lo pagué yo) ✓']

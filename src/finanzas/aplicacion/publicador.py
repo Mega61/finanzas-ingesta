@@ -24,8 +24,8 @@ from datetime import timedelta
 
 from finanzas import registro
 from finanzas.adaptadores import actual, db, firefly
+from finanzas.aplicacion import aportes, publicador_actual, ruteo
 from finanzas.aplicacion import libros as _libros
-from finanzas.aplicacion import publicador_actual, ruteo
 from finanzas.dominio import fechas
 from finanzas.dominio import texto as _texto
 
@@ -441,9 +441,15 @@ def _publicar_libro_actual(cx, filas, desde, dry_run, cliente, libro):
     el bot, porque decidir solo si es el mismo es justo lo que no se puede."""
     conteo = {}
     for p in _descartar_anteriores(cx, filas, desde):
-        accion, detalle = publicador_actual.publicar_uno(
-            cx, p, cliente, libro, dry_run=dry_run
-        )
+        if p['pago_libro_id']:
+            otro = db.almacen(cx).libro(p['pago_libro_id'])
+            accion, detalle = aportes.publicar(
+                cx, p, dry_run=dry_run or not (otro and otro['en_serio'])
+            )
+        else:
+            accion, detalle = publicador_actual.publicar_uno(
+                cx, p, cliente, libro, dry_run=dry_run
+            )
         conteo[accion] = conteo.get(accion, 0) + 1
         if accion != 'parecido':
             registro.aviso(f'  {accion:9} [{libro["nombre"]}] {detalle}')
@@ -474,6 +480,9 @@ def publicar_en_su_libro(cx, pendiente_id, aunque_se_parezca=False):
             'error',
             f'es anterior a {libro["desde"]}, la fecha desde la que se publica en {libro["nombre"]}',
         )
+    if p['pago_libro_id']:
+        otro = alm.libro(p['pago_libro_id'])
+        return aportes.publicar(cx, p, dry_run=seco or not (otro and otro['en_serio']))
     if isinstance(cliente, actual.Cliente):
         return publicador_actual.publicar_uno(
             cx, p, cliente, libro, dry_run=seco, aunque_se_parezca=aunque_se_parezca

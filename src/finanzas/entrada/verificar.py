@@ -310,7 +310,7 @@ def probar_personas():
     tumba a los demas."""
     print('\n[personas]')
     from finanzas.adaptadores import actual, firefly, imap
-    from finanzas.aplicacion import libros, personas
+    from finanzas.aplicacion import libros, personas, ruteo
 
     try:
         gente = personas.leer()
@@ -345,6 +345,20 @@ def probar_personas():
                     for falta in sorted(usadas - set(cuentas)):
                         mal(f'  {lb.nombre}: la cuenta «{falta}» no existe en Actual')
                         todo_bien = False
+                    # lo que usan los aportes y pagos de la duena en especie
+                    cta = ruteo.ajuste(fila, 'cuenta_aportes')
+                    if cta not in cuentas:
+                        aviso(
+                            f'  {lb.nombre}: sin la cuenta «{cta}» no se registran gastos '
+                            'del negocio pagados con plata personal'
+                        )
+                    for clave, ingreso in (
+                        ('categoria_aportes', True),
+                        ('categoria_pago_duena', False),
+                    ):
+                        cat = ruteo.ajuste(fila, clave)
+                        if not c.categoria_id(cat, ingreso):
+                            aviso(f'  {lb.nombre}: falta la categoria «{cat}»')
                 else:
                     ok(f'  {lb.nombre} (Firefly): {c.whoami()}')
                     nombres = set(c.accounts_index())
@@ -357,6 +371,11 @@ def probar_personas():
                     for falta in sorted(usadas - nombres):
                         mal(f'  {lb.nombre}: la cuenta «{falta}» no existe en Firefly')
                         todo_bien = False
+                    if ruteo.ajuste(fila, 'cuenta_negocio') not in nombres:
+                        aviso(
+                            f'  {lb.nombre}: falta la cuenta «{ruteo.ajuste(fila, "cuenta_negocio")}» '
+                            'para los aportes al negocio'
+                        )
                 estado = 'EN SERIO' if lb.en_serio else 'en seco'
                 nota(
                     f'    publica {estado}'

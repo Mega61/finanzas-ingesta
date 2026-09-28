@@ -102,13 +102,27 @@ corte, los saldos de sus libros no se usan para nada. Al hacerlo: el saldo de
 la cuenta de ahorros al corte, la deuda de cada tarjeta, y el aporte histórico
 de la dueña que cuadra Actual con el banco.
 
+## Pagado con la plata del otro libro
+
+El estudio todavía no se sostiene solo: la dueña le paga cosas con su Nu. Y a
+veces la tarjeta del estudio paga algo suyo. Ninguna de las dos es un error, y
+las dos se ofrecen como **botones aparte** en la pregunta del destino, nunca
+preseleccionados salvo que ella lo haya dicho:
+
+| Botón | Qué es | Qué se escribe |
+|---|---|---|
+| 💅 Golden Beauty (lo pagué yo) | un aporte de la dueña en especie | **Actual**: una transacción dividida de monto 0 en «Aportes en especie»: +X «Aportes de la dueña» y −X en la categoría del gasto. Ninguna cuenta real del estudio se mueve. **Firefly**: el cargo en la Nu hacia «Golden Beauty Studio», como «Aporte al estudio». |
+| 📒 Personal (lo pagó Golden Beauty) | un pago a la dueña en especie | **Actual**: el gasto en la tarjeta del estudio como «Salario Dueña». En Firefly no se movió plata suya. |
+
+Se escribe primero en Actual y después en Firefly, cada uno buscado por su id
+externo antes de escribir: si el segundo falla, reintentar no duplica el
+primero. Los nombres de cuentas y categorías se pueden cambiar en `ajustes` de
+cada libro (ver `ruteo.DEFECTOS`).
+
 ## Lo que todavía no hace
 
-- **Un gasto del estudio pagado con la Nu** (o uno personal pagado con la
-  tarjeta del estudio). Es un aporte de la dueña «en especie»: dos
-  escrituras enlazadas, una en cada libro. Hoy el bot solo ofrece los libros
-  donde el medio de pago tiene cuenta.
-- **«Le pasé plata al estudio» / «me pagué del estudio».** Mismo mecanismo:
-  un aporte o un pago de la dueña, sin movimiento en el banco.
+- **«Le pasé plata al estudio» / «me pagué del estudio»** sin movimiento en el
+  banco (la plata está en la misma cuenta). Es el mismo par, disparado por una
+  frase en vez de una compra.
 - Editar desde el chat un movimiento ya guardado en Actual.
 - El asesor («¿me alcanza para…?») y los productos del súper son de Juan.

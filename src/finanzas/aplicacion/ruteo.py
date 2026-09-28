@@ -19,6 +19,7 @@ El orden es siempre el mismo, y el primer paso nunca se salta:
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -87,6 +88,10 @@ def sugerencia(alm: Almacen, p: Any, posibles: list[Any]) -> int | None:
     ids = [lb['id'] for lb in posibles]
     if p['sugerido_libro_id'] in ids:
         return p['sugerido_libro_id']
+    if p['sugerido_libro_id']:
+        # Dijo otro libro (el que solo se alcanza «pagado con la otra plata»):
+        # marcar el unico directo seria marcar justo el que NO dijo.
+        return None
     regla = alm.regla_de_libro(p['usuario_id'], clave_de(p))
     if regla and regla['libro_id'] in ids:
         return regla['libro_id']
@@ -292,3 +297,112 @@ def crear_desde_alerta(
         decidido_por='alerta',
     )
     return pid, nuevo
+
+
+# ----------------------------------------------- pagado con la plata del otro
+#
+# El estudio no se sostiene solo, y la duena le paga cosas con su tarjeta
+# personal. O al reves: con la tarjeta del estudio se paga algo suyo. Ninguna
+# de las dos es un error: son un aporte de la duena, o un pago a la duena, en
+# especie. Se ofrecen como botones aparte y nunca se asumen.
+
+DEFECTOS = {
+    # en el libro de Actual del negocio
+    'cuenta_aportes': 'Aportes en especie',
+    'categoria_aportes': 'Aportes de la dueña',
+    'categoria_pago_duena': 'Salario Dueña',
+    # en el Firefly personal
+    'cuenta_negocio': 'Golden Beauty Studio',
+    'categoria_aporte': 'Aporte al estudio',
+}
+
+APORTE = 'aporte'
+PAGO_DUENA = 'pago_duena'
+
+
+def ajuste(libro: Any, clave: str) -> str:
+    """Un nombre de cuenta o categoria del libro, con su valor por defecto."""
+    propios = json.loads(libro['ajustes']) if libro['ajustes'] else {}
+    return propios.get(clave) or DEFECTOS[clave]
+
+
+def cruces(alm: Almacen, p: Any) -> list[tuple[str, Any, Any]]:
+    """[(tipo, libro_del_gasto, libro_que_paga)] para un GASTO pagado con un
+    instrumento que no tiene cuenta en el libro al que pertenece.
+
+      aporte      el gasto es del negocio (Actual), la plata salio de lo
+                  personal (Firefly): la Nu pagando insumos
+      pago_duena  el gasto es personal (Firefly), lo pago el negocio (Actual):
+                  la tarjeta del estudio pagando algo suyo
+    """
+    if float(p['valor']) >= 0 or p['traslado_a']:
+        return []
+    origen = cuentas_del_instrumento(alm, p['usuario_id'], p['instrumento'], p['fecha'])
+    if not origen:
+        return []
+    libros = {lb['id']: lb for lb in alm.libros_de(p['usuario_id'])}
+    fuera = []
+    for gasto in libros.values():
+        if gasto['id'] in origen:
+            continue
+        for paga_id in origen:
+            paga = libros.get(paga_id)
+            if not paga:
+                continue
+            if gasto['tipo'] == 'actual' and paga['tipo'] == 'firefly':
+                fuera.append((APORTE, gasto, paga))
+            elif gasto['tipo'] == 'firefly' and paga['tipo'] == 'actual':
+                fuera.append((PAGO_DUENA, gasto, paga))
+    return fuera
+
+
+def _cruce(alm: Almacen, p: Any, tipo: str, libro_id: int) -> tuple[Any, Any]:
+    for t, gasto, paga in cruces(alm, p):
+        if t == tipo and gasto['id'] == libro_id:
+            return gasto, paga
+    raise ValueError(f'ese libro no se puede elegir asi para este movimiento: {tipo}')
+
+
+def elegir_aporte(alm: Almacen, pendiente_id: int, libro_id: int) -> Any:
+    """«Es del estudio, lo pague yo»: el gasto va al libro del negocio, y la
+    plata sale del personal. Se pregunta la categoria del negocio."""
+    p = alm.pendiente(pendiente_id)
+    gasto, paga = _cruce(alm, p, APORTE, libro_id)
+    d = _destino.elegido(
+        gasto['id'], [lb['id'] for lb in alm.libros_de(p['usuario_id'])]
+    )
+    origen = cuentas_del_instrumento(alm, p['usuario_id'], p['instrumento'], p['fecha'])
+    campos: dict[str, Any] = {
+        **d.como_campos(),
+        'pago_libro_id': paga['id'],
+        'cuenta_pago': origen[paga['id']],
+        'cuenta_firefly': ajuste(gasto, 'cuenta_aportes'),
+        'pregunta': 'categoria',
+    }
+    regla = alm.regla_de_libro(p['usuario_id'], clave_de(p))
+    if regla and regla['libro_id'] == gasto['id'] and regla['categoria']:
+        campos.update(categoria=regla['categoria'], pregunta=None, decidido_por='regla')
+    alm.actualizar_pendiente(pendiente_id, **campos)
+    alm.cx.commit()
+    return alm.pendiente(pendiente_id)
+
+
+def elegir_pago_duena(alm: Almacen, pendiente_id: int, libro_id: int) -> Any:
+    """«Fue personal, lo pago el estudio»: es un pago a la duena. Se escribe
+    en el libro del negocio, que es donde se movio la plata, como su salario."""
+    p = alm.pendiente(pendiente_id)
+    _gasto, paga = _cruce(alm, p, PAGO_DUENA, libro_id)
+    d = _destino.elegido(
+        paga['id'], [lb['id'] for lb in alm.libros_de(p['usuario_id'])]
+    )
+    origen = cuentas_del_instrumento(alm, p['usuario_id'], p['instrumento'], p['fecha'])
+    alm.actualizar_pendiente(
+        pendiente_id,
+        **d.como_campos(),
+        cuenta_firefly=origen[paga['id']],
+        categoria=ajuste(paga, 'categoria_pago_duena'),
+        pregunta=None,
+        decidido_por='pago_de_la_duena',
+    )
+    alm.cx.commit()
+    return alm.pendiente(pendiente_id)
