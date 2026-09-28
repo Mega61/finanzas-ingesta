@@ -152,7 +152,8 @@ def mapa_categoria(solo_activos=True, desde=None, usar_cache=True):
     es False hay que preguntar: son juicios de verdad, como si una comida en
     restaurante fue 'Vivir' o 'Antojos'.
     """
-    llave = (solo_activos, desde)
+    # Con el Firefly en la llave: sin eso, una persona veia el mapa de otra.
+    llave = (firefly.llave_en_curso(), solo_activos, desde)
     if usar_cache and llave in _cache_mapa:
         cuando, guardado = _cache_mapa[llave]
         if time.time() - cuando < MINUTOS_DE_CACHE * 60:

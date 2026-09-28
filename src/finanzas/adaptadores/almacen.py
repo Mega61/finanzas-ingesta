@@ -620,14 +620,22 @@ class Almacen:
         hasta: str,
         estado: str | None = None,
         moneda: str | None = None,
+        usuario_id: int | None = None,
     ) -> list[sqlite3.Row]:
         """Lo que hay en la cola para una tarjeta en un periodo. Es lo que el
-        conciliador cruza contra el extracto."""
+        conciliador cruza contra el extracto.
+
+        `usuario_id` importa: el extracto es de UNA persona, y cruzarlo contra
+        los movimientos de otra corregiria -- con el token de la primera -- un
+        id de Firefly que ni siquiera es de su libro."""
         sql = [
             'SELECT * FROM pendientes WHERE instrumento = ?',
             'AND fecha BETWEEN ? AND ?',
         ]
         args: list[Any] = [instrumento, desde, hasta]
+        if usuario_id is not None:
+            sql.append('AND usuario_id = ?')
+            args.append(usuario_id)
         if estado:
             sql.append('AND estado = ?')
             args.append(estado)
@@ -645,24 +653,35 @@ class Almacen:
             f'SELECT * FROM pendientes WHERE estado IN ({marcas}) ORDER BY id', estados
         ).fetchall()
 
-    def sin_confirmar(self, limite: int = 20) -> list[sqlite3.Row]:
+    # Las tres de abajo reciben el usuario: sin el, el resumen de una persona
+    # contaba y listaba los movimientos de todas.
+
+    def sin_confirmar(
+        self, limite: int = 20, usuario_id: int | None = None
+    ) -> list[sqlite3.Row]:
         return self.cx.execute(
             """SELECT * FROM pendientes
                WHERE estado = 'publicado' AND visto_en IS NULL
+                 AND (? IS NULL OR usuario_id = ?)
                ORDER BY fecha DESC LIMIT ?""",
-            (limite,),
+            (usuario_id, usuario_id, limite),
         ).fetchall()
 
-    def total_sin_confirmar(self) -> sqlite3.Row:
+    def total_sin_confirmar(self, usuario_id: int | None = None) -> sqlite3.Row:
         return self.cx.execute(
             """SELECT count(*) n, sum(valor) t FROM pendientes
-               WHERE estado = 'publicado' AND visto_en IS NULL"""
+               WHERE estado = 'publicado' AND visto_en IS NULL
+                 AND (? IS NULL OR usuario_id = ?)""",
+            (usuario_id, usuario_id),
         ).fetchone()
 
-    def contar_sospechosos(self) -> int:
+    def contar_sospechosos(self, usuario_id: int | None = None) -> int:
         """Tarjetas publicadas hace mas de 45 dias que ningun extracto
         confirmo: los candidatos a fantasma."""
-        return self.cx.execute('SELECT count(*) FROM v_sospechosos').fetchone()[0]
+        return self.cx.execute(
+            'SELECT count(*) FROM v_sospechosos WHERE (? IS NULL OR usuario_id = ?)',
+            (usuario_id, usuario_id),
+        ).fetchone()[0]
 
     def resumen(self, usuario_id: int | None = None) -> list[sqlite3.Row]:
         if usuario_id:

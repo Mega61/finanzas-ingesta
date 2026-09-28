@@ -346,7 +346,11 @@ MINUTOS_DE_CACHE = 30
 
 def _cacheado(llave, calcular):
     """Los catalogos se leen de Firefly y se piden en cada menu del bot, asi que
-    no pueden releerse cada vez."""
+    no pueden releerse cada vez.
+
+    La llave lleva el Firefly en curso: con una sola llave por catalogo, una
+    persona veia las categorias y etiquetas del Firefly de otra."""
+    llave = f'{firefly.llave_en_curso()}|{llave}'
     if llave in _cache_catalogo:
         cuando, guardado = _cache_catalogo[llave]
         if time.time() - cuando < MINUTOS_DE_CACHE * 60:

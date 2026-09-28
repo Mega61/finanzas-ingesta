@@ -255,7 +255,9 @@ def interpretar(datos: dict[str, Any]) -> list[Persona]:
         # bot por primera vez. Sin el, la persona existe pero el bot no la
         # atiende; no es motivo para no arrancar.
         try:
-            telegram = _expandir(p.get('telegram'), donde) if p.get('telegram') else None
+            telegram = (
+                _expandir(p.get('telegram'), donde) if p.get('telegram') else None
+            )
         except ConfiguracionInvalida:
             telegram = None
         fuera.append(

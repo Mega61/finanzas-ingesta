@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from email import policy
 
 from finanzas import config
-from finanzas.adaptadores import db, graph
+from finanzas.adaptadores import db, graph, imap
 from finanzas.aplicacion import clasificador, conciliador, libros, personas, publicador
 from finanzas.dominio import fechas
 from finanzas.parsers import bancolombia_alertas as alertas
@@ -110,11 +110,11 @@ def paso_sembrar(cx, uid):
 
 
 def paso_bajar(cx, tope=None, interactivo=False, dias=None):
+    total_n = _bajar_imap(cx, dias=dias)
     buzones = db.almacen(cx).buzones('graph')
     if not buzones:
         print('  no hay buzones de Graph configurados')
-        return 0
-    total_n = 0
+        return total_n
     for b in buzones:
         # Sin ventana, la primera bajada en un contenedor nuevo se trae el
         # buzon completo: fueron 1819 correos de anos atras, con 770 plantillas
@@ -142,6 +142,50 @@ def paso_bajar(cx, tope=None, interactivo=False, dias=None):
             db.buzon_error(cx, b['id'], str(ex))
             print(f'  {b["direccion"]}: error — {ex}')
     return total_n
+
+
+def _bajar_imap(cx, dias=None):
+    """Los buzones IMAP (Gmail con app password). Cada uno con su secreto, que
+    vive en el entorno: la base guarda el nombre de la variable."""
+    alm = db.almacen(cx)
+    total = 0
+    for b in alm.buzones('imap'):
+        clave = config.get(b['secreto_env']) if b['secreto_env'] else None
+        if not clave:
+            db.buzon_error(cx, b['id'], f'falta {b["secreto_env"]} en el entorno')
+            print(f'  {b["direccion"]}: falta {b["secreto_env"]}')
+            continue
+        try:
+            correos, cursor = imap.bajar(
+                b['imap_host'] or 'imap.gmail.com:993',
+                b['direccion'],
+                clave,
+                cursor=b['cursor'],
+                dias=dias or int(config.get('INGESTA_DIAS_INICIAL', '30')),
+            )
+        except imap.SinAutorizacion as ex:
+            db.buzon_error(cx, b['id'], f'sin autorizacion: {ex}')
+            print(f'  {b["direccion"]}: SIN AUTORIZACION — {ex}')
+            continue
+        except Exception as ex:
+            db.buzon_error(cx, b['id'], str(ex))
+            print(f'  {b["direccion"]}: error — {ex}')
+            continue
+        nuevos = 0
+        for c in correos:
+            cuerpo = alertas.cuerpo_mensaje(c.mensaje)
+            if not cuerpo.strip():
+                continue
+            _, era_nuevo = db.correo_guardar(
+                cx, b['id'], c.message_id, c.remitente, c.asunto, c.fecha, cuerpo
+            )
+            nuevos += 1 if era_nuevo else 0
+        if cursor:
+            alm.guardar_cursor(b['id'], cursor)
+        db.buzon_guardar_delta(cx, b['id'], None)
+        print(f'  {b["direccion"]}: {nuevos} nuevos de {len(correos)}')
+        total += nuevos
+    return total
 
 
 def paso_importar(cx, uid, carpeta=None):

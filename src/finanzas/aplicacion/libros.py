@@ -58,3 +58,29 @@ def cliente(libro: Any) -> firefly.Cliente:
             f'falta {libro["secreto_env"]} en el entorno para el libro «{libro["nombre"]}»'
         )
     return firefly.Cliente(firefly.Conexion(libro['url'].rstrip('/'), token))
+
+
+def firefly_de(alm: Almacen, usuario_id: int) -> Any | None:
+    """El libro de Firefly de esa persona: el 'personal' si hay, si no el
+    primero. None si no tiene ninguno."""
+    de_firefly = [lb for lb in alm.libros_de(usuario_id) if lb['tipo'] == 'firefly']
+    for lb in de_firefly:
+        if lb['clave'] == 'personal':
+            return lb
+    return de_firefly[0] if de_firefly else None
+
+
+def conexion_firefly_de(alm: Almacen, usuario_id: int) -> firefly.Conexion:
+    """Con que Firefly atender a esa persona en el bot.
+
+    Nunca cae al Firefly del entorno: si la persona no tiene uno, o falta su
+    token, devuelve SIN_FIREFLY y cualquier llamada falla. Caer al del entorno
+    era ver y editar la contabilidad de Juan.
+    """
+    lb = firefly_de(alm, usuario_id)
+    if lb is None:
+        return firefly.SIN_FIREFLY
+    try:
+        return cliente(lb).conexion
+    except LibroNoDisponible:
+        return firefly.SIN_FIREFLY

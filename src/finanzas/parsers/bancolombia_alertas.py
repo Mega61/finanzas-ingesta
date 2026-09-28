@@ -129,6 +129,12 @@ IGNORAR = [
         r'(Inscribiste tu Clave Dinamica|inscribiste al servicio de Clave Dinamica)',
     ),
     ('topes', r'Actualizaste los topes de tus transacciones'),
+    # El codigo de un solo uso que manda el banco al cambiar el correo de las
+    # alertas o actualizar datos. Trae un numero de seis cifras que no es plata.
+    (
+        'codigo_de_seguridad',
+        r'(es el codigo que necesitas para|Este codigo es de un solo uso)',
+    ),
     # Los avisos de extracto no son movimientos, pero si son la materia prima
     # de la Fase 5: hay que guardarlos y no contarlos como plantilla nueva.
     (
