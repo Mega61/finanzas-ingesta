@@ -22,11 +22,13 @@ from finanzas.adaptadores.almacen import Almacen
 from finanzas.aplicacion import (
     asesor,
     catalogo,
+    categorias,
     clasificador,
     interprete,
     libros,
     movimientos,
     personas,
+    prestamos,
     presupuestos,
     publicador,
     ruteo,
@@ -177,6 +179,22 @@ def _preguntar_de_siempre(cx, filas):
         sug = sugerir_categorias(cx, p['usuario_id'], p, todas)
         # el indice va en el callback por el limite de 64 bytes
         botones = []
+        # Entra plata y alguien le debe, o sale y el le debe a alguien: puede
+        # ser la devolucion de un prestamo. Primero, y con ✓ si el monto
+        # cuadra; igual es un toque (entrada/bot_libros.py los atiende).
+        for j, (persona, saldo, exacto) in enumerate(
+            prestamos.devoluciones_posibles(_a(cx), p)
+        ):
+            que = 'te debe' if saldo > 0 else 'le debes'
+            botones.append(
+                [
+                    (
+                        f'🤝 Devolución · {persona} ({que} {_plata(abs(saldo))})'
+                        + (' ✓' if exacto else ''),
+                        f'kd:{p["id"]}:{j}',
+                    )
+                ]
+            )
         fila = []
         for i, c in enumerate(sug):
             fila.append((c, f'c:{p["id"]}:{i}'))
@@ -185,7 +203,12 @@ def _preguntar_de_siempre(cx, filas):
                 fila = []
         if fila:
             botones.append(fila)
-        botones.append([('✏️ escribirlo', f't:{p["id"]}:0')])
+        botones.append(
+            [
+                ('✏️ escribirlo', f't:{p["id"]}:0'),
+                ('🤝 préstamo', f'kl:{p["id"]}:0'),
+            ]
+        )
         # Si ya esta en Firefly, se ofrece el menu completo: presupuesto,
         # etiquetas, comercio y las 71 categorias. Antes solo habia ocho
         # botones de categoria y no habia camino a nada mas.
@@ -514,6 +537,7 @@ DESCRIPCIONES = (
     ('/listo', 'ya están bien, no me preguntes más'),
     ('/productos', 'clasificar lo que compraste en el super'),
     ('/presupuestos', 'cómo van los cinco presupuestos del mes'),
+    ('/prestamos', 'quién te debe y a quién le debes'),
     ('/version', 'qué código está corriendo'),
     ('/ayuda', 'esto'),
 )
@@ -2417,6 +2441,9 @@ COMANDOS = {
     '/sinconfirmar': _cmd_sinconfirmar,
     '/version': _cmd_version,
     '/presupuestos': _cmd_presupuestos,
+    '/prestamos': lambda cx, chat, _texto: telegram.enviar(
+        chat, bot_libros.texto_de_prestamos(cx, _usuario_de(cx, chat))
+    ),
     '/ultimos': _cmd_ultimos,
     '/listo': _cmd_listo,
     '/productos': _cmd_productos,
@@ -2708,6 +2735,11 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
     """
     # 1. respondio a un mensaje concreto
     if respondiendo_a:
+        preguntado = _a(cx).pregunta_de_mensaje(chat, respondiendo_a)
+        if preguntado and preguntado[1] == 'prestamo':
+            # «¿con quien fue el prestamo?»: la respuesta es un nombre.
+            bot_libros.respuesta_de_prestamo(cx, chat, preguntado[0], texto)
+            return
         pid = _pendiente_de_mensaje(cx, chat, respondiendo_a)
         if pid:
             _recordar_camino(chat, 'respuesta')
@@ -2959,22 +2991,63 @@ def _responder_con_texto(cx, chat, pendiente_id, texto):
     lineas.append(f'\n<i>{d["razon"]}</i>')
     if d['fuente'] == 'gemini':
         lineas.append('<i>(interpretado con IA)</i>')
-    telegram.enviar(
-        chat,
-        '\n'.join(lineas),
+    botones = [
         [
-            [
-                ('✅ Sí', f'a:{pendiente_id}:0'),
-                ('✏️ No, corrijo', f't:{pendiente_id}:0'),
-            ]
-        ],
-    )
+            ('✅ Sí', f'a:{pendiente_id}:0'),
+            ('✏️ No, corrijo', f't:{pendiente_id}:0'),
+        ]
+    ]
+    # Escribio un nombre que no existe («Regalos») y la IA lo acerco a otra con
+    # poca confianza: puede que lo que quiera sea crearla.
+    escrito = categorias.nombre_valido(texto)
+    if escrito and _texto_dom.normalizar(escrito) != _texto_dom.normalizar(
+        d['categoria']
+    ):
+        # Se agrega al final de las que ya se ofrecieron: los botones `c:` de
+        # la pregunta anterior siguen apuntando a sus indices.
+        sug = _leer_sugerencias(cx, pendiente_id)
+        crear = _boton_crear(cx, p, texto, sug)
+        if crear:
+            _guardar_sugerencias(cx, pendiente_id, sug)
+            botones.append(crear)
+    telegram.enviar(chat, '\n'.join(lineas), botones)
+
+
+# Por nombre: ruff lo toma por un «+» disfrazado si va pegado en el texto.
+MAS = '\N{HEAVY PLUS SIGN}'
+
+
+def _categoria_nueva(cx, p, texto):
+    """El nombre de una categoria que no existe y que tendria sentido crear:
+    lo que escribio, si es un nombre, o lo que propone la IA mirando el
+    movimiento. None si lo escrito ya es una que existe o no da para nombre."""
+    try:
+        existentes = interprete.catalogo(cx, p['usuario_id'])['categorias']
+    except Exception:
+        return None
+    escrito = categorias.nombre_valido(texto)
+    if escrito:
+        return None if categorias.ya_existe(escrito, existentes) else escrito
+    return categorias.proponer(p, existentes)['nueva']
+
+
+def _boton_crear(cx, p, texto, sug):
+    """Agrega la categoria nueva al final de las sugerencias y devuelve su
+    boton. Va por el mismo `c:` que las demas: Firefly crea la categoria al
+    recibir un `category_name` que no conoce."""
+    nueva = _categoria_nueva(cx, p, texto)
+    if not nueva or nueva in sug:
+        return None
+    sug.append(nueva)
+    return [(f'{MAS} Crear «{nueva}»', f'c:{p["id"]}:{len(sug) - 1}')]
 
 
 def _pedir_categoria_a_mano(cx, chat, p, texto):
     """No se entendio nada del texto. En vez de dejar al usuario colgado, se le
-    vuelven a ofrecer las categorias con botones."""
+    vuelven a ofrecer las categorias con botones, y crear una si ninguna le
+    queda."""
     sug = sugerir_categorias(cx, p['usuario_id'], p)
+    crear = _boton_crear(cx, p, texto, sug)
     if not sug:
         telegram.enviar(
             chat,
@@ -2984,17 +3057,19 @@ def _pedir_categoria_a_mano(cx, chat, p, texto):
         return
     _guardar_sugerencias(cx, p['id'], sug)
     botones, fila = [], []
-    for i, c in enumerate(sug):
+    for i, c in enumerate(sug[: len(sug) - (1 if crear else 0)]):
         fila.append((c, f'c:{p["id"]}:{i}'))
         if len(fila) == 2:
             botones.append(fila)
             fila = []
     if fila:
         botones.append(fila)
+    if crear:
+        botones.append(crear)
     telegram.enviar(
         chat,
-        f'No supe qué categoría es «{texto[:40]}».\n{describir(p)}\n\n'
-        f'¿Alguna de estas?',
+        f'No supe qué categoría es «{_escapar(texto[:40])}».\n{describir(p)}\n\n'
+        + ('¿Alguna de estas, o la creo?' if crear else '¿Alguna de estas?'),
         botones,
     )
 

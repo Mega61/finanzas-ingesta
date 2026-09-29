@@ -21,6 +21,7 @@ from datetime import timedelta
 from typing import Any
 
 from finanzas.adaptadores import actual, db
+from finanzas.aplicacion import prestamos
 from finanzas.dominio import fechas
 
 # Cuanto se parecen dos montos para llamarlos «el mismo». Es el 1% del cruce
@@ -130,25 +131,46 @@ def publicar_uno(
         'imported_id': p['external_id'],
         'cleared': False,
     }
-    if p['traslado_a'] and p['cuenta_destino']:
-        destino = cliente.cuenta_id(p['cuenta_destino'])
-        payee = cliente.payee_de_traslado(destino) if destino else None
-        if not payee:
-            return 'error', f'no encuentro «{p["cuenta_destino"]}» en {libro["nombre"]}'
-        tx['payee'] = payee
-    else:
-        if not p['categoria']:
-            return 'error', 'sin categoria'
-        cat = cliente.categoria_id(p['categoria'], float(p['valor']) > 0)
-        if not cat:
-            return (
-                'error',
-                f'«{p["categoria"]}» no es una categoria de {libro["nombre"]}',
-            )
-        tx['category'] = cat
-        tx['payee_name'] = (p['contraparte'] or p['descripcion'] or 'Sin identificar')[
-            :120
-        ]
+    prestamo = p['prestamo_con'] if p['cuenta_destino'] else None
+    nueva = None  # la categoria que se crea junto con el movimiento
+    try:
+        if (p['traslado_a'] or prestamo) and p['cuenta_destino']:
+            destino = cliente.cuenta_id(p['cuenta_destino'])
+            if not destino and prestamo and dry_run:
+                return 'seco', (
+                    f'{libro["nombre"]}: {f} {monto / 100:,.0f} préstamo con {prestamo}'
+                    f' (crearía la cuenta «{p["cuenta_destino"]}»)'
+                )
+            if not destino and prestamo:
+                destino = prestamos.asegurar_cuenta_en_actual(
+                    cliente, p['cuenta_destino']
+                )
+            payee = cliente.payee_de_traslado(destino) if destino else None
+            if not payee:
+                return (
+                    'error',
+                    f'no encuentro «{p["cuenta_destino"]}» en {libro["nombre"]}',
+                )
+            tx['payee'] = payee
+            if prestamo:
+                tx['notes'] = f'Préstamo · {prestamo}. {tx["notes"]}'[:500]
+        else:
+            if not p['categoria']:
+                return 'error', 'sin categoria'
+            cat = cliente.categoria_id(p['categoria'], float(p['valor']) > 0)
+            if not cat and p['categoria_grupo']:
+                nueva = p['categoria']
+            elif not cat:
+                return (
+                    'error',
+                    f'«{p["categoria"]}» no es una categoria de {libro["nombre"]}',
+                )
+            tx['category'] = cat
+            tx['payee_name'] = (
+                p['contraparte'] or p['descripcion'] or 'Sin identificar'
+            )[:120]
+    except actual.ApiError as ex:
+        return 'error', str(ex)[:200]
 
     if not aunque_se_parezca:
         for t in cerca:
@@ -162,12 +184,14 @@ def publicar_uno(
                 return 'parecido', t
 
     if dry_run:
-        return (
-            'seco',
-            f'{libro["nombre"]}: {f} {monto / 100:,.0f} {p["categoria"] or "traslado"}',
-        )
+        que = p['categoria'] or (f'préstamo con {prestamo}' if prestamo else 'traslado')
+        if nueva:
+            que += ' (categoría nueva)'
+        return 'seco', f'{libro["nombre"]}: {f} {monto / 100:,.0f} {que}'
 
     try:
+        if nueva:
+            tx['category'] = cliente.crear_categoria(nueva, p['categoria_grupo'])
         tid = cliente.crear(cuenta, tx)
     except actual.ApiError as ex:
         db.pendiente_actualizar(cx, p['id'], estado='error')

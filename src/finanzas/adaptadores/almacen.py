@@ -54,6 +54,8 @@ CAMPOS_PENDIENTE = (
     'sugerido_libro_id',
     'pago_libro_id',
     'cuenta_pago',
+    'prestamo_con',
+    'categoria_grupo',
 )
 
 # Lo que se puede ACTUALIZAR de un pendiente: los campos de creacion mas los
@@ -608,6 +610,24 @@ class Almacen:
             (*ESTADOS_ABIERTOS, str(chat_id)),
         ).fetchall()
 
+    def saldos_de_prestamos(self, usuario_id: int, libro_id: int) -> list[sqlite3.Row]:
+        """(persona, saldo) de los prestamos de ese libro que no estan en cero.
+
+        saldo > 0: esa persona le debe. saldo < 0: ella le debe a esa persona.
+        Cuenta lo que ya se decidio como prestamo (tiene la cuenta de destino),
+        publicado o por publicar; lo descartado no."""
+        return self.cx.execute(
+            """SELECT min(prestamo_con) AS persona, -sum(valor) AS saldo
+               FROM pendientes
+               WHERE usuario_id = ? AND libro_id = ? AND prestamo_con IS NOT NULL
+                 AND cuenta_destino IS NOT NULL
+                 AND estado NOT IN ('descartado', 'fantasma')
+               GROUP BY lower(prestamo_con)
+               HAVING abs(sum(valor)) >= 1
+               ORDER BY lower(prestamo_con)""",
+            (usuario_id, libro_id),
+        ).fetchall()
+
     def en_espera_de_agendapro(self) -> list[sqlite3.Row]:
         """Las transferencias que son de una clienta y esperan a que Agendapro
         suba la venta, con el chat de su persona."""
@@ -1073,13 +1093,26 @@ class Almacen:
         )
         self.cx.commit()
 
-    def guardar_mensaje(self, chat_id: str, mensaje_id: int, pendiente_id: int) -> None:
+    def guardar_mensaje(
+        self, chat_id: str, mensaje_id: int, pendiente_id: int, tipo: str = 'categoria'
+    ) -> None:
         self.cx.execute(
             """INSERT OR REPLACE INTO preguntas_enviadas
-               (chat_id, mensaje_id, pendiente_id) VALUES (?, ?, ?)""",
-            (str(chat_id), int(mensaje_id), int(pendiente_id)),
+               (chat_id, mensaje_id, pendiente_id, tipo) VALUES (?, ?, ?, ?)""",
+            (str(chat_id), int(mensaje_id), int(pendiente_id), tipo),
         )
         self.cx.commit()
+
+    def pregunta_de_mensaje(
+        self, chat_id: str, mensaje_id: int
+    ) -> tuple[int, str] | None:
+        """(pendiente_id, tipo) de lo que se pregunto en ese mensaje."""
+        r = self.cx.execute(
+            """SELECT pendiente_id, tipo FROM preguntas_enviadas
+               WHERE chat_id = ? AND mensaje_id = ?""",
+            (str(chat_id), int(mensaje_id)),
+        ).fetchone()
+        return (r['pendiente_id'], r['tipo']) if r else None
 
     def pendiente_de_mensaje(self, chat_id: str, mensaje_id: int) -> int | None:
         r = self.cx.execute(

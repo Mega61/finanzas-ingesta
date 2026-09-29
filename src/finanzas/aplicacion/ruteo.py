@@ -136,6 +136,9 @@ class Contado:
     libro_sugerido: int | None = None
     categoria_sugerida: str | None = None
     transcripcion: str | None = None
+    # «le presté 200 mil a mi jefe»: con quien. Es solo lo que dijo; el
+    # prestamo se confirma con un toque, como todo lo demas.
+    prestamo: str | None = None
 
 
 def instrumento_por_nombre(
@@ -180,6 +183,7 @@ def crear_desde_chat(
         descripcion=c.descripcion or c.transcripcion,
         categoria=None,
         sugerido_libro_id=c.libro_sugerido,
+        prestamo_con=c.prestamo,
         decidido_por='chat',
     )
     alm.cx.commit()
@@ -215,7 +219,14 @@ def elegir_destino(alm: Almacen, pendiente_id: int, libro_id: int) -> Any:
         campos['pregunta'] = None  # un traslado no lleva categoria
     else:
         regla = alm.regla_de_libro(p['usuario_id'], clave_de(p))
-        if regla and regla['libro_id'] == libro_id and regla['categoria']:
+        # Si conto que era un prestamo, la regla del comercio no lo convierte
+        # en gasto: se pregunta, con el prestamo preseleccionado.
+        if (
+            regla
+            and regla['libro_id'] == libro_id
+            and regla['categoria']
+            and not p['prestamo_con']
+        ):
             campos.update(
                 categoria=regla['categoria'], pregunta=None, decidido_por='regla'
             )
@@ -229,8 +240,13 @@ def elegir_destino(alm: Almacen, pendiente_id: int, libro_id: int) -> Any:
 def elegir_categoria(alm: Almacen, pendiente_id: int, categoria: str) -> Any:
     """Cierra la pregunta y aprende, para ESE libro."""
     p = alm.pendiente(pendiente_id)
+    # Una categoria es un gasto o un ingreso: deja de ser un prestamo.
     alm.actualizar_pendiente(
-        pendiente_id, categoria=categoria, pregunta=None, decidido_por='usuario'
+        pendiente_id,
+        categoria=categoria,
+        pregunta=None,
+        decidido_por='usuario',
+        prestamo_con=None,
     )
     alm.guardar_regla_de_libro(
         p['usuario_id'],
@@ -314,6 +330,9 @@ DEFECTOS = {
     # en el Firefly personal
     'cuenta_negocio': 'Golden Beauty Studio',
     'categoria_aporte': 'Aporte al estudio',
+    # en cualquier libro: la cuenta de los prestamos entre personas
+    # (aplicacion/prestamos.py). Se crea sola la primera vez que se usa.
+    'cuenta_prestamos': 'Préstamos',
 }
 
 APORTE = 'aporte'

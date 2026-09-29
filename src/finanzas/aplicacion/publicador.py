@@ -71,6 +71,11 @@ class IndiceFirefly:
         if params:
             ruta += '?' + '&'.join(params)
         self.por_monto = {}
+        # (cuenta, monto) -> [(fecha, sentido)]: +1 si la plata entro a esa
+        # cuenta, -1 si salio. Solo lo mira el prestamo: su devolucion es el
+        # mismo monto por la misma cuenta al reves, y sin el sentido parecia
+        # un duplicado del prestamo y se descartaba.
+        self.con_sentido = {}
         # external_id -> lo que Firefly YA tiene de ese movimiento. Era un set,
         # y con eso el publicador sabia que el movimiento ya estaba pero no QUE
         # decia. Guardar la categoria aqui no cuesta nada —ya se esta
@@ -106,9 +111,15 @@ class IndiceFirefly:
                     monto = round(abs(float(s.get('amount') or 0)))
                 except (TypeError, ValueError):
                     continue
-                for cuenta in (s.get('source_name'), s.get('destination_name')):
+                for cuenta, sentido in (
+                    (s.get('source_name'), -1),
+                    (s.get('destination_name'), 1),
+                ):
                     if cuenta:
                         self.por_monto.setdefault((cuenta, monto), []).append(f)
+                        self.con_sentido.setdefault((cuenta, monto), []).append(
+                            (f, sentido)
+                        )
                 dest = s.get('destination_name')
                 if dest:
                     self.por_mes.setdefault((dest, f.strftime('%Y-%m')), []).append(
@@ -143,13 +154,25 @@ class IndiceFirefly:
                 return otro
         return None
 
-    def ya_existe(self, cuenta, fecha, valor, tolerancia=TOLERANCIA_DIAS):
+    def ya_existe(
+        self, cuenta, fecha, valor, tolerancia=TOLERANCIA_DIAS, con_sentido=False
+    ):
+        """La fecha de un movimiento igual ya registrado, o None.
+
+        `con_sentido` exige ademas que la plata vaya en la misma direccion por
+        esa cuenta. Sin eso, un prestamo y su devolucion son «el mismo»."""
         f = _a_fecha(fecha)
         if not f or not cuenta:
             return None
         monto = round(abs(float(valor)))
+        sentido = 1 if float(valor) > 0 else -1
         # +-1 peso, por si hubo redondeo distinto
         for m in (monto, monto - 1, monto + 1):
+            if con_sentido:
+                for otra, s in self.con_sentido.get((cuenta, m), []):
+                    if s == sentido and abs((otra - f).days) <= tolerancia:
+                        return otra
+                continue
             for otra in self.por_monto.get((cuenta, m), []):
                 if abs((otra - f).days) <= tolerancia:
                     return otra
@@ -157,6 +180,15 @@ class IndiceFirefly:
 
 
 # ------------------------------------------------------------------ payload
+
+
+def _campo(p, clave):
+    """Una columna que puede no venir: las pruebas viejas arman el pendiente
+    como dict, sin las columnas de migraciones posteriores."""
+    try:
+        return p[clave]
+    except (KeyError, IndexError):
+        return None
 
 
 def armar_payload(p):
@@ -184,7 +216,17 @@ def armar_payload(p):
         or 'Sin identificar'
     )
 
-    if p['traslado_a'] and p['cuenta_destino']:
+    prestamo = _campo(p, 'prestamo_con') if p['cuenta_destino'] else None
+    if prestamo:
+        # Un prestamo es un traslado con la cuenta «Préstamos»: si sale plata
+        # va hacia ella, y la devolucion vuelve desde ella.
+        tipo = 'transfer'
+        origen, dest = (
+            (cuenta, p['cuenta_destino'])
+            if valor < 0
+            else (p['cuenta_destino'], cuenta)
+        )
+    elif p['traslado_a'] and p['cuenta_destino']:
         tipo = 'transfer'
         origen, dest = cuenta, p['cuenta_destino']
         if p['tipo'] == 'avance':
@@ -214,6 +256,8 @@ def armar_payload(p):
             f'Sin confirmar contra extracto.'
         ),
     }
+    if prestamo:
+        split['description'] = f'Préstamo · {prestamo} · {split["description"]}'[:255]
     if p['categoria']:
         split['category_name'] = p['categoria']
     if p['presupuesto'] and tipo == 'withdrawal':
@@ -315,7 +359,12 @@ def publicar_uno(cx, p, idx=None, dry_run=True, cliente=None, libro=None):
 
     # red 3: mismo monto, misma cuenta, fecha cercana
     if idx is not None:
-        choque = idx.ya_existe(p['cuenta_firefly'], p['fecha'], p['valor'])
+        choque = idx.ya_existe(
+            p['cuenta_firefly'],
+            p['fecha'],
+            p['valor'],
+            con_sentido=bool(_campo(p, 'prestamo_con') and p['cuenta_destino']),
+        )
         if choque:
             db.pendiente_actualizar(
                 cx,
@@ -337,6 +386,9 @@ def publicar_uno(cx, p, idx=None, dry_run=True, cliente=None, libro=None):
         )
 
     try:
+        if cliente is not None and _campo(p, 'prestamo_con') and p['cuenta_destino']:
+            # la primera vez, la cuenta «Préstamos» no existe todavia
+            cliente.asegurar_cuenta_de_activo(p['cuenta_destino'])
         r = (cliente or firefly).call('POST', '/api/v1/transactions', payload)
         fid = (r.get('data') or {}).get('id')
         db.pendiente_actualizar(cx, p['id'], estado='publicado', firefly_id=fid)

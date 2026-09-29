@@ -119,6 +119,65 @@ externo antes de escribir: si el segundo falla, reintentar no duplica el
 primero. Los nombres de cuentas y categorías se pueden cambiar en `ajustes` de
 cada libro (ver `ruteo.DEFECTOS`).
 
+## Categorías nuevas
+
+Una cuenta nueva arranca con pocas categorías. En la pregunta de la categoría:
+
+- **La IA propone.** Mira lo que dice el banco (o lo que ella contó) y las
+  categorías que ya tiene ESE libro. Si una le queda, la marca con ✓; si
+  ninguna, propone un nombre como botón «➕ Nueva: …». Nunca crea sola.
+- **Ella la escribe.** Si lo escrito no es ninguna, se ofrecen las parecidas y
+  «➕ Crear …». Una frase larga no se vuelve categoría.
+- **Dónde se crea.** En Firefly basta el nombre: se crea al publicar. En Actual
+  toda categoría vive en un grupo: si hay más de uno de esa dirección, se
+  pregunta cuál, y la categoría se crea junto con el movimiento. Un libro en
+  seco no se toca.
+
+El bot de Juan tiene lo mismo: cuando no entiende la respuesta, ofrece
+«➕ Crear …» con lo que escribió o lo que propone la IA.
+
+## Préstamos
+
+«El jefe me pidió que le pasara plata y después me la devolvió.» No es un gasto
+ni un ingreso, pero si no se anota, la conciliación encuentra dos movimientos
+del banco que no están en ningún libro.
+
+- En la pregunta de la categoría hay un botón **🤝 Préstamo o devolución**. Pide
+  con quién (botones con las personas que ya tienen saldo, o responder con el
+  nombre).
+- Se escribe como un **traslado** entre la cuenta del banco y una cuenta
+  **«Préstamos»** de ESE libro (se crea sola la primera vez; el nombre se
+  cambia con `cuenta_prestamos` en `ajustes`). Firefly: cuenta de activo.
+  Actual: cuenta dentro del presupuesto, así que no lleva categoría ni mueve lo
+  presupuestado.
+- El saldo de «Préstamos» es lo que le deben (positivo) o lo que ella debe
+  (negativo). `/prestamos` lo muestra por persona.
+- **La devolución se reconoce.** Cuando entra plata y alguien le debe, sale
+  primero «🤝 Devolución · Jefe (te debe …)», con ✓ si el monto cuadra. Igual
+  es un toque: nunca se asume. Una devolución que entra al estudio no pregunta
+  por Agendapro.
+- Si lo dice en el chat («le presté 200 mil a mi jefe»), el préstamo viene
+  preseleccionado. Tampoco se publica sin el toque.
+- El libro lo elige ella primero, como siempre: un préstamo del trabajo va a
+  su libro personal.
+- **En el bot de Juan también.** Ahí la alerta se publica apenas llega, así que
+  el préstamo llega tarde: lo que ya se escribió como gasto o ingreso se borra
+  de Firefly y se vuelve a escribir como traslado. Lo enlazado a otro
+  movimiento (una venta de Agendapro, un aporte) no se toca.
+
+## El extracto de la Nu
+
+Nu no manda correos: el extracto mensual es lo único que el banco dice por
+escrito.
+
+```bash
+finanzas extracto-nu Nu_2026-10-18.pdf --clave <cédula>   # o EXTRACTO_NU_CLAVE
+```
+
+Muestra el periodo, el corte, las compras y pagos del periodo, las compras a
+cuotas de meses anteriores, y la **deuda al corte**: el saldo inicial de la Nu
+en su Firefly para el corte. Todavía no cruza contra el libro (ver abajo).
+
 ## Lo que todavía no hace
 
 - **«Le pasé plata al estudio» / «me pagué del estudio»** sin movimiento en el
@@ -126,3 +185,6 @@ cada libro (ver `ruteo.DEFECTOS`).
   frase en vez de una compra.
 - Editar desde el chat un movimiento ya guardado en Actual.
 - El asesor («¿me alcanza para…?») y los productos del súper son de Juan.
+- Cruzar el extracto de la Nu contra su Firefly (el conciliador todavía es
+  solo de Juan y de sus tarjetas Bancolombia). El parser ya devuelve la misma
+  forma que el de Bancolombia.

@@ -410,3 +410,23 @@ class Cliente:
 
     def destinos_recurrentes(self) -> dict[str, float]:
         return destinos_recurrentes(conexion=self.conexion)
+
+    def asegurar_cuenta_de_activo(self, nombre: str) -> str:
+        """La cuenta de activo con ese nombre; la crea si no esta. Es la de los
+        prestamos: su saldo es lo que le deben a la persona."""
+        ya = self.accounts_index().get(nombre)
+        if ya and ya['type'] == 'asset':
+            return ya['id']
+        r = self.call(
+            'POST',
+            '/api/v1/accounts',
+            {
+                'name': nombre,
+                'type': 'asset',
+                'account_role': 'defaultAsset',
+                'currency_code': 'COP',
+                'include_net_worth': True,
+                'notes': 'Prestamos entre personas. Saldo positivo: te deben.',
+            },
+        )
+        return str((r.get('data') or {}).get('id'))

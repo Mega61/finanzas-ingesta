@@ -274,6 +274,87 @@ def interpretar(
     return d
 
 
+# -------------------------------------------- proponer una categoria nueva
+
+PROPONER = """Eres el que organiza las categorias de un libro de finanzas en
+Colombia. Te dan un movimiento (lo que dice el banco, o lo que la persona conto)
+y las categorias que YA existen en ese libro. Decides a cual va.
+
+Reglas:
+- Si una de las existentes le queda bien, `existente` es esa y `nueva` va vacia.
+  Preferir una existente siempre que tenga sentido: no se crean categorias por
+  capricho, cada una parte el historico.
+- Solo si NINGUNA le queda, `existente` es 'ninguna' y `nueva` es el nombre de
+  una categoria que no existe: una a tres palabras en espanol, en el mismo
+  estilo que las existentes (mayuscula inicial, sin emojis, sin el nombre del
+  comercio). Que sirva para otros movimientos parecidos, no solo para este:
+  «Mascotas», no «Comida del gato de marzo».
+- razon: una frase corta que la persona va a leer.
+"""
+
+
+def proponer_categoria(
+    movimiento: Mapping[str, Any], existentes: Iterable[str], libro: str = ''
+) -> dict[str, Any]:
+    """{'existente': str|None, 'nueva': str|None, 'razon': str}.
+
+    `existente` sale de la lista por enum; `nueva` es texto libre, y quien la
+    use la muestra como boton: nunca se crea sin que la persona la toque.
+    """
+    existentes = list(existentes)
+    m = movimiento
+    texto = '\n'.join(
+        [
+            f'LIBRO: {libro}',
+            f'MONTO: {m.get("valor")} ({"ingreso" if float(m.get("valor") or 0) > 0 else "gasto"})',
+            f'LO QUE DICE: {m.get("contraparte") or ""} {m.get("descripcion") or ""}'.strip(),
+            'CATEGORIAS QUE YA EXISTEN: ' + (', '.join(existentes) or '(ninguna)'),
+        ]
+    )
+    payload = {
+        'systemInstruction': {'parts': [{'text': PROPONER}]},
+        'contents': [{'role': 'user', 'parts': [{'text': texto}]}],
+        'generationConfig': _config_generacion(
+            max_salida=400,
+            thinking=THINKING_CLASIFICAR,
+            extra={
+                'responseMimeType': 'application/json',
+                'responseSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'existente': {
+                            'type': 'string',
+                            'enum': [*existentes[:250], 'ninguna'],
+                        },
+                        'nueva': {'type': 'string'},
+                        'razon': {'type': 'string'},
+                    },
+                    'required': ['existente', 'razon'],
+                },
+            },
+        ),
+    }
+    crudo = texto_de(_llamar(payload), ' al proponer categoria')
+    try:
+        d = json.loads(crudo)
+    except json.JSONDecodeError:
+        mm = re.search(r'\{.*\}', crudo, re.S)
+        if not mm:
+            raise SinIA(f'no devolvio JSON: {crudo[:200]}') from None
+        d = json.loads(mm.group(0))
+    existente = d.get('existente')
+    nueva = (d.get('nueva') or '').strip() or None
+    if existente not in existentes:
+        existente = None
+    if existente or (nueva and nueva.lower() in {e.lower() for e in existentes}):
+        # Una «nueva» que ya existe es la existente con otro nombre.
+        existente = existente or next(
+            e for e in existentes if e.lower() == nueva.lower()
+        )
+        nueva = None
+    return {'existente': existente, 'nueva': nueva, 'razon': d.get('razon') or ''}
+
+
 # ------------------------------------------------------- entender una orden
 
 ORDENES = """Eres el cerebro de un bot de finanzas personales por Telegram. El
@@ -669,6 +750,12 @@ Reglas:
   que compro.
 - `es_movimiento`: false si NO esta contando un gasto o ingreso (saluda,
   pregunta algo, habla de otra cosa). En ese caso lo demas no importa.
+- `prestamo`: el nombre de la persona SOLO si es un prestamo o la devolucion
+  de uno: «le presté 200 mil a mi jefe», «mi jefe me devolvió la plata», «le
+  pasé 300 a Laura y me los devuelve», «le pagué a mi mamá lo que me prestó».
+  Usa como la llama ella: «jefe», «Laura», «mamá». Si no es un prestamo, vacio.
+  Un prestamo no es un gasto: si le dio plata a alguien que se la va a
+  devolver, es un prestamo.
 - `transcripcion`: lo que dijo, tal cual, corto.
 """
 
@@ -685,6 +772,7 @@ def _esquema_contado(medios: list[str], libros: list[str]) -> dict[str, Any]:
             'fecha': {'type': 'string'},
             'medio': {'type': 'string', 'enum': [*medios, 'no_dijo']},
             'libro': {'type': 'string', 'enum': [*libros, 'no_dijo']},
+            'prestamo': {'type': 'string'},
             'transcripcion': {'type': 'string'},
         },
         'required': ['es_movimiento', 'direccion', 'monto', 'fecha', 'medio', 'libro'],

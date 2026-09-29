@@ -41,6 +41,11 @@ GRUPOS: dict[str, tuple[str, str, tuple[str, ...]]] = {
         'cruzar los extractos en PDF contra lo publicado',
         ('finanzas conciliar --carpeta ../extractos',),
     ),
+    'extracto-nu': (
+        'finanzas.parsers.extracto_nu',
+        'leer un extracto de la Nu: lo que trae y la deuda al corte',
+        ('finanzas extracto-nu Nu_2026-10-18.pdf --clave <cedula>',),
+    ),
     'revisar': (
         'finanzas.entrada.verificar',
         'que las credenciales de afuera sirvan',

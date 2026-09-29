@@ -119,6 +119,16 @@ class Cliente:
                 return c['id']
         return None
 
+    def grupos(self, ingreso: bool) -> list[dict[str, Any]]:
+        """Los grupos de categorias visibles de esa direccion. En Actual una
+        categoria no existe fuera de un grupo, y el grupo decide si es de
+        ingreso."""
+        if 'grupos' not in self._cache:
+            self._cache['grupos'] = [
+                g for g in self._call('GET', '/categorygroups') if not g.get('hidden')
+            ]
+        return [g for g in self._cache['grupos'] if bool(g.get('is_income')) == ingreso]
+
     def payee_de_traslado(self, cuenta_id: str) -> str | None:
         """El «payee» que en Actual convierte un movimiento en traslado hacia
         esa cuenta. Asi es como Actual representa un pago de la tarjeta desde
@@ -161,6 +171,35 @@ class Cliente:
             if t.get('imported_id') == transaccion.get('imported_id'):
                 return t['id']
         return None
+
+    def crear_categoria(self, nombre: str, grupo_id: str) -> str:
+        """Crea la categoria en ese grupo y devuelve su id. Si ya existe en la
+        misma direccion, devuelve la que esta: crear dos iguales las partiria."""
+        grupo = next(
+            (g for g in self.grupos(True) + self.grupos(False) if g['id'] == grupo_id),
+            None,
+        )
+        if grupo is None:
+            raise ApiError(404, f'no hay un grupo de categorias con id {grupo_id}')
+        ya = self.categoria_id(nombre, bool(grupo.get('is_income')))
+        if ya:
+            return ya
+        r = self._call(
+            'POST', '/categories', {'category': {'name': nombre, 'group_id': grupo_id}}
+        )
+        self._cache.pop('categorias', None)
+        return r if isinstance(r, str) else str(r.get('id') or r)
+
+    def crear_cuenta(self, nombre: str) -> str:
+        """Una cuenta dentro del presupuesto, en cero. Un traslado entre dos
+        cuentas del presupuesto no lleva categoria ni mueve lo presupuestado."""
+        r = self._call(
+            'POST', '/accounts', {'account': {'name': nombre, 'offbudget': False}}
+        )
+        # Actual crea el «payee» del traslado junto con la cuenta.
+        self._cache.pop('cuentas', None)
+        self._cache.pop('payees', None)
+        return r if isinstance(r, str) else str(r.get('id') or r)
 
     def actualizar(self, transaccion_id: str, campos: dict[str, Any]) -> None:
         self._call('PATCH', f'/transactions/{transaccion_id}', {'transaction': campos})

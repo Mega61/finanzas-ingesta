@@ -568,3 +568,57 @@ class TestVariasDeUnaVez:
         alm, tg, _e, _u = entorno
         bot.manejar_update(alm.cx, _msg('las ultimas 2 etiquetalas como Ropa'))
         assert '2 movimientos' in tg.todo
+
+
+class TestCrearCategoriaDesdeElChat:
+    """Juan tambien: lo escrito que no es ninguna de sus categorias se puede
+    crear. Firefly la crea al recibir un `category_name` que no conoce."""
+
+    def _pendiente(self, alm, uid):
+        lid = _libro(alm, uid)
+        pid, _ = alm.crear_pendiente(
+            usuario_id=uid,
+            origen='chat',
+            tipo='compra_tarjeta',
+            fecha='2026-09-20',
+            valor=-50000.0,
+            contraparte='TIENDA RARA',
+            descripcion='TIENDA RARA',
+            cuenta_firefly='VISA BLACK',
+            external_id='x-1',
+            pregunta='categoria',
+            libro_id=lid,
+            destino_por='unico',
+        )
+        alm.cx.commit()
+        return alm.pendiente(pid)
+
+    def test_ofrece_crear_lo_escrito(self, entorno, monkeypatch):
+        alm, tg, _estado, uid = entorno
+        p = self._pendiente(alm, uid)
+        monkeypatch.setattr(
+            bot, 'sugerir_categorias', lambda cx, u, p: ['Mercado', 'Gato']
+        )
+        bot._pedir_categoria_a_mano(alm.cx, '555', p, 'regalos')
+        assert 'o la creo' in tg.enviados[-1]
+        crear = [
+            d for fila in tg.botones[-1] for t, d in fila if 'Crear «Regalos»' in t
+        ]
+        assert crear == [f'c:{p["id"]}:2']
+        assert alm.sugerencias(p['id'])[2] == 'Regalos'
+
+    def test_una_frase_no_se_ofrece_como_nombre(self, entorno, monkeypatch):
+        alm, tg, _estado, uid = entorno
+        p = self._pendiente(alm, uid)
+        monkeypatch.setattr(bot, 'sugerir_categorias', lambda cx, u, p: ['Mercado'])
+        bot._pedir_categoria_a_mano(
+            alm.cx, '555', p, 'no se la verdad que fue eso tan raro'
+        )
+        assert not any('Crear' in t for fila in tg.botones[-1] for t, _ in fila)
+
+    def test_lo_que_ya_existe_no_se_ofrece_crear(self, entorno, monkeypatch):
+        alm, tg, _estado, uid = entorno
+        p = self._pendiente(alm, uid)
+        monkeypatch.setattr(bot, 'sugerir_categorias', lambda cx, u, p: ['Mercado'])
+        bot._pedir_categoria_a_mano(alm.cx, '555', p, 'gato')
+        assert not any('Crear' in t for fila in tg.botones[-1] for t, _ in fila)

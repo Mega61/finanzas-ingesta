@@ -16,6 +16,14 @@ Dos formas de que entre un movimiento:
 Y un solo recorrido para las dos, en `siguiente`:
 
   medio -> destino -> (venta de Agendapro?) -> categoria -> publicar
+
+En la pregunta de la categoria hay dos salidas mas:
+
+  una nueva       la propone la IA mirando la descripcion, o la escribe ella.
+                   Se crea en ESE libro con un toque (aplicacion/categorias).
+  🤝 prestamo      la plata sale y vuelve: el jefe le pide que le pase plata y
+                   se la devuelve. Es un traslado a la cuenta «Préstamos» del
+                   libro, no un gasto (aplicacion/prestamos).
 """
 
 from __future__ import annotations
@@ -25,7 +33,15 @@ from typing import Any
 
 from finanzas.adaptadores import actual, firefly, ia, telegram
 from finanzas.adaptadores.almacen import Almacen
-from finanzas.aplicacion import interprete, libros, publicador, publicador_actual, ruteo
+from finanzas.aplicacion import (
+    categorias,
+    interprete,
+    libros,
+    prestamos,
+    publicador,
+    publicador_actual,
+    ruteo,
+)
 from finanzas.dominio import contado as _contado
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import fechas
@@ -33,15 +49,27 @@ from finanzas.dominio import fechas
 MAX_CATEGORIAS = 12
 EMOJI = {'firefly': '📒', 'actual': '💅'}
 
+# Las sugerencias de un movimiento son una lista de textos, y los botones
+# viajan con el indice. Cuando la lista no es de categorias -- los grupos de
+# Actual, las personas de un prestamo -- empieza con una marca, para que un
+# boton viejo de categoria no tome un grupo o un nombre como categoria.
+MARCA_GRUPO = '__grupo__'
+MARCA_PERSONA = '__persona__'
+# Por nombre: ruff lo toma por un «+» disfrazado si va pegado en el texto.
+MAS = '\N{HEAVY PLUS SIGN}'
+
 AYUDA = (
     '<b>Cómo registrar algo</b>\n\n'
     'Cuéntamelo como se lo dirías a alguien, escrito o en una nota de voz:\n'
     '«45 mil de esmaltes con la Nu»\n'
     '«ayer pagué 120 mil de arriendo del local en efectivo»\n'
-    '«me pagaron 80 mil por unas uñas»\n\n'
+    '«me pagaron 80 mil por unas uñas»\n'
+    '«le presté 200 mil a mi jefe»\n\n'
     'Las alertas de Bancolombia te llegan solas.\n\n'
-    'Siempre te pregunto a qué libro va antes de guardar nada.\n\n'
-    '/pendientes — lo que falta por contestar'
+    'Siempre te pregunto a qué libro va antes de guardar nada. Si ninguna '
+    'categoría le queda, puedes crear una desde ahí.\n\n'
+    '/pendientes — lo que falta por contestar\n'
+    '/prestamos — quién te debe y a quién le debes'
 )
 
 
@@ -73,13 +101,17 @@ def describir(cx: Any, p: Any) -> str:
     if lb:
         cuenta = f' · {_e(p["cuenta_firefly"])}' if p['cuenta_firefly'] else ''
         lineas.append(f'→ {_nombre(lb)}{cuenta}')
+    if prestamos.es_prestamo(p):
+        lineas.append(f'🤝 Préstamo con <b>{_e(p["prestamo_con"])}</b>')
     return '\n'.join(lineas)
 
 
-def _enviar(cx: Any, chat: Any, p: Any, texto: str, botones: Any) -> None:
+def _enviar(
+    cx: Any, chat: Any, p: Any, texto: str, botones: Any, tipo: str = 'categoria'
+) -> None:
     msg = telegram.enviar(chat, texto, botones)
     if msg and msg.get('message_id'):
-        _a(cx).guardar_mensaje(str(chat), msg['message_id'], p['id'])
+        _a(cx).guardar_mensaje(str(chat), msg['message_id'], p['id'], tipo)
     _a(cx).marcar_preguntado(p['id'])
 
 
@@ -98,9 +130,15 @@ def siguiente(cx: Any, pendiente_id: int, chat: Any) -> None:
         return _preguntar_destino(cx, p, chat)
     if p['pregunta'] == 'categoria':
         lb = alm.libro(p['libro_id'])
+        # Una devolucion que cuadra, o un prestamo que ella misma conto, no es
+        # una venta: no se pregunta por Agendapro.
+        de_prestamo = p['prestamo_con'] or any(
+            exacto for *_, exacto in prestamos.devoluciones_posibles(alm, p)
+        )
         if (
             lb['tipo'] == 'actual'
             and float(p['valor']) > 0
+            and not de_prestamo
             and _preguntar_si_es_venta(cx, p, chat, lb)
         ):
             return None
@@ -187,8 +225,40 @@ def _categorias(cx: Any, p: Any, lb: Any) -> list[str]:
     return nombres
 
 
+def _aprendida(cx: Any, p: Any, lb: Any) -> bool:
+    regla = _a(cx).regla_de_libro(p['usuario_id'], ruteo.clave_de(p))
+    return bool(regla and regla['libro_id'] == lb['id'] and regla['categoria'])
+
+
+def _botones_de_categorias(
+    pid: int, cats: list[str], marcada: str | None = None, desde: int = 0
+) -> list[list[tuple[str, str]]]:
+    """Los botones de categoria. `desde` es donde empiezan `cats` dentro de las
+    sugerencias guardadas.
+
+    La marcada se DIBUJA primero pero conserva su indice: la lista guardada no
+    se reordena, porque un boton de una pregunta anterior del mismo movimiento
+    apunta por indice, y reordenar lo haria caer en otra categoria.
+    """
+    orden = list(range(min(len(cats), MAX_CATEGORIAS)))
+    if marcada in cats:
+        m = cats.index(marcada)
+        orden = [m, *(i for i in orden if i != m)]
+    botones, fila = [], []
+    for i in orden:
+        c = cats[i]
+        fila.append((c + (' ✓' if c == marcada else ''), f'kc:{pid}:{desde + i}'))
+        if len(fila) == 2:
+            botones.append(fila)
+            fila = []
+    if fila:
+        botones.append(fila)
+    return botones
+
+
 def _preguntar_categoria(cx: Any, p: Any, chat: Any) -> None:
-    lb = _a(cx).libro(p['libro_id'])
+    alm = _a(cx)
+    lb = alm.libro(p['libro_id'])
     try:
         cats = _categorias(cx, p, lb)
     except (libros.LibroNoDisponible, actual.ApiError, firefly.ApiError) as ex:
@@ -197,19 +267,49 @@ def _preguntar_categoria(cx: Any, p: Any, chat: Any) -> None:
             f'No pude leer las categorías de {_e(lb["nombre"])}: {_e(str(ex)[:150])}',
         )
         return
-    _a(cx).guardar_sugerencias(p['id'], cats)
-    botones, fila = [], []
-    for i, c in enumerate(cats[:MAX_CATEGORIAS]):
-        fila.append((c, f'kc:{p["id"]}:{i}'))
-        if len(fila) == 2:
-            botones.append(fila)
-            fila = []
-    if fila:
-        botones.append(fila)
+
+    # Lo que propone la IA solo si no hay nada aprendido: lo que ella ya
+    # contesto para este comercio pesa mas que cualquier adivinanza.
+    marcada, nueva, razon = None, None, ''
+    if not _aprendida(cx, p, lb) and not p['prestamo_con']:
+        prop = categorias.proponer(p, cats, lb['nombre'])
+        marcada, nueva, razon = prop['existente'], prop['nueva'], prop['razon']
+    alm.guardar_sugerencias(p['id'], [*cats, nueva] if nueva else cats)
+
+    botones: list[list[tuple[str, str]]] = []
+    # Un gasto del estudio pagado con su plata es un aporte, no un prestamo:
+    # ahi no se ofrece.
+    con_prestamo = not p['pago_libro_id']
+    # Un prestamo va primero cuando hay algo que lo diga: lo conto asi, o el
+    # monto cuadra con lo que alguien le debe. Igual es un boton: nunca se
+    # asume.
+    if p['prestamo_con'] and con_prestamo:
+        botones.append([(f'🤝 Préstamo con {p["prestamo_con"]} ✓', f'ks:{p["id"]}:0')])
+    for j, (persona, saldo, exacto) in enumerate(
+        prestamos.devoluciones_posibles(alm, p) if con_prestamo else []
+    ):
+        que = 'te debe' if saldo > 0 else 'le debes'
+        botones.append(
+            [
+                (
+                    f'🤝 Devolución · {persona} ({que} {_dinero.formatear(abs(saldo), "COP")})'
+                    + (' ✓' if exacto else ''),
+                    f'kd:{p["id"]}:{j}',
+                )
+            ]
+        )
+    botones += _botones_de_categorias(p['id'], cats, marcada)
+    if nueva:
+        botones.append([(f'{MAS} Nueva: «{nueva}»', f'kn:{p["id"]}:{len(cats)}')])
+    if con_prestamo:
+        botones.append([('🤝 Préstamo o devolución', f'kl:{p["id"]}:0')])
     botones.append(
         [('✏️ Escribirla', f'kt:{p["id"]}:0'), ('↩️ Otro libro', f'lr:{p["id"]}:0')]
     )
-    _enviar(cx, chat, p, describir(cx, p) + '\n\n<b>¿Qué categoría?</b>', botones)
+    pie = '\n\n<b>¿Qué categoría?</b>'
+    if razon and (marcada or nueva):
+        pie += f'\n<i>{_e(razon)}</i>'
+    _enviar(cx, chat, p, describir(cx, p) + pie, botones)
 
 
 def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
@@ -294,6 +394,23 @@ def _contar(cx: Any, pendiente_id: int, chat: Any, accion: str, detalle: Any) ->
             f'✅ Guardado en {donde}{cat}, como aporte tuyo, y el cargo en '
             f'{_nombre(paga)} · {_e(p["cuenta_pago"])}\n' + describir(cx, p),
         )
+        return
+    if prestamos.es_prestamo(p) and accion in ('creado', 'seco', 'ya_estaba'):
+        saldo = prestamos.saldo_de(_a(cx), p) or 0
+        plata = _dinero.formatear(abs(saldo), 'COP')
+        quien = _e(p['prestamo_con'])
+        if abs(saldo) < 1:
+            cuenta = f'Con {quien} quedaron a paz y salvo.'
+        elif saldo > 0:
+            cuenta = f'{quien} te debe <b>{plata}</b>.'
+        else:
+            cuenta = f'Le debes a {quien} <b>{plata}</b>.'
+        primero = (
+            f'🧪 En prueba: lo guardaría en {donde} como préstamo. Todavía no escribo en ese libro.'
+            if accion == 'seco'
+            else f'✅ Guardado en {donde} como préstamo, no como gasto.'
+        )
+        telegram.enviar(chat, f'{primero}\n{cuenta}\n' + describir(cx, p))
         return
     textos = {
         'creado': f'✅ Guardado en {donde}{cat}',
@@ -418,6 +535,7 @@ def toque_otro_libro(t: Any) -> None:
         pregunta='destino',
         pago_libro_id=None,
         cuenta_pago=None,
+        categoria_grupo=None,
     )
     t.cx.commit()
     t.aviso('elige otra vez')
@@ -429,13 +547,236 @@ def toque_categoria(t: Any) -> None:
     if not p:
         return
     cats = _a(t.cx).sugerencias(t.pid)
-    if t.idx >= len(cats) or not p['libro_id']:
+    if (
+        t.idx >= len(cats)
+        or not p['libro_id']
+        or (cats and cats[0] in (MARCA_GRUPO, MARCA_PERSONA))
+    ):
         t.aviso('esa opción ya no está')
         return
     ruteo.elegir_categoria(_a(t.cx), t.pid, cats[t.idx])
+    _a(t.cx).actualizar_pendiente(t.pid, categoria_grupo=None)
+    t.cx.commit()
     t.aviso(cats[t.idx])
     t.reemplazar(describir(t.cx, _a(t.cx).pendiente(t.pid)))
     _publicar(t.cx, t.pid, t.chat)
+
+
+def _crear_categoria(cx: Any, pid: int, chat: Any, nombre: str) -> Any:
+    """La categoria nueva, en el libro del movimiento. En Actual, con mas de
+    un grupo posible, primero pregunta en cual va."""
+    alm = _a(cx)
+    p = alm.pendiente(pid)
+    lb = alm.libro(p['libro_id'])
+    cliente = libros.cliente(lb)
+    if isinstance(cliente, actual.Cliente):
+        grupos = cliente.grupos(float(p['valor']) > 0)
+        if not grupos:
+            telegram.enviar(
+                chat, f'{_e(lb["nombre"])} no tiene grupos para esa categoría.'
+            )
+            return None
+        if len(grupos) > 1:
+            alm.guardar_sugerencias(
+                pid, [MARCA_GRUPO, nombre, *(g['id'] for g in grupos)]
+            )
+            botones = [[(g['name'], f'kg:{pid}:{j}')] for j, g in enumerate(grupos)]
+            _enviar(
+                cx,
+                chat,
+                p,
+                describir(cx, p)
+                + f'\n\n¿En qué grupo de {_e(lb["nombre"])} va <b>{_e(nombre)}</b>?',
+                botones,
+            )
+            return None
+        return _con_la_nueva(cx, pid, chat, nombre, grupos[0]['id'])
+    return _con_la_nueva(cx, pid, chat, nombre, None)
+
+
+def _con_la_nueva(cx: Any, pid: int, chat: Any, nombre: str, grupo: str | None) -> None:
+    """Queda con la categoria nueva y se publica. En Firefly se crea al
+    publicar; en Actual el publicador la crea en `grupo` junto con el
+    movimiento. En seco no se crea en ninguno."""
+    if not _abierto(cx, pid, chat):
+        return
+    ruteo.elegir_categoria(_a(cx), pid, nombre)
+    _a(cx).actualizar_pendiente(pid, categoria_grupo=grupo)
+    cx.commit()
+    _publicar(cx, pid, chat)
+
+
+def toque_nueva_categoria(t: Any) -> None:
+    """Toco «Nueva: X» o «Crear X», los botones de una categoria nueva."""
+    p = _es_suyo(t.cx, t)
+    if not p:
+        return
+    sug = _a(t.cx).sugerencias(t.pid)
+    if t.idx >= len(sug) or not p['libro_id'] or sug[0] in (MARCA_GRUPO, MARCA_PERSONA):
+        t.aviso('esa opción ya no está')
+        return
+    nombre = sug[t.idx]
+    lb = _a(t.cx).libro(p['libro_id'])
+    try:
+        existentes = _categorias(t.cx, p, lb)
+        ya = categorias.ya_existe(nombre, existentes)
+        t.aviso(f'nueva: {nombre}' if not ya else nombre)
+        t.reemplazar(describir(t.cx, p))
+        if ya:
+            ruteo.elegir_categoria(_a(t.cx), t.pid, ya)
+            _publicar(t.cx, t.pid, t.chat)
+            return
+        _crear_categoria(t.cx, t.pid, t.chat, nombre)
+    except (libros.LibroNoDisponible, actual.ApiError, firefly.ApiError) as ex:
+        telegram.enviar(
+            t.chat,
+            f'No pude crear la categoría en {_e(lb["nombre"])}: {_e(str(ex)[:150])}',
+        )
+
+
+def toque_grupo(t: Any) -> None:
+    """Eligio el grupo de Actual donde va la categoria nueva."""
+    p = _es_suyo(t.cx, t)
+    if not p:
+        return
+    sug = _a(t.cx).sugerencias(t.pid)
+    if len(sug) < 3 or sug[0] != MARCA_GRUPO or t.idx >= len(sug) - 2:
+        t.aviso('esa opción ya no está')
+        return
+    nombre, grupo = sug[1], sug[2 + t.idx]
+    t.aviso(nombre)
+    t.reemplazar(describir(t.cx, p))
+    _con_la_nueva(t.cx, t.pid, t.chat, nombre, grupo)
+
+
+# ---------------------------------------------------------------- prestamos
+
+
+def toque_prestamo(t: Any) -> None:
+    """«🤝 Préstamo o devolución»: con quien."""
+    p = _es_suyo(t.cx, t)
+    if not p or not p['libro_id']:
+        return
+    alm = _a(t.cx)
+    personas = [
+        persona for persona, _ in prestamos.saldos(alm, p['usuario_id'], p['libro_id'])
+    ]
+    dicho = prestamos.nombre(p['prestamo_con'])
+    if dicho and dicho.lower() not in {x.lower() for x in personas}:
+        personas.insert(0, dicho)
+    alm.guardar_sugerencias(t.pid, [MARCA_PERSONA, *personas])
+    t.aviso('¿con quién?')
+    t.reemplazar(describir(t.cx, p))
+    botones = [[(f'👤 {x}', f'kw:{t.pid}:{j}')] for j, x in enumerate(personas)]
+    botones.append([('↩️ No es un préstamo', f'kv:{t.pid}:0')])
+    entra = float(p['valor']) > 0
+    pregunta = (
+        '¿Quién te la pasó o te la devolvió?'
+        if entra
+        else '¿A quién se la prestaste o le devolviste?'
+    )
+    _enviar(
+        t.cx,
+        t.chat,
+        p,
+        describir(t.cx, p)
+        + f'\n\n<b>{pregunta}</b>\n<i>Respóndeme este mensaje con el nombre, o toca uno.</i>',
+        botones,
+        tipo='prestamo',
+    )
+
+
+def _abierto(cx: Any, pid: int, chat: Any) -> bool:
+    """Un boton viejo no cambia un movimiento que ya esta en su libro."""
+    p = _a(cx).pendiente(pid)
+    if p['estado'] in ('nuevo', 'error') and not p['firefly_id']:
+        return True
+    telegram.enviar(
+        chat, 'Ese movimiento ya está guardado; ya no lo cambio desde aquí.'
+    )
+    return False
+
+
+def _es_prestamo_con(cx: Any, pid: int, chat: Any, persona: str | None) -> None:
+    persona = prestamos.nombre(persona)
+    if not persona:
+        telegram.enviar(chat, 'No entendí el nombre. Respóndeme con cómo se llama.')
+        return
+    # Si ya estaba en el libro como gasto o ingreso (el camino de Juan publica
+    # antes de preguntar), se saca para volver a escribirlo como traslado.
+    try:
+        prestamos.sacar_del_libro(_a(cx), pid)
+    except prestamos.NoSePuedeRehacer as ex:
+        telegram.enviar(chat, f'No lo puedo volver préstamo: {_e(ex)}.')
+        return
+    except (libros.LibroNoDisponible, actual.ApiError, firefly.ApiError) as ex:
+        telegram.enviar(chat, f'No pude sacarlo del libro: {_e(str(ex)[:150])}')
+        return
+    prestamos.elegir(_a(cx), pid, persona)
+    _publicar(cx, pid, chat)
+
+
+def toque_persona(t: Any) -> None:
+    p = _es_suyo(t.cx, t)
+    if not p:
+        return
+    sug = _a(t.cx).sugerencias(t.pid)
+    if not sug or sug[0] != MARCA_PERSONA or t.idx >= len(sug) - 1:
+        t.aviso('esa opción ya no está')
+        return
+    t.aviso(sug[1 + t.idx])
+    t.reemplazar(describir(t.cx, p))
+    _es_prestamo_con(t.cx, t.pid, t.chat, sug[1 + t.idx])
+
+
+def toque_devolucion(t: Any) -> None:
+    """Una de las devoluciones que se ofrecieron en la pregunta de categoria."""
+    p = _es_suyo(t.cx, t)
+    if not p:
+        return
+    posibles = prestamos.devoluciones_posibles(_a(t.cx), p)
+    if t.idx >= len(posibles):
+        t.aviso('esa opción ya no está')
+        return
+    persona = posibles[t.idx][0]
+    t.aviso(persona)
+    t.reemplazar(describir(t.cx, p))
+    _es_prestamo_con(t.cx, t.pid, t.chat, persona)
+
+
+def toque_prestamo_dicho(t: Any) -> None:
+    """Confirmo el prestamo que conto en el chat."""
+    p = _es_suyo(t.cx, t)
+    if not p or not p['prestamo_con']:
+        t.aviso('esa opción ya no está')
+        return
+    t.aviso(p['prestamo_con'])
+    t.reemplazar(describir(t.cx, p))
+    _es_prestamo_con(t.cx, t.pid, t.chat, p['prestamo_con'])
+
+
+def toque_no_es_prestamo(t: Any) -> None:
+    p = _es_suyo(t.cx, t)
+    if not p:
+        return
+    _a(t.cx).actualizar_pendiente(t.pid, prestamo_con=None)
+    t.cx.commit()
+    t.aviso('entonces, la categoría')
+    t.reemplazar(describir(t.cx, _a(t.cx).pendiente(t.pid)))
+    _preguntar_categoria(t.cx, _a(t.cx).pendiente(t.pid), t.chat)
+
+
+def texto_de_prestamos(cx: Any, usuario_id: int) -> str:
+    alm = _a(cx)
+    lineas = []
+    for lb in alm.libros_de(usuario_id):
+        for persona, saldo in prestamos.saldos(alm, usuario_id, lb['id']):
+            plata = _dinero.formatear(abs(saldo), 'COP')
+            que = f'te debe <b>{plata}</b>' if saldo > 0 else f'le debes <b>{plata}</b>'
+            lineas.append(f'{_nombre(lb)} · {_e(persona)} {que}')
+    if not lineas:
+        return 'No hay préstamos abiertos: nadie te debe y no le debes a nadie. ✅'
+    return '<b>Préstamos abiertos</b>\n' + '\n'.join(lineas)
 
 
 def toque_escribir_categoria(t: Any) -> None:
@@ -505,6 +846,13 @@ def toque_parecido(t: Any) -> None:
 
 
 TOQUES = {
+    'kn': toque_nueva_categoria,
+    'kg': toque_grupo,
+    'kl': toque_prestamo,
+    'kw': toque_persona,
+    'kd': toque_devolucion,
+    'ks': toque_prestamo_dicho,
+    'kv': toque_no_es_prestamo,
     'km': toque_medio,
     'ld': toque_destino,
     'lp': toque_aporte,
@@ -533,9 +881,11 @@ def manejar_mensaje(cx: Any, chat: Any, msg: dict[str, Any]) -> None:
 
     respondiendo = (msg.get('reply_to_message') or {}).get('message_id')
     if texto and respondiendo:
-        pid = alm.pendiente_de_mensaje(str(chat), respondiendo)
-        if pid:
-            return _respuesta_escrita(cx, chat, pid, texto)
+        preguntado = alm.pregunta_de_mensaje(str(chat), respondiendo)
+        if preguntado and preguntado[1] == 'prestamo':
+            return respuesta_de_prestamo(cx, chat, preguntado[0], texto)
+        if preguntado:
+            return _respuesta_escrita(cx, chat, preguntado[0], texto)
 
     audio = msg.get('voice') or msg.get('audio')
     if audio:
@@ -561,6 +911,9 @@ def manejar_mensaje(cx: Any, chat: Any, msg: dict[str, Any]) -> None:
 
 def _comando(cx: Any, chat: Any, u: Any, texto: str) -> None:
     nombre = texto.split(maxsplit=1)[0].split('@', maxsplit=1)[0]
+    if nombre == '/prestamos':
+        telegram.enviar(chat, texto_de_prestamos(cx, u['id']))
+        return
     if nombre == '/pendientes':
         abiertos = [
             p
@@ -586,16 +939,57 @@ def _respuesta_escrita(cx: Any, chat: Any, pid: int, texto: str) -> None:
         return
     lb = _a(cx).libro(p['libro_id'])
     cats = _categorias(cx, p, lb)
-    hallados = interprete.buscar_categoria(texto, cats)
-    if not hallados:
+    exacta = categorias.ya_existe(texto, cats)
+    if exacta:
+        ruteo.elegir_categoria(_a(cx), pid, exacta)
+        _a(cx).actualizar_pendiente(pid, categoria_grupo=None)
+        cx.commit()
+        return _publicar(cx, pid, chat)
+
+    # No se llama asi ninguna. Antes se tomaba la mas parecida sin decir nada,
+    # o se contestaba «no es una categoria» y ahi moria. Ahora se ofrecen las
+    # parecidas y, si lo escrito sirve de nombre, crearla.
+    hallados = [c for _, c, _ in interprete.buscar_categoria(texto, cats)][:4]
+    nueva = categorias.nombre_valido(texto)
+    if not hallados and not nueva:
         telegram.enviar(
             chat,
-            f'«{_e(texto)}» no es una categoría de {_e(lb["nombre"])}. '
-            'Estas son las que hay: ' + ', '.join(_e(c) for c in cats),
+            f'«{_e(texto)}» no es una categoría de {_e(lb["nombre"])}, y es muy '
+            'largo para crear una. Escríbeme solo el nombre, por ejemplo «Mascotas».',
         )
         return
-    ruteo.elegir_categoria(_a(cx), pid, hallados[0][1])
-    _publicar(cx, pid, chat)
+    # Al final de las que ya se ofrecieron, por lo mismo que en
+    # `_botones_de_categorias`: los botones viejos siguen valiendo.
+    antes = _a(cx).sugerencias(pid)
+    if antes and antes[0] in (MARCA_GRUPO, MARCA_PERSONA):
+        antes = []
+    _a(cx).guardar_sugerencias(pid, [*antes, *hallados, *([nueva] if nueva else [])])
+    botones = _botones_de_categorias(pid, hallados, desde=len(antes))
+    if nueva:
+        botones.append(
+            [
+                (
+                    f'{MAS} Crear «{nueva}» en {lb["nombre"]}',
+                    f'kn:{pid}:{len(antes) + len(hallados)}',
+                )
+            ]
+        )
+    texto_pregunta = f'«{_e(texto)}» no es una categoría de {_e(lb["nombre"])}.'
+    if hallados:
+        texto_pregunta += (
+            ' ¿Es alguna de estas, o la creo?' if nueva else ' ¿Es alguna de estas?'
+        )
+    _enviar(cx, chat, p, describir(cx, p) + '\n\n' + texto_pregunta, botones)
+
+
+def respuesta_de_prestamo(cx: Any, chat: Any, pid: int, texto: str) -> None:
+    p = _a(cx).pendiente(pid)
+    if p is None or p['usuario_id'] != _a(cx).usuario_por_chat(chat)['id']:
+        return
+    if not p['libro_id']:
+        telegram.enviar(chat, 'Primero dime a qué libro va.')
+        return
+    _es_prestamo_con(cx, pid, chat, texto)
 
 
 def _registrar(
@@ -644,6 +1038,7 @@ def _registrar(
     if not d.get('es_movimiento'):
         telegram.enviar(chat, AYUDA)
         return
+    prestamo = prestamos.nombre(d.get('prestamo'))
     monto = float(d.get('monto') or 0)
     if monto <= 0:
         telegram.enviar(
@@ -663,6 +1058,7 @@ def _registrar(
         instrumento=d.get('medio') or ruteo.instrumento_por_nombre(alm, u['id'], texto),
         libro_sugerido=libro,
         transcripcion=d.get('transcripcion'),
+        prestamo=prestamo,
     )
     pid, nuevo = ruteo.crear_desde_chat(alm, u['id'], chat, mensaje_id, c)
     if not nuevo:
