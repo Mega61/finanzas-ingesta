@@ -51,6 +51,10 @@ THINKING_ASESOR = int(config.get('GEMINI_THINKING_ASESOR', '1024'))
 # accion Y a que movimientos aplica, y equivocarse en lo segundo cambia el
 # movimiento equivocado.
 THINKING_ORDENES = int(config.get('GEMINI_THINKING_ORDENES', '512'))
+# El tope de las llamadas cortas con esquema. gemini-3.x piensa aunque se le
+# pida thinkingBudget=0: al proponer categoria con tope 400 se gasto 380
+# pensando y la respuesta salio cortada. Holgado no cuesta: se cobra lo usado.
+MAX_CORTO = 4000
 
 
 def _config_generacion(
@@ -245,7 +249,7 @@ def interpretar(
         'generationConfig': _config_generacion(
             # holgado: el esquema con los enum hace que la salida sea corta,
             # pero el tope tiene que dejar espacio de sobra
-            max_salida=1200,
+            max_salida=MAX_CORTO,
             thinking=THINKING_CLASIFICAR,
             extra={
                 'responseMimeType': 'application/json',
@@ -315,7 +319,7 @@ def proponer_categoria(
         'systemInstruction': {'parts': [{'text': PROPONER}]},
         'contents': [{'role': 'user', 'parts': [{'text': texto}]}],
         'generationConfig': _config_generacion(
-            max_salida=400,
+            max_salida=MAX_CORTO,
             thinking=THINKING_CLASIFICAR,
             extra={
                 'responseMimeType': 'application/json',
@@ -816,7 +820,7 @@ def entender_contado(
         'systemInstruction': {'parts': [{'text': CONTADO}]},
         'contents': [{'role': 'user', 'parts': partes}],
         'generationConfig': _config_generacion(
-            max_salida=800,
+            max_salida=MAX_CORTO,
             thinking=THINKING_CLASIFICAR,
             extra={
                 'responseMimeType': 'application/json',

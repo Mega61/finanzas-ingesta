@@ -2579,6 +2579,9 @@ def _despachar(cx, u):
         # El callback SIEMPRE se contesta: si el manejador revienta antes de
         # avisar, el botoncito se queda girando en Telegram para siempre y no
         # hay ninguna senal de que algo fallo.
+        # Un toque cambia de tema: lo que se le pidio escribir antes ya no es lo
+        # que va a escribir. Los botones que piden texto lo vuelven a pedir.
+        bot_libros.ESPERANDO.pop(str(de_chat), None)
         try:
             manejador(toque)
         except Exception as ex:
@@ -2733,9 +2736,15 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
          con varias se puntua; y si ninguna gana, la ultima preguntada, pero
          diciendolo y con botones para moverla.
     """
+    # 0. se le acaba de pedir un nombre («¿con quien fue el prestamo?») y lo
+    # escribio sin responder al mensaje, que es lo que hace casi todo el mundo
+    if not respondiendo_a and bot_libros.respuesta_sin_responder(cx, chat, texto):
+        return
     # 1. respondio a un mensaje concreto
     if respondiendo_a:
         preguntado = _a(cx).pregunta_de_mensaje(chat, respondiendo_a)
+        if preguntado:
+            bot_libros.ESPERANDO.pop(str(chat), None)
         if preguntado and preguntado[1] == 'prestamo':
             # «¿con quien fue el prestamo?»: la respuesta es un nombre.
             bot_libros.respuesta_de_prestamo(cx, chat, preguntado[0], texto)

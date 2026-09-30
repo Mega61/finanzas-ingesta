@@ -29,6 +29,7 @@ En la pregunta de la categoria hay dos salidas mas:
 from __future__ import annotations
 
 import html
+import time
 from typing import Any
 
 from finanzas.adaptadores import actual, firefly, ia, telegram
@@ -217,12 +218,30 @@ def _categorias(cx: Any, p: Any, lb: Any) -> list[str]:
         nombres = sorted(
             c['attributes']['name'] for c in cliente.get_all('/api/v1/categories')
         )
+    # Las nuevas que ya eligio y todavia no estan en el libro (en seco no se
+    # crean). En Actual solo con su grupo: sin grupo no hay como crearla.
+    for r in _a(cx).categorias_por_crear(lb['id'], ingreso):
+        if categorias.ya_existe(r['categoria'], nombres):
+            continue
+        if isinstance(cliente, actual.Cliente) and not r['grupo']:
+            continue
+        nombres.append(r['categoria'])
     # La que ya contesto para este comercio en este libro, primero.
     regla = _a(cx).regla_de_libro(p['usuario_id'], ruteo.clave_de(p))
     if regla and regla['libro_id'] == lb['id'] and regla['categoria'] in nombres:
         nombres.remove(regla['categoria'])
         nombres.insert(0, regla['categoria'])
     return nombres
+
+
+def _grupo_por_crear(cx: Any, p: Any, nombre: str) -> str | None:
+    """El grupo de Actual de una categoria que se eligio como nueva y todavia
+    no existe. Elegirla otra vez tiene que llevar su grupo: sin el, al
+    publicar no hay donde crearla."""
+    for r in _a(cx).categorias_por_crear(p['libro_id'], float(p['valor']) > 0):
+        if r['categoria'] == nombre:
+            return r['grupo']
+    return None
 
 
 def _aprendida(cx: Any, p: Any, lb: Any) -> bool:
@@ -554,8 +573,9 @@ def toque_categoria(t: Any) -> None:
     ):
         t.aviso('esa opción ya no está')
         return
+    grupo = _grupo_por_crear(t.cx, p, cats[t.idx])
     ruteo.elegir_categoria(_a(t.cx), t.pid, cats[t.idx])
-    _a(t.cx).actualizar_pendiente(t.pid, categoria_grupo=None)
+    _a(t.cx).actualizar_pendiente(t.pid, categoria_grupo=grupo)
     t.cx.commit()
     t.aviso(cats[t.idx])
     t.reemplazar(describir(t.cx, _a(t.cx).pendiente(t.pid)))
@@ -623,7 +643,10 @@ def toque_nueva_categoria(t: Any) -> None:
         t.aviso(f'nueva: {nombre}' if not ya else nombre)
         t.reemplazar(describir(t.cx, p))
         if ya:
+            grupo = _grupo_por_crear(t.cx, p, ya)
             ruteo.elegir_categoria(_a(t.cx), t.pid, ya)
+            _a(t.cx).actualizar_pendiente(t.pid, categoria_grupo=grupo)
+            t.cx.commit()
             _publicar(t.cx, t.pid, t.chat)
             return
         _crear_categoria(t.cx, t.pid, t.chat, nombre)
@@ -680,10 +703,41 @@ def toque_prestamo(t: Any) -> None:
         t.chat,
         p,
         describir(t.cx, p)
-        + f'\n\n<b>{pregunta}</b>\n<i>Respóndeme este mensaje con el nombre, o toca uno.</i>',
+        + f'\n\n<b>{pregunta}</b>\n<i>Escríbeme el nombre, o toca uno.</i>',
         botones,
         tipo='prestamo',
     )
+    _esperar(t.chat, t.pid, 'prestamo')
+
+
+# Lo que se le acaba de pedir por escrito en cada chat: el nombre de quien le
+# debe, o el de una categoria. En Telegram casi nadie desliza para responder:
+# escribe y ya. Sin esto, «mi jefe» suelto se leia como un movimiento nuevo,
+# contestaba la ayuda y el prestamo se quedaba sin hacer. En memoria, como el
+# hilo del asesor: si el proceso se reinicia, basta con tocar el boton otra vez.
+ESPERANDO: dict[str, tuple[int, str, float]] = {}
+MINUTOS_DE_ESPERA = 30
+
+
+def _esperar(chat: Any, pid: int, tipo: str) -> None:
+    ESPERANDO[str(chat)] = (pid, tipo, time.time())
+
+
+def respuesta_sin_responder(cx: Any, chat: Any, texto: str) -> bool:
+    """Si `texto`, escrito sin responder a ningun mensaje, es lo que se le
+    acaba de pedir, lo atiende y devuelve True. Un texto con monto es un
+    movimiento nuevo, no un nombre: ese sigue su camino."""
+    pid, tipo, cuando = ESPERANDO.get(str(chat), (0, '', 0.0))
+    if not pid or time.time() - cuando > MINUTOS_DE_ESPERA * 60:
+        return False
+    if not texto or texto.startswith('/') or _contado.monto_dicho(texto) is not None:
+        return False
+    ESPERANDO.pop(str(chat), None)
+    if tipo == 'prestamo':
+        respuesta_de_prestamo(cx, chat, pid, texto)
+    else:
+        _respuesta_escrita(cx, chat, pid, texto)
+    return True
 
 
 def _abierto(cx: Any, pid: int, chat: Any) -> bool:
@@ -700,7 +754,8 @@ def _abierto(cx: Any, pid: int, chat: Any) -> bool:
 def _es_prestamo_con(cx: Any, pid: int, chat: Any, persona: str | None) -> None:
     persona = prestamos.nombre(persona)
     if not persona:
-        telegram.enviar(chat, 'No entendí el nombre. Respóndeme con cómo se llama.')
+        telegram.enviar(chat, 'No entendí el nombre. Escríbeme cómo se llama.')
+        _esperar(chat, pid, 'prestamo')
         return
     # Si ya estaba en el libro como gasto o ingreso (el camino de Juan publica
     # antes de preguntar), se saca para volver a escribirlo como traslado.
@@ -783,9 +838,10 @@ def toque_escribir_categoria(t: Any) -> None:
     if not _es_suyo(t.cx, t):
         return
     t.aviso('escríbela')
-    msg = telegram.enviar(t.chat, 'Escribe la categoría, respondiendo a este mensaje:')
+    msg = telegram.enviar(t.chat, 'Escríbeme el nombre de la categoría:')
     if msg and msg.get('message_id'):
         _a(t.cx).guardar_mensaje(str(t.chat), msg['message_id'], t.pid)
+    _esperar(t.chat, t.pid, 'categoria')
 
 
 def toque_venta(t: Any) -> None:
@@ -880,8 +936,12 @@ def manejar_mensaje(cx: Any, chat: Any, msg: dict[str, Any]) -> None:
         return _comando(cx, chat, u, texto)
 
     respondiendo = (msg.get('reply_to_message') or {}).get('message_id')
+    if texto and not respondiendo and respuesta_sin_responder(cx, chat, texto):
+        return None
     if texto and respondiendo:
         preguntado = alm.pregunta_de_mensaje(str(chat), respondiendo)
+        if preguntado:
+            ESPERANDO.pop(str(chat), None)
         if preguntado and preguntado[1] == 'prestamo':
             return respuesta_de_prestamo(cx, chat, preguntado[0], texto)
         if preguntado:
@@ -941,8 +1001,9 @@ def _respuesta_escrita(cx: Any, chat: Any, pid: int, texto: str) -> None:
     cats = _categorias(cx, p, lb)
     exacta = categorias.ya_existe(texto, cats)
     if exacta:
+        grupo = _grupo_por_crear(cx, p, exacta)
         ruteo.elegir_categoria(_a(cx), pid, exacta)
-        _a(cx).actualizar_pendiente(pid, categoria_grupo=None)
+        _a(cx).actualizar_pendiente(pid, categoria_grupo=grupo)
         cx.commit()
         return _publicar(cx, pid, chat)
 
@@ -957,6 +1018,7 @@ def _respuesta_escrita(cx: Any, chat: Any, pid: int, texto: str) -> None:
             f'«{_e(texto)}» no es una categoría de {_e(lb["nombre"])}, y es muy '
             'largo para crear una. Escríbeme solo el nombre, por ejemplo «Mascotas».',
         )
+        _esperar(chat, pid, 'categoria')
         return
     # Al final de las que ya se ofrecieron, por lo mismo que en
     # `_botones_de_categorias`: los botones viejos siguen valiendo.

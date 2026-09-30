@@ -273,6 +273,7 @@ def mundo(monkeypatch):
     monkeypatch.setattr(bot, 'telegram', tg)
     monkeypatch.setattr(bot_libros, 'telegram', tg)
     monkeypatch.setattr(bot.ia, 'disponible', lambda: False)
+    monkeypatch.setattr(bot_libros, 'ESPERANDO', {})
 
     ff = FireflyFalso()
     monkeypatch.setattr(firefly, 'call', ff.call)
@@ -782,6 +783,46 @@ class TestCategoriaNueva:
         (tx,) = act.creadas
         assert tx['category'] == nueva['id']
 
+    def test_escrita_sin_responder_al_mensaje_sirve(self, mundo):
+        alm, tg, ff, _act, _juan, ella = mundo
+        pid = self._hasta_la_categoria(
+            alm, tg, ella, 'personal', instrumento='5788', clase_instrumento='cuenta'
+        )
+        _toque(alm, f'kt:{pid}:0')
+        _texto(alm, 'mascotas', mid=60)
+        assert 'no es una categoría de Personal' in tg.ultimo()[1]
+        _toque(alm, _dato(tg, '\N{HEAVY PLUS SIGN} Crear «Mascotas»'))
+        (tx,) = ff.transacciones()
+        assert tx['category_name'] == 'Mascotas'
+
+    def test_en_seco_la_nueva_vuelve_a_salir_con_su_grupo(self, mundo):
+        """En seco no se crea, y antes tampoco volvia a salir en la lista: con
+        cada movimiento habia que crearla otra vez."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        alm.cx.execute("UPDATE libros SET en_serio = 0 WHERE clave = 'estudio'")
+        pid = self._hasta_la_categoria(alm, tg, ella, 'estudio')
+        _toque(alm, f'kt:{pid}:0')
+        _texto(alm, 'Lavandería', mid=60)
+        _toque(alm, _dato(tg, '\N{HEAVY PLUS SIGN} Crear'))
+        _toque(alm, _dato(tg, 'Gastos Fijos'))
+
+        otro = _alerta(
+            alm, ella, 'a2', valor=-12000.0, contraparte='OTRA', descripcion='OTRA'
+        )
+        _toque(alm, f'ld:{otro}:{_libro(alm, ella, "estudio")}')
+        _toque(alm, _dato(tg, 'Lavandería'))
+        p = alm.pendiente(otro)
+        assert (p['categoria'], p['categoria_grupo']) == ('Lavandería', 'g-fijos')
+        assert act.categorias_creadas == []
+
+        # ya en serio, se crea una sola vez para los dos
+        alm.cx.execute("UPDATE libros SET en_serio = 1 WHERE clave = 'estudio'")
+        alm.cx.commit()
+        for x in (pid, otro):
+            publicador.publicar_en_su_libro(alm.cx, x)
+        assert [c['name'] for c in act.categorias_creadas] == ['Lavandería']
+        assert len(act.creadas) == 2
+
     def test_un_libro_en_seco_no_crea_la_categoria(self, mundo):
         alm, tg, _ff, act, _juan, ella = mundo
         alm.cx.execute("UPDATE libros SET en_serio = 0 WHERE clave = 'estudio'")
@@ -1037,6 +1078,55 @@ class TestPrestamos:
         assert (p['libro_id'], p['cuenta_destino']) == (None, None)
         assert alm.saldos_de_prestamos(ella, _libro(alm, ella, 'personal')) == []
 
+    def test_el_nombre_sin_responder_al_mensaje_sirve(self, mundo):
+        """Casi nadie desliza para responder: escribe el nombre y ya. Antes eso
+        se leia como un movimiento nuevo, contestaba la ayuda y el prestamo
+        nunca se hacia; en el primero ni siquiera hay un boton de persona."""
+        alm, tg, ff, _act, _juan, ella = mundo
+        pid = self._salida(alm, ella)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "personal")}')
+        _toque(alm, f'kl:{pid}:0')
+        _texto(alm, 'mi jefe', mid=60)
+        assert alm.pendiente(pid)['prestamo_con'] == 'Jefe'
+        assert 'Jefe te debe' in tg.ultimo()[1]
+        (tx,) = ff.transacciones()
+        assert tx['type'] == 'transfer'
+
+    def test_en_seco_el_prestamo_queda_y_cuenta_en_el_saldo(self, mundo):
+        alm, tg, ff, _act, _juan, ella = mundo
+        alm.cx.execute("UPDATE libros SET en_serio = 0 WHERE clave = 'personal'")
+        pid = self._salida(alm, ella)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "personal")}')
+        _toque(alm, f'kl:{pid}:0')
+        _texto(alm, 'jefe', mid=60)
+        assert 'En prueba' in tg.ultimo()[1] and 'Jefe te debe' in tg.ultimo()[1]
+        assert ff.transacciones() == []
+        _texto(alm, '/prestamos', mid=61)
+        assert 'Jefe te debe' in tg.ultimo()[1]
+
+    def test_un_movimiento_con_monto_no_se_toma_por_el_nombre(self, mundo):
+        alm, _tg, _ff, _act, _juan, ella = mundo
+        pid = self._salida(alm, ella)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "personal")}')
+        _toque(alm, f'kl:{pid}:0')
+        _texto(alm, '45 mil de esmaltes con la nu', mid=60)
+        assert alm.pendiente(pid)['prestamo_con'] is None
+        assert (
+            alm.cx.execute(
+                "SELECT count(*) FROM pendientes WHERE origen = 'chat'"
+            ).fetchone()[0]
+            == 1
+        )
+
+    def test_otro_toque_olvida_que_esperaba_el_nombre(self, mundo):
+        alm, _tg, _ff, _act, _juan, ella = mundo
+        pid = self._salida(alm, ella)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "personal")}')
+        _toque(alm, f'kl:{pid}:0')
+        _toque(alm, f'kv:{pid}:0')
+        _texto(alm, 'jefe', mid=60)
+        assert alm.pendiente(pid)['prestamo_con'] is None
+
     def test_la_devolucion_del_mismo_dia_no_es_un_duplicado(self, mundo):
         """El anti-duplicado de Firefly compara monto y cuenta. La devolucion es
         el mismo monto por la misma cuenta, al reves: no es un duplicado."""
@@ -1124,6 +1214,14 @@ class TestPrestamosDeJuan:
         assert primero[0].startswith('🤝 Devolución · Pedro') and '✓' in primero[0]
         _toque(alm, primero[1], chat=JUAN)
         assert 'paz y salvo' in tg.ultimo()[1]
+
+    def test_juan_tambien_puede_escribir_el_nombre_sin_responder(self, mundo):
+        alm, tg, ff, _act, juan, _ella = mundo
+        pid = self._publicada(alm, juan, ff)
+        bot.preguntar_pendientes(alm.cx)
+        _toque(alm, _dato(tg, '🤝 préstamo'), chat=JUAN)
+        _texto(alm, 'Pedro', chat=JUAN, mid=70)
+        assert alm.pendiente(pid)['prestamo_con'] == 'Pedro'
 
     def test_ella_no_puede_tocar_el_prestamo_de_juan(self, mundo):
         alm, _tg, ff, _act, juan, _ella = mundo

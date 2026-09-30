@@ -610,6 +610,21 @@ class Almacen:
             (*ESTADOS_ABIERTOS, str(chat_id)),
         ).fetchall()
 
+    def categorias_por_crear(self, libro_id: int, ingreso: bool) -> list[sqlite3.Row]:
+        """(categoria, grupo) que alguien ya eligio en ese libro para un
+        movimiento que todavia no se escribio. En un libro en seco una
+        categoria nueva no se crea, y sin esto no volvia a salir en la lista:
+        habia que crearla otra vez con cada movimiento."""
+        return self.cx.execute(
+            """SELECT categoria, max(categoria_grupo) AS grupo FROM pendientes
+               WHERE libro_id = ? AND categoria IS NOT NULL
+                 AND firefly_id IS NULL AND estado IN ('nuevo', 'error')
+                 AND (valor > 0) = ?
+               GROUP BY categoria
+               ORDER BY min(id)""",
+            (libro_id, 1 if ingreso else 0),
+        ).fetchall()
+
     def saldos_de_prestamos(self, usuario_id: int, libro_id: int) -> list[sqlite3.Row]:
         """(persona, saldo) de los prestamos de ese libro que no estan en cero.
 
