@@ -24,7 +24,7 @@ from datetime import timedelta
 
 from finanzas import registro
 from finanzas.adaptadores import actual, db, firefly
-from finanzas.aplicacion import aportes, publicador_actual, ruteo
+from finanzas.aplicacion import aportes, publicador_actual, ruteo, taxonomia
 from finanzas.aplicacion import libros as _libros
 from finanzas.dominio import fechas
 from finanzas.dominio import texto as _texto
@@ -260,7 +260,9 @@ def armar_payload(p):
         split['description'] = f'Préstamo · {prestamo} · {split["description"]}'[:255]
     if p['categoria']:
         split['category_name'] = p['categoria']
-    if p['presupuesto'] and tipo == 'withdrawal':
+    if taxonomia.es_inversion(p['categoria']):
+        split['tags'].append(taxonomia.ETIQUETA_INVERSION)
+    elif p['presupuesto'] and tipo == 'withdrawal':
         split['budget_name'] = p['presupuesto']
     if p['hora']:
         split['description'] = split['description']

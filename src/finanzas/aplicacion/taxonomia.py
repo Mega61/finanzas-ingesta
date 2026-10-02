@@ -61,6 +61,20 @@ PRESUPUESTO_FIJO = {
 }
 
 
+# Categorias que son inversion en un negocio (Golden, Cassis), no gasto del mes.
+# Llevan la etiqueta Inversión, que es lo que el reporte de Metabase separa de
+# lo gastado, y NINGUN presupuesto. Antes la etiqueta solo la ponia el bot
+# cuando alguien escribia «es inversion»: lo que entraba solo con la categoria
+# ya puesta (el Google Workspace de Golden, por regla) quedaba sin etiqueta y
+# Metabase lo contaba como gasto personal.
+ETIQUETA_INVERSION = 'Inversión'
+CATEGORIAS_INVERSION = {'Inversión', 'GBS Infra'}
+
+
+def es_inversion(categoria):
+    return (categoria or '').strip() in CATEGORIAS_INVERSION
+
+
 def resolver(categoria):
     """La categoria que se debe usar hoy en lugar de `categoria`.
 

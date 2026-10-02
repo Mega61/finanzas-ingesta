@@ -32,6 +32,7 @@ from finanzas.aplicacion import (
     presupuestos,
     publicador,
     ruteo,
+    taxonomia,
 )
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import intencion
@@ -466,7 +467,11 @@ def _corregir_en_firefly(cx, p, categoria, presupuesto, comercio):
     campos = {}
     if categoria:
         campos['category_name'] = categoria
-    if presupuesto:
+    inversion = taxonomia.es_inversion(categoria)
+    if inversion:
+        # Una inversion no se come ningun bucket del mes (ver INVERSION).
+        campos['budget_id'] = None
+    elif presupuesto:
         campos['budget_name'] = presupuesto
     # El nombre del comercio es la cuenta de destino de un gasto y la de origen
     # de un ingreso.
@@ -478,6 +483,8 @@ def _corregir_en_firefly(cx, p, categoria, presupuesto, comercio):
         return 'guardado'
     try:
         firefly.actualizar_split(str(p['firefly_id']), **campos)
+        if inversion:
+            firefly.agregar_etiqueta(str(p['firefly_id']), taxonomia.ETIQUETA_INVERSION)
     except firefly.ApiError as ex:
         db.bitacora(
             cx,

@@ -20,6 +20,7 @@ from datetime import timedelta
 from typing import Any
 
 from finanzas.adaptadores import firefly
+from finanzas.aplicacion import taxonomia
 from finanzas.dominio import fechas
 from finanzas.dominio import texto as _texto
 
@@ -195,6 +196,16 @@ def editar(tx_id: str, **cambios: Any) -> dict[str, Any]:
             f'el movimiento {tx_id} tiene {actual["partes"]} partes; '
             f'esos se editan en Firefly a mano'
         )
+
+    if taxonomia.es_inversion(cambios.get('categoria')):
+        # Pasar algo a una categoria de inversion la saca del mes: etiqueta
+        # Inversión y fuera el presupuesto, lo diga la orden o no.
+        etqs = cambios.get('etiquetas') or []
+        etqs = list(etqs) if isinstance(etqs, (list, tuple)) else [etqs]
+        if taxonomia.ETIQUETA_INVERSION not in etqs:
+            etqs.append(taxonomia.ETIQUETA_INVERSION)
+        cambios['etiquetas'] = etqs
+        cambios['presupuesto'] = SIN_PRESUPUESTO
 
     campos: dict[str, Any] = {}
     if cambios.get('categoria'):

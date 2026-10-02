@@ -86,3 +86,89 @@ def test_poner_un_presupuesto_sigue_mandando_el_nombre(monkeypatch):
         movimientos.editar('1', presupuesto='Esencial')
     assert visto.get('budget_name') == 'Esencial'
     assert 'budget_id' not in visto
+
+
+# --- La categoria sola ya dice que es inversion ---------------------------
+#
+# El Google Workspace y el Google Cloud de Golden entraron el 1-oct-2026 por
+# regla, con categoria GBS Infra y sin la etiqueta: Metabase los conto como
+# gasto personal. La etiqueta no puede depender de que alguien escriba
+# «inversion».
+
+from finanzas.aplicacion import publicador  # noqa: E402
+
+ALERTA = {
+    'valor': -63000.0,
+    'cuenta_firefly': 'VISA BLACK',
+    'cuenta_destino': 'Google',
+    'contraparte': 'GOOGLE *Workspace_gol',
+    'traslado_a': None,
+    'tipo': 'compra',
+    'fecha': '2026-10-01',
+    'moneda': 'COP',
+    'descripcion': 'Google Workspace_gol',
+    'external_id': 'bc-x',
+    'plantilla': 'compra_asociada',
+    'instrumento': '2567',
+    'confianza': 0.9,
+    'categoria': 'GBS Infra',
+    'presupuesto': 'Esencial',
+    'hora': None,
+}
+
+
+@pytest.mark.parametrize('categoria', ['GBS Infra', 'Inversión'])
+def test_publicar_una_inversion_pone_la_etiqueta_y_ningun_presupuesto(categoria):
+    split = publicador.armar_payload({**ALERTA, 'categoria': categoria})[
+        'transactions'
+    ][0]
+    assert 'Inversión' in split['tags']
+    assert 'sin-confirmar' in split['tags']
+    assert 'budget_name' not in split
+
+
+def test_publicar_un_gasto_normal_no_la_pone():
+    split = publicador.armar_payload({**ALERTA, 'categoria': 'Mercado'})[
+        'transactions'
+    ][0]
+    assert 'Inversión' not in split['tags']
+    assert split['budget_name'] == 'Esencial'
+
+
+def test_editar_a_gbs_infra_etiqueta_y_quita_el_presupuesto(monkeypatch):
+    visto, etiquetas = {}, []
+    monkeypatch.setattr(
+        movimientos, 'uno', lambda t: {'partes': 1, 'valor': -100.0, 'id': t}
+    )
+    monkeypatch.setattr(
+        movimientos.firefly,
+        'actualizar_split',
+        lambda tx, **campos: visto.update(campos) or True,
+    )
+    monkeypatch.setattr(
+        movimientos.firefly,
+        'agregar_etiqueta',
+        lambda tx, *e: etiquetas.extend(e) or list(e),
+    )
+    with contextlib.suppress(Exception):
+        movimientos.editar('1', categoria='GBS Infra', presupuesto='Vivir')
+    assert visto['category_name'] == 'GBS Infra'
+    assert visto['budget_id'] is None
+    assert 'budget_name' not in visto
+    assert etiquetas == ['Inversión']
+
+
+def test_corregir_desde_el_bot_a_inversion_etiqueta(monkeypatch):
+    visto, etiquetas = {}, []
+    monkeypatch.setattr(
+        bot.firefly, 'actualizar_split', lambda tx, **c: visto.update(c) or True
+    )
+    monkeypatch.setattr(
+        bot.firefly, 'agregar_etiqueta', lambda tx, *e: etiquetas.extend(e)
+    )
+    monkeypatch.setattr(bot.db, 'bitacora', lambda *a, **k: None)
+    cx = types.SimpleNamespace(commit=lambda: None)
+    p = {'firefly_id': '7', 'valor': -100.0, 'usuario_id': 1, 'id': 1}
+    bot._corregir_en_firefly(cx, p, 'GBS Infra', 'Vivir', None)
+    assert visto['budget_id'] is None
+    assert etiquetas == ['Inversión']
