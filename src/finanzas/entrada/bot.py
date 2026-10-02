@@ -16,7 +16,7 @@ import sys
 import time
 import traceback
 
-from finanzas import config
+from finanzas import config, registro
 from finanzas.adaptadores import db, firefly, ia, telegram
 from finanzas.adaptadores.almacen import Almacen
 from finanzas.aplicacion import (
@@ -32,6 +32,7 @@ from finanzas.aplicacion import (
     presupuestos,
     publicador,
     ruteo,
+    tablero,
     taxonomia,
 )
 from finanzas.dominio import dinero as _dinero
@@ -538,7 +539,8 @@ def _version_texto():
 # nadie los supiera. Una prueba verifica que las dos listas coincidan.
 DESCRIPCIONES = (
     ('/pendientes', 'lo que falta por clasificar'),
-    ('/resumen', 'cómo va la conciliación'),
+    ('/resumen', 'cómo vas: presupuestos, caja y lo que viene'),
+    ('/tablero', 'lo mismo que /resumen, la imagen con las gráficas'),
     ('/sinconfirmar', 'lo que está en Firefly sin confirmar'),
     ('/ultimos', 'los últimos movimientos, tocables para cambiarlos'),
     ('/listo', 'ya están bien, no me preguntes más'),
@@ -573,9 +575,38 @@ def _es_juan(cx, chat):
 
 
 def cmd_resumen(cx, chat):
+    """El resumen del dia. A Juan, el tablero con las graficas; a los demas, la
+    cola, que es lo unico que tienen mientras sus libros no esten en serio."""
     uid = _uid(cx, chat)
     if uid is None:
         return
+    if _es_juan(cx, chat):
+        try:
+            cmd_tablero(cx, chat)
+        except Exception as ex:
+            # Sin tablero, el resumen de siempre: que no llegue nada es peor.
+            registro.aviso(f'tablero: {type(ex).__name__}: {ex}')
+        else:
+            return
+    _resumen_de_la_cola(cx, chat, uid)
+
+
+def cmd_tablero(cx, chat):
+    """La imagen con presupuestos y caja proyectada, y debajo lo que viene.
+
+    Lo que falta por clasificar va al final, en una linea, y solo si hay algo:
+    antes era todo el resumen, y no decia nada de la plata.
+    """
+    t = tablero.armar()
+    texto = t.texto
+    uid = _uid(cx, chat)
+    total_preg = sum(f['n'] for f in db.resumen(cx, uid) if f['pregunta'] != 'nada')
+    if total_preg:
+        texto += f'\n\n❓ Tengo <b>{total_preg}</b> por preguntarte. /pendientes'
+    telegram.enviar_foto(chat, t.imagen, texto)
+
+
+def _resumen_de_la_cola(cx, chat, uid):
     filas = db.resumen(cx, uid)
     if not filas:
         telegram.enviar(chat, 'Todo al día. No hay nada abierto. ✅')
@@ -2445,6 +2476,11 @@ COMANDOS = {
     '/ayuda': _cmd_ayuda,
     '/pendientes': _cmd_pendientes,
     '/resumen': _cmd_resumen,
+    '/tablero': lambda cx, chat, _texto: (
+        cmd_tablero(cx, chat)
+        if _es_juan(cx, chat)
+        else telegram.enviar(chat, 'El tablero todavía es solo de Juan.')
+    ),
     '/sinconfirmar': _cmd_sinconfirmar,
     '/version': _cmd_version,
     '/presupuestos': _cmd_presupuestos,

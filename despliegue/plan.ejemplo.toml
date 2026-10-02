@@ -1,0 +1,45 @@
+# Plan de caja: lo que va a entrar y salir, para que el resumen diario proyecte
+# la cuenta. Copialo a plan.toml en la raiz del repo (no se sube) y llenalo.
+# `python herramientas/generar_variables.py` lo convierte en PLAN_JSON.
+
+cuenta = "Bancolombia"     # la caja que se proyecta (nombre de la cuenta en Firefly)
+reserva = "Ahorros"        # de donde se saca si no alcanza
+colchon = 500000           # por debajo de esto, el resumen avisa
+horizonte_dias = 60
+
+[[ingreso]]
+concepto = "Quincena 1"
+dia = 15                   # cada mes; un sabado o domingo se corre al viernes
+monto = 4000000
+
+[[ingreso]]
+concepto = "Quincena 2"
+dia = 30
+monto = 3800000
+
+[[compromiso]]
+concepto = "Arriendo"
+dia = 23
+monto = 2500000            # medio por defecto: la cuenta
+
+[[compromiso]]
+concepto = "Algo de una sola vez"
+fecha = 2026-11-10
+monto = 600000
+medio = "MASTERCARD"       # por tarjeta: sale de la cuenta el dia de pago
+
+[[tarjeta]]
+nombre = "MASTERCARD"      # nombre de la tarjeta en Firefly
+corte = 30
+pago = 19
+gasto_diario = 80000       # lo que se espera pasar por ella cada dia
+
+[[tarjeta]]
+nombre = "VISA"
+corte = 15
+pago = 5
+
+  [tarjeta.sin_interes]    # compras a 0% que se dejan correr
+  saldo = 4000000          # lo que faltaba por facturar...
+  al = 2026-10-02          # ...en esta fecha
+  cuota = 250000           # lo que se factura en cada corte

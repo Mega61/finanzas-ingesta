@@ -8,11 +8,13 @@ tests/unidad/test_telegram_contrato.py, que existe porque ya paso dos veces.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any
 
 from finanzas import config, registro
@@ -116,6 +118,54 @@ def enviar(
     }
     _poner_botones(payload, botones)
     return _con_respaldo_plano('sendMessage', payload)
+
+
+# El pie de una foto se corta aqui; un mensaje de texto aguanta 4096.
+TOPE_PIE_DE_FOTO = 1024
+
+
+def enviar_foto(
+    chat_id: str | int, png: bytes, pie: str = '', modo: str = 'HTML'
+) -> dict[str, Any]:
+    """Manda una imagen con su pie de foto.
+
+    sendPhoto no acepta la imagen en JSON: va como multipart/form-data, que
+    urllib no arma solo. Si el pie no cabe, la foto va sola y el texto detras,
+    como mensaje aparte: recortarlo dejaria la conclusion -- que va al final --
+    por fuera.
+    """
+    caben = len(pie) <= TOPE_PIE_DE_FOTO
+    campos = {'chat_id': str(chat_id)}
+    if pie and caben:
+        campos.update(caption=pie, parse_mode=modo)
+    frontera = f'----finanzas{uuid.uuid4().hex}'
+    cuerpo = io.BytesIO()
+    for nombre, valor in campos.items():
+        cuerpo.write(
+            f'--{frontera}\r\nContent-Disposition: form-data; name="{nombre}"'
+            f'\r\n\r\n{valor}\r\n'.encode()
+        )
+    cuerpo.write(
+        f'--{frontera}\r\nContent-Disposition: form-data; name="photo"; '
+        f'filename="tablero.png"\r\nContent-Type: image/png\r\n\r\n'.encode()
+    )
+    cuerpo.write(png)
+    cuerpo.write(f'\r\n--{frontera}--\r\n'.encode())
+    req = urllib.request.Request(
+        f'{API}/bot{_token()}/sendPhoto', data=cuerpo.getvalue(), method='POST'
+    )
+    req.add_header('Content-Type', f'multipart/form-data; boundary={frontera}')
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            res = json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as ex:
+        detalle = ex.read().decode('utf-8', 'replace')
+        raise TelegramError(f'HTTP {ex.code} en sendPhoto: {detalle[:300]}') from None
+    if not res.get('ok'):
+        raise TelegramError(f'sendPhoto: {res.get("description")}')
+    if pie and not caben:
+        enviar(chat_id, pie, modo=modo)
+    return res.get('result')
 
 
 def _poner_botones(payload: dict[str, Any], botones: Botones | None) -> None:

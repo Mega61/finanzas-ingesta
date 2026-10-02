@@ -129,6 +129,10 @@ services:
       # JSON. Lo genera `python herramientas/generar_variables.py personas`.
       PERSONAS_JSON: ${PERSONAS_JSON:-}
       PERSONAS_TOML: ${PERSONAS_TOML:-}
+      # El plan de caja del resumen diario: plan.toml en UNA linea de JSON.
+      # Lo genera `python herramientas/generar_variables.py`.
+      PLAN_JSON: ${PLAN_JSON:-}
+      PLAN_TOML: ${PLAN_TOML:-}
       # Los secretos que esa configuracion nombra. Van uno por uno porque el
       # contenedor solo ve lo que se le pasa aqui.
       FIREFLY_TOKEN_NOVIA: ${FIREFLY_TOKEN_NOVIA:-}

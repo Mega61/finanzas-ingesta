@@ -58,6 +58,9 @@ INTOCABLES = {
 # Presupuesto que el usuario definio a mano para ciertas categorias.
 PRESUPUESTO_FIJO = {
     'Suplementos': 'Vivir',
+    # La mudanza de oct-nov 2026 tiene su propio presupuesto: el contrato, el
+    # trasteo y el aseo de entrega no son gasto de ningun mes normal.
+    'Mudanza': 'Mudanza',
 }
 
 

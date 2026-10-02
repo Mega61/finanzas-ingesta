@@ -128,6 +128,22 @@ def personas_en_una_linea():
     return texto
 
 
+def plan_en_una_linea():
+    """plan.toml -> una linea de JSON. Las fechas de TOML no son JSON: van
+    como texto ISO, que es lo que el plan sabe leer."""
+    import tomllib
+
+    ruta = config.ruta_proyecto('plan.toml')
+    if not os.path.exists(ruta):
+        return config.get('PLAN_JSON')
+    with open(ruta, 'rb') as fh:
+        datos = tomllib.load(fh)
+    texto = json.dumps(datos, ensure_ascii=False, separators=(',', ':'), default=str)
+    if '$' in texto:
+        sys.exit('ERROR: PLAN_JSON tiene un $: Portainer lo interpolaria')
+    return texto
+
+
 # De donde sale cada valor que no es un simple config.get(). Lo que no este
 # aqui se lee de la configuracion con su propio nombre.
 ESPECIALES = {
@@ -145,6 +161,8 @@ ESPECIALES = {
     'PERSONAS_JSON': personas_en_una_linea,
     # El TOML ocupa varias lineas y Portainer lo partiria: no va.
     'PERSONAS_TOML': lambda: None,
+    'PLAN_JSON': plan_en_una_linea,
+    'PLAN_TOML': lambda: None,
     # La imagen de la ingesta; por defecto la del stack.
     'IMAGEN': lambda: None,
 }
