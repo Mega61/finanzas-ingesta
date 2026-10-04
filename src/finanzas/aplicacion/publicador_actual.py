@@ -28,6 +28,8 @@ from finanzas.dominio import fechas
 # contra extractos, con un piso de un peso.
 TOLERANCIA = 0.01
 DIAS = 2
+# Cuantos dias despues de la transferencia puede aparecer su venta.
+VENTA_DESPUES = 3
 
 
 def _parece(a: int, b: int) -> bool:
@@ -53,8 +55,10 @@ def venta_de_agendapro(cliente: actual.Cliente, p: Any) -> dict[str, Any] | None
     """La venta de Agendapro que es esta transferencia, si hay UNA sola.
 
     Mismo monto exacto -- la clienta transfiere lo que se le cobro, con la
-    propina incluida, y eso es lo que Agendapro sube -- y el mismo dia o el
-    siguiente. Con dos candidatas no se elige: se pregunta.
+    propina incluida, y eso es lo que Agendapro sube -- desde el dia anterior
+    hasta VENTA_DESPUES dias despues: la que paga el sabado queda en Agendapro
+    el lunes (el extracto de septiembre tiene varias). Con dos candidatas no se
+    elige: se pregunta.
     """
     cuenta = cliente.cuenta_id(p['cuenta_firefly'])
     f = fechas.a_fecha(p['fecha'])
@@ -64,7 +68,7 @@ def venta_de_agendapro(cliente: actual.Cliente, p: Any) -> dict[str, Any] | None
     candidatas = [
         t
         for t in cliente.transacciones(
-            cuenta, f - timedelta(days=1), f + timedelta(days=1)
+            cuenta, f - timedelta(days=1), f + timedelta(days=VENTA_DESPUES)
         )
         if str(t.get('imported_id') or '').startswith('agendapro-tx:')
         and t.get('amount') == monto
