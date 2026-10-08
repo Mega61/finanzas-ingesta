@@ -331,6 +331,13 @@ def _preguntar_categoria(cx: Any, p: Any, chat: Any) -> None:
     _enviar(cx, chat, p, describir(cx, p) + pie, botones)
 
 
+def _la_venta(venta: dict[str, Any]) -> str:
+    """La venta de Agendapro como la escribio el CRM: la clienta y el servicio
+    van primero en la nota («Monica Jaramillo · Tradicional pies · Venta 1129 ·
+    transferencia»); las que subieron antes de eso solo dicen «Venta N»."""
+    return f'💈 <b>{_e(venta.get("notes") or "Venta")}</b> · {_e(venta.get("date"))}'
+
+
 def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
     """Una transferencia que entra al estudio casi siempre es una clienta, y
     Agendapro ya la subio como venta. Se pregunta antes que la categoria."""
@@ -342,8 +349,9 @@ def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
     if venta:
         texto = (
             describir(cx, p)
-            + f'\n\nEn Agendapro hay una venta igual: <b>{_e(venta.get("notes") or "venta")}</b>'
-            f' del {_e(venta.get("date"))}.\n\n<b>¿Es esa venta?</b>'
+            + '\n\nEn Agendapro hay una venta igual:\n'
+            + _la_venta(venta)
+            + '\n\n<b>¿Es esa venta?</b>'
             '\n<i>Si es, no agrego nada: ya está en el libro.</i>'
         )
         botones = [
@@ -863,6 +871,8 @@ def toque_venta(t: Any) -> None:
         t.aviso('enlazada')
         t.reemplazar(
             '✅ Es la venta de Agendapro: no agregué nada.\n'
+            + _la_venta(venta)
+            + '\n\n'
             + describir(t.cx, alm.pendiente(t.pid))
         )
         return None
@@ -1154,6 +1164,8 @@ def revisar_ventas_en_espera(cx: Any) -> int:
                 telegram.enviar(
                     chat,
                     '✅ Ya apareció en Agendapro, la enlacé.\n'
+                    + _la_venta(venta)
+                    + '\n\n'
                     + describir(cx, alm.pendiente(p['id'])),
                 )
             continue
