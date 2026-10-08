@@ -151,6 +151,51 @@ def siguiente(cx: Any, pendiente_id: int, chat: Any) -> None:
     return _publicar(cx, p['id'], chat)
 
 
+def _es_una_venta(lb: Any, p: Any) -> bool:
+    """Plata que entra al estudio como «Servicios»: es una venta, y las ventas
+    las escribe Agendapro. Si el bot tambien la escribiera, contaria doble en
+    cuanto Agendapro la suba (pasó con Angel y Verónica)."""
+    return bool(
+        lb
+        and lb['tipo'] == 'actual'
+        and float(p['valor']) > 0
+        and p['categoria'] == 'Servicios'
+        and not p['pago_libro_id']
+        and not prestamos.es_prestamo(p)
+    )
+
+
+def _la_escribe_agendapro(cx: Any, p: Any, chat: Any) -> None:
+    """Una venta no se escribe: se enlaza con la de Agendapro si ya esta, y si
+    no, se espera a que ella la registre alla."""
+    alm = _a(cx)
+    lb = alm.libro(p['libro_id'])
+    try:
+        venta = publicador_actual.venta_de_agendapro(
+            libros.cliente(lb), p, alm.ventas_ya_enlazadas(p)
+        )
+    except (libros.LibroNoDisponible, actual.ApiError):
+        venta = None
+    if venta:
+        publicador_actual.enlazar_con(cx, p, venta, 'venta_agendapro')
+        telegram.enviar(
+            chat,
+            '✅ Es la venta de Agendapro: no agregué nada.\n'
+            + _la_venta(venta)
+            + '\n\n'
+            + describir(cx, alm.pendiente(p['id'])),
+        )
+        return
+    alm.actualizar_pendiente(p['id'], pregunta=None, decidido_por='espera_agendapro')
+    cx.commit()
+    telegram.enviar(
+        chat,
+        '💈 Las ventas las escribe Agendapro, así no se cuentan dos veces. '
+        'Si no está registrada, regístrala allá; cuando aparezca, la enlazo.\n'
+        + describir(cx, alm.pendiente(p['id'])),
+    )
+
+
 def preguntar(cx: Any, p: Any, chat: Any) -> bool:
     """Lo que usa la ingesta para las preguntas abiertas de esta persona."""
     try:
@@ -437,6 +482,9 @@ def _preguntar_parecido(cx: Any, p: Any, chat: Any) -> None:
 def _publicar(
     cx: Any, pendiente_id: int, chat: Any, aunque_se_parezca: bool = False
 ) -> None:
+    p = _a(cx).pendiente(pendiente_id)
+    if p is not None and _es_una_venta(_a(cx).libro(p['libro_id']), p):
+        return _la_escribe_agendapro(cx, p, chat)
     accion, detalle = publicador.publicar_en_su_libro(
         cx, pendiente_id, aunque_se_parezca
     )
