@@ -13,13 +13,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import urllib.parse
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from finanzas.adaptadores import actual, db, firefly
 from finanzas.adaptadores.almacen import Almacen
 from finanzas.aplicacion import personas, publicador, ruteo
+from finanzas.dominio import fechas
 from finanzas.entrada import bot, bot_libros
 
 JUAN, ELLA = '555', '777'
@@ -407,18 +408,32 @@ class TestLaAlertaPreguntaElLibroAntesDeTodo:
         assert len(act.creadas) == 2 and act.creadas[1]['category'] == 'cat-ins'
 
 
+def _venta(id_, fecha, monto, notas):
+    """Una venta como la sube el CRM a Actual."""
+    return {
+        'id': id_,
+        'account': 'acc-banc',
+        'date': str(fecha),
+        'amount': int(monto * 100),
+        'imported_id': f'agendapro-tx:{id_}',
+        'notes': notas,
+    }
+
+
 class TestLaVentaDeAgendapro:
-    def _transferencia(self, alm, ella):
+    def _transferencia(
+        self, alm, ella, fecha=date(2026, 9, 23), valor=40000.0, eid='a9'
+    ):
         return _alerta(
             alm,
             ella,
-            'a9',
+            eid,
             tipo='transferencia_entrada',
-            valor=40000.0,
+            valor=valor,
             instrumento='5788',
             clase_instrumento='cuenta',
             contraparte='JERONIMO RUIZ HENAO',
-            fecha=date(2026, 9, 23),
+            fecha=fecha,
         )
 
     def test_si_ya_esta_en_agendapro_se_enlaza_sin_escribir(self, mundo):
@@ -452,7 +467,8 @@ class TestLaVentaDeAgendapro:
 
     def test_si_todavia_no_esta_se_espera_y_no_se_publica(self, mundo):
         alm, tg, _ff, act, _juan, ella = mundo
-        pid = self._transferencia(alm, ella)
+        ayer = fechas.hoy() - timedelta(days=1)
+        pid = self._transferencia(alm, ella, fecha=ayer)
         _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
         _toque(alm, f'va:{pid}:2')
         publicador.publicar_pendientes(alm.cx, dry_run=False)
@@ -462,7 +478,7 @@ class TestLaVentaDeAgendapro:
             {
                 'id': 'ag-2',
                 'account': 'acc-banc',
-                'date': '2026-09-23',
+                'date': str(ayer),
                 'amount': 4000000,
                 'imported_id': 'agendapro-tx:9',
                 'notes': 'Laura Gómez · Retoque · Venta 9 · transferencia',
@@ -472,6 +488,70 @@ class TestLaVentaDeAgendapro:
         assert 'Laura Gómez · Retoque' in tg.ultimo()[1], 'el aviso dice de quien era'
         assert alm.pendiente(pid)['firefly_id'] == 'ag-2'
         assert act.creadas == []
+
+    def test_sin_venta_igual_ella_elige_una_cercana(self, mundo):
+        """Lo de Dayana: la venta esta en Agendapro, pero no igual (otro monto
+        u otro dia). Antes solo podia decir «espera» y el bot volvia a
+        preguntar; ahora la ve y la toca."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        act.tx.append(
+            _venta(
+                'ag-d',
+                date(2026, 9, 27),
+                100000,
+                'Dayana Vargas · Semipermanente pies y manos · Venta 1163 · transferencia',
+            )
+        )
+        pid = self._transferencia(alm, ella, valor=105000.0)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
+        botones = [b[0] for b in tg.botones()]
+        assert any('Dayana Vargas' in b for b in botones), botones
+        assert not any('todavía no está' in b for b in botones), 'vieja: no se espera'
+        _toque(alm, f'vc:{pid}:0')
+        p = alm.pendiente(pid)
+        assert (p['estado'], p['firefly_id']) == ('publicado', 'ag-d')
+        assert act.creadas == []
+        assert 'llegaron' in tg.editados[-1][1], 'avisa que el monto no cuadra'
+
+    def test_una_venta_ya_enlazada_no_se_vuelve_a_ofrecer(self, mundo):
+        alm, tg, _ff, act, _juan, ella = mundo
+        act.tx.append(
+            _venta('ag-1', date(2026, 9, 23), 40000, 'Ana · Retoque · Venta 1')
+        )
+        estudio = _libro(alm, ella, 'estudio')
+        primera = self._transferencia(alm, ella)
+        _toque(alm, f'ld:{primera}:{estudio}')
+        _toque(alm, f'va:{primera}:1')
+        segunda = self._transferencia(alm, ella, eid='a10')
+        _toque(alm, f'ld:{segunda}:{estudio}')
+        assert '¿Es esa venta?' not in tg.ultimo()[1]
+        assert not any('Ana' in b[0] for b in tg.botones())
+
+    def test_la_espera_vencida_pregunta_una_vez_y_sin_volver_a_esperar(self, mundo):
+        """El bucle: la espera contaba desde la transferencia, asi que una
+        vieja vencia en la pasada siguiente, y la pregunta volvia a ofrecer
+        «espera»."""
+        alm, tg, _ff, _act, _juan, ella = mundo
+        ayer = fechas.hoy() - timedelta(days=1)
+        pid = self._transferencia(alm, ella, fecha=ayer)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
+        _toque(alm, f'va:{pid}:2')
+        enviados = len(tg.enviados)
+        bot_libros.revisar_ventas_en_espera(alm.cx)
+        assert len(tg.enviados) == enviados, 'recien dijo espera: no se pregunta'
+
+        hace = fechas.hoy() - timedelta(days=bot_libros.DIAS_DE_ESPERA + 1)
+        alm.cx.execute(
+            'UPDATE pendientes SET fecha = ?, actualizado_en = ? WHERE id = ?',
+            (str(hace), str(hace), pid),
+        )
+        bot_libros.revisar_ventas_en_espera(alm.cx)
+        assert 'no apareció' in tg.enviados[-2][1]
+        assert not any('todavía no está' in b[0] for b in tg.botones())
+        # un boton viejo de «espera» tampoco la vuelve a meter en la espera
+        _toque(alm, f'va:{pid}:2')
+        assert alm.pendiente(pid)['decidido_por'] != 'espera_agendapro'
+        assert alm.en_espera_de_agendapro() == []
 
 
 class TestLoParecido:

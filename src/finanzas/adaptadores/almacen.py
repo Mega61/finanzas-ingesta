@@ -643,6 +643,19 @@ class Almacen:
             (usuario_id, libro_id),
         ).fetchall()
 
+    def ventas_ya_enlazadas(self, p: Any) -> set[str]:
+        """Las transacciones del libro de `p` que ya son de OTRO movimiento:
+        una venta de Agendapro que ya se enlazo con una transferencia no puede
+        ser tambien la de esta."""
+        return {
+            r['firefly_id']
+            for r in self.cx.execute(
+                """SELECT firefly_id FROM pendientes
+                   WHERE libro_id = ? AND id != ? AND firefly_id IS NOT NULL""",
+                (p['libro_id'], p['id']),
+            )
+        }
+
     def en_espera_de_agendapro(self) -> list[sqlite3.Row]:
         """Las transferencias que son de una clienta y esperan a que Agendapro
         suba la venta, con el chat de su persona."""

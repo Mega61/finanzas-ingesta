@@ -338,12 +338,44 @@ def _la_venta(venta: dict[str, Any]) -> str:
     return f'💈 <b>{_e(venta.get("notes") or "Venta")}</b> · {_e(venta.get("date"))}'
 
 
+def _quien(venta: dict[str, Any]) -> str:
+    """El boton de una venta: clienta y servicio sin el metodo de pago, que en
+    un boton no cabe y no ayuda a reconocerla."""
+    partes = [
+        x
+        for x in (venta.get('notes') or 'Venta').split(' · ')
+        if x not in ('transferencia', 'efectivo', 'otro')
+    ]
+    fecha = str(venta.get('date') or '')[5:]
+    return f'💈 {" · ".join(partes)[:40]} · {_plata(venta.get("amount", 0) / 100)} · {fecha}'
+
+
+def _puede_esperar(p: Any) -> bool:
+    """Esperar a Agendapro solo tiene sentido con una transferencia reciente y
+    una sola vez: si ya se espero y no aparecio, ofrecerlo de nuevo es el
+    bucle en el que ella contestaba lo mismo cada pocos minutos."""
+    f = fechas.a_fecha(p['fecha'])
+    return (
+        p['decidido_por'] != 'espera_vencida'
+        and f is not None
+        and (fechas.hoy() - f).days < DIAS_DE_ESPERA
+    )
+
+
 def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
     """Una transferencia que entra al estudio casi siempre es una clienta, y
-    Agendapro ya la subio como venta. Se pregunta antes que la categoria."""
+    Agendapro ya la subio como venta. Se pregunta antes que la categoria.
+
+    Con una venta igual, se propone esa. Sin ella, se muestran las ventas de
+    esos dias para que ella elija: la clienta pudo pagar distinto de lo
+    cobrado, la venta pudo quedar otro dia, o pudo haber dos del mismo valor.
+    """
+    alm = _a(cx)
     try:
         cliente = libros.cliente(lb)
-        venta = publicador_actual.venta_de_agendapro(cliente, p)
+        ya = alm.ventas_ya_enlazadas(p)
+        venta = publicador_actual.venta_de_agendapro(cliente, p, ya)
+        cerca = [] if venta else publicador_actual.ventas_cerca(cliente, p, ya)
     except (libros.LibroNoDisponible, actual.ApiError):
         return False
     if venta:
@@ -359,15 +391,21 @@ def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
             [('No, es otra cosa', f'va:{p["id"]}:0')],
         ]
     else:
-        texto = (
-            describir(cx, p)
-            + '\n\n¿Es el pago de una clienta?\n<i>Agendapro sube las ventas en la noche; '
-            'si es una, espero a que aparezca y la enlazo, para no contarla dos veces.</i>'
-        )
-        botones = [
-            [('💈 Sí, es de una clienta', f'va:{p["id"]}:2')],
-            [('No, es otra cosa', f'va:{p["id"]}:0')],
-        ]
+        alm.guardar_sugerencias(p['id'], [str(t['id']) for t in cerca])
+        texto = describir(cx, p) + '\n\n<b>¿Es el pago de una clienta?</b>'
+        if cerca:
+            texto += (
+                '\n<i>No hay una venta igual en Agendapro. Si es una de estas, '
+                'tócala y la enlazo:</i>'
+            )
+        botones = [[(_quien(t), f'vc:{p["id"]}:{i}')] for i, t in enumerate(cerca)]
+        if _puede_esperar(p):
+            texto += (
+                '\n<i>Agendapro sube las ventas en la noche; si todavía no está, '
+                'espero a que aparezca y la enlazo, para no contarla dos veces.</i>'
+            )
+            botones.append([('⏳ Sí, pero todavía no está', f'va:{p["id"]}:2')])
+        botones.append([('📝 No está en Agendapro', f'va:{p["id"]}:0')])
     _enviar(cx, chat, p, texto, botones)
     return True
 
@@ -863,7 +901,9 @@ def toque_venta(t: Any) -> None:
         t.aviso('entonces, la categoría')
         return _preguntar_categoria(t.cx, p, t.chat)
     lb = alm.libro(p['libro_id'])
-    venta = publicador_actual.venta_de_agendapro(libros.cliente(lb), p)
+    venta = publicador_actual.venta_de_agendapro(
+        libros.cliente(lb), p, alm.ventas_ya_enlazadas(p)
+    )
     if venta:
         publicador_actual.enlazar_con(t.cx, p, venta, 'venta_agendapro')
         alm.actualizar_pendiente(t.pid, categoria='Servicios')
@@ -876,6 +916,10 @@ def toque_venta(t: Any) -> None:
             + describir(t.cx, alm.pendiente(t.pid))
         )
         return None
+    if not _puede_esperar(p):
+        # Un boton viejo: ya se espero, o la transferencia es de hace dias.
+        t.aviso('ya no espero: elige la venta')
+        return _preguntar_categoria(t.cx, p, t.chat)
     alm.actualizar_pendiente(
         t.pid, categoria='Servicios', pregunta=None, decidido_por='espera_agendapro'
     )
@@ -883,6 +927,51 @@ def toque_venta(t: Any) -> None:
     t.aviso('espero a Agendapro')
     t.reemplazar(
         '⏳ Espero a que Agendapro la suba y la enlazo. Si en unos días no aparece, te pregunto.\n'
+        + describir(t.cx, alm.pendiente(t.pid))
+    )
+    return None
+
+
+def toque_venta_cercana(t: Any) -> None:
+    """Eligio una de las ventas de esos dias: se enlaza aunque el monto o la
+    fecha no sean iguales, y se le dice si el monto no cuadra."""
+    p = _es_suyo(t.cx, t)
+    if not p:
+        return
+    alm = _a(t.cx)
+    ids = alm.sugerencias(t.pid)
+    if t.idx >= len(ids):
+        t.aviso('esa opción ya no está')
+        return
+    lb = alm.libro(p['libro_id'])
+    venta = next(
+        (
+            v
+            for v in publicador_actual.ventas_cerca(
+                libros.cliente(lb), p, alm.ventas_ya_enlazadas(p), cuantas=50
+            )
+            if str(v['id']) == ids[t.idx]
+        ),
+        None,
+    )
+    if venta is None:
+        t.aviso('esa venta ya no está libre')
+        return _preguntar_categoria(t.cx, p, t.chat)
+    publicador_actual.enlazar_con(t.cx, p, venta, 'venta_agendapro')
+    alm.actualizar_pendiente(t.pid, categoria='Servicios')
+    t.cx.commit()
+    t.aviso('enlazada')
+    ojo = ''
+    if venta.get('amount') != actual.centavos(p['valor']):
+        ojo = (
+            f'\n⚠️ La venta dice {_plata(venta["amount"] / 100)} y llegaron '
+            f'{_plata(float(p["valor"]))}: corrígela en Agendapro si no cuadra.'
+        )
+    t.reemplazar(
+        '✅ Es la venta de Agendapro: no agregué nada.\n'
+        + _la_venta(venta)
+        + ojo
+        + '\n\n'
         + describir(t.cx, alm.pendiente(t.pid))
     )
     return None
@@ -927,6 +1016,7 @@ TOQUES = {
     'kc': toque_categoria,
     'kt': toque_escribir_categoria,
     'va': toque_venta,
+    'vc': toque_venta_cercana,
     'kp': toque_parecido,
 }
 
@@ -1143,17 +1233,29 @@ def _registrar(
 DIAS_DE_ESPERA = 4
 
 
+def _espera_desde(p: Any) -> Any:
+    """Desde cuando se espera: la transferencia, o el dia en que ella dijo
+    «espera» si fue despues. Contar solo desde la transferencia hacia que una
+    vieja venciera en la pasada siguiente y se preguntara otra vez de una."""
+    f = fechas.a_fecha(p['fecha'])
+    dijo = fechas.a_fecha(str(p['actualizado_en'] or '')[:10])
+    return max(d for d in (f, dijo) if d) if (f or dijo) else None
+
+
 def revisar_ventas_en_espera(cx: Any) -> int:
     """Las transferencias que la persona dijo que eran de una clienta y que
     Agendapro todavia no habia subido. Se enlazan cuando aparecen; si en unos
-    dias no aparecen, se le pregunta. Devuelve cuantas enlazo."""
+    dias no aparecen, se le pregunta UNA vez mas, ya sin la opcion de esperar.
+    Devuelve cuantas enlazo."""
     alm = _a(cx)
     enlazadas = 0
     for p in alm.en_espera_de_agendapro():
         lb = alm.libro(p['libro_id'])
         chat = p['telegram_chat_id']
         try:
-            venta = publicador_actual.venta_de_agendapro(libros.cliente(lb), p)
+            venta = publicador_actual.venta_de_agendapro(
+                libros.cliente(lb), p, alm.ventas_ya_enlazadas(p)
+            )
         except (libros.LibroNoDisponible, actual.ApiError) as ex:
             print(f'  no pude revisar la venta de #{p["id"]}: {ex}')
             continue
@@ -1169,15 +1271,15 @@ def revisar_ventas_en_espera(cx: Any) -> int:
                     + describir(cx, alm.pendiente(p['id'])),
                 )
             continue
-        f = fechas.a_fecha(p['fecha'])
-        if f and (fechas.hoy() - f).days >= DIAS_DE_ESPERA and chat:
+        desde = _espera_desde(p)
+        if desde and (fechas.hoy() - desde).days >= DIAS_DE_ESPERA and chat:
             alm.actualizar_pendiente(
-                p['id'], decidido_por='alerta', pregunta='categoria'
+                p['id'], decidido_por='espera_vencida', pregunta='categoria'
             )
             cx.commit()
             telegram.enviar(
                 chat,
-                f'⏳ Esta transferencia lleva {DIAS_DE_ESPERA} días y no aparece en Agendapro.',
+                f'⏳ Esperé {DIAS_DE_ESPERA} días y no apareció una venta igual en Agendapro.',
             )
             siguiente(cx, p['id'], chat)
     return enlazadas
