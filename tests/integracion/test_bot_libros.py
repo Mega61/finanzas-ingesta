@@ -430,13 +430,18 @@ class TestLaVentaDeAgendapro:
                 'date': '2026-09-23',
                 'amount': 4000000,
                 'imported_id': 'agendapro-tx:51226519',
-                'notes': 'Venta 1150 · transferencia',
+                'notes': 'Marisol Pérez · Semipermanente pies · Venta 1150 · transferencia',
             }
         )
         pid = self._transferencia(alm, ella)
         _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
-        assert '¿Es esa venta?' in tg.ultimo()[1]
+        pregunta = tg.ultimo()[1]
+        assert '¿Es esa venta?' in pregunta
+        assert 'Marisol Pérez · Semipermanente pies' in pregunta, 'se ve de quien es'
         _toque(alm, f'va:{pid}:1')
+        confirmacion = tg.editados[-1][1]
+        assert 'Es la venta de Agendapro' in confirmacion
+        assert 'Marisol Pérez' in confirmacion, 'y la confirmacion dice cual enlazo'
         assert act.creadas == [], 'no se cuenta dos veces'
         p = alm.pendiente(pid)
         assert (p['estado'], p['firefly_id'], p['decidido_por']) == (
@@ -446,7 +451,7 @@ class TestLaVentaDeAgendapro:
         )
 
     def test_si_todavia_no_esta_se_espera_y_no_se_publica(self, mundo):
-        alm, _tg, _ff, act, _juan, ella = mundo
+        alm, tg, _ff, act, _juan, ella = mundo
         pid = self._transferencia(alm, ella)
         _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
         _toque(alm, f'va:{pid}:2')
@@ -460,10 +465,11 @@ class TestLaVentaDeAgendapro:
                 'date': '2026-09-23',
                 'amount': 4000000,
                 'imported_id': 'agendapro-tx:9',
-                'notes': 'Venta',
+                'notes': 'Laura Gómez · Retoque · Venta 9 · transferencia',
             }
         )
         assert bot_libros.revisar_ventas_en_espera(alm.cx) == 1
+        assert 'Laura Gómez · Retoque' in tg.ultimo()[1], 'el aviso dice de quien era'
         assert alm.pendiente(pid)['firefly_id'] == 'ag-2'
         assert act.creadas == []
 
