@@ -30,6 +30,8 @@ TOLERANCIA = 0.01
 DIAS = 2
 # Cuantos dias despues de la transferencia puede aparecer su venta.
 VENTA_DESPUES = 3
+# Cuantos dias a cada lado se muestran ventas para que ella elija.
+VENTANA_CERCA = 7
 
 
 def _parece(a: int, b: int) -> bool:
@@ -51,29 +53,62 @@ def _guardas(p: Any, libro: Any) -> tuple[str, str] | None:
     return None
 
 
-def venta_de_agendapro(cliente: actual.Cliente, p: Any) -> dict[str, Any] | None:
+def _ventas(
+    cliente: actual.Cliente, p: Any, antes: int, despues: int, excluir: set[str]
+) -> list[dict[str, Any]]:
+    cuenta = cliente.cuenta_id(p['cuenta_firefly'])
+    f = fechas.a_fecha(p['fecha'])
+    if not cuenta or not f or float(p['valor']) <= 0:
+        return []
+    return [
+        t
+        for t in cliente.transacciones(
+            cuenta, f - timedelta(days=antes), f + timedelta(days=despues)
+        )
+        if str(t.get('imported_id') or '').startswith('agendapro-tx:')
+        and t.get('id') not in excluir
+    ]
+
+
+def venta_de_agendapro(
+    cliente: actual.Cliente, p: Any, excluir: set[str] = frozenset()
+) -> dict[str, Any] | None:
     """La venta de Agendapro que es esta transferencia, si hay UNA sola.
 
     Mismo monto exacto -- la clienta transfiere lo que se le cobro, con la
     propina incluida, y eso es lo que Agendapro sube -- desde el dia anterior
     hasta VENTA_DESPUES dias despues: la que paga el sabado queda en Agendapro
     el lunes (el extracto de septiembre tiene varias). Con dos candidatas no se
-    elige: se pregunta.
+    elige: se pregunta. `excluir` son las ventas ya enlazadas con otra
+    transferencia: una venta no se cobra dos veces.
     """
-    cuenta = cliente.cuenta_id(p['cuenta_firefly'])
-    f = fechas.a_fecha(p['fecha'])
-    if not cuenta or not f or float(p['valor']) <= 0:
-        return None
     monto = actual.centavos(p['valor'])
     candidatas = [
         t
-        for t in cliente.transacciones(
-            cuenta, f - timedelta(days=1), f + timedelta(days=VENTA_DESPUES)
-        )
-        if str(t.get('imported_id') or '').startswith('agendapro-tx:')
-        and t.get('amount') == monto
+        for t in _ventas(cliente, p, 1, VENTA_DESPUES, excluir)
+        if t.get('amount') == monto
     ]
     return candidatas[0] if len(candidatas) == 1 else None
+
+
+def ventas_cerca(
+    cliente: actual.Cliente, p: Any, excluir: set[str] = frozenset(), cuantas: int = 6
+) -> list[dict[str, Any]]:
+    """Las ventas de Agendapro alrededor de la transferencia, de cualquier
+    monto, para que ella elija cuando no hay una igual: la clienta pago otra
+    cosa que lo cobrado, o la venta quedo registrada otro dia, o hay dos del
+    mismo valor. Primero las de monto mas parecido, despues las mas cercanas
+    en fecha."""
+    f = fechas.a_fecha(p['fecha'])
+    monto = actual.centavos(p['valor'])
+    ventas = _ventas(cliente, p, VENTANA_CERCA, VENTANA_CERCA, excluir)
+
+    def orden(t: dict[str, Any]) -> tuple[int, int]:
+        d = fechas.a_fecha(t.get('date'))
+        return abs((t.get('amount') or 0) - monto), abs((d - f).days) if d and f else 99
+
+    ventas.sort(key=orden)
+    return ventas[:cuantas]
 
 
 def enlazar_con(cx: Any, p: Any, transaccion: dict[str, Any], motivo: str) -> None:
