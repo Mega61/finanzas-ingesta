@@ -553,6 +553,41 @@ class TestLaVentaDeAgendapro:
         assert alm.pendiente(pid)['decidido_por'] != 'espera_agendapro'
         assert alm.en_espera_de_agendapro() == []
 
+    def test_una_venta_pagada_en_dos_transferencias(self, mundo):
+        """Dayana pago su venta de 100.000 en dos: 30.000 y 70.000. La venta
+        sigue ofreciendose hasta que lo enlazado la cubre."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        act.tx.append(
+            _venta(
+                'ag-d', date(2026, 9, 25), 100000, 'Dayana Vargas · Semi · Venta 1163'
+            )
+        )
+        estudio = _libro(alm, ella, 'estudio')
+        for eid, valor in (('a1', 30000.0), ('a2', 70000.0)):
+            pid = self._transferencia(alm, ella, valor=valor, eid=eid)
+            _toque(alm, f'ld:{pid}:{estudio}')
+            botones = [b[0] for b in tg.botones()]
+            assert any('Dayana' in b for b in botones), (eid, botones)
+            _toque(alm, f'vc:{pid}:0')
+            assert alm.pendiente(pid)['firefly_id'] == 'ag-d'
+        tercera = self._transferencia(alm, ella, valor=70000.0, eid='a3')
+        _toque(alm, f'ld:{tercera}:{estudio}')
+        assert not any('Dayana' in b[0] for b in tg.botones()), 'ya esta pagada'
+        assert act.creadas == []
+
+    def test_elegir_servicios_no_escribe_la_venta(self, mundo):
+        """Angel y Veronica: la venta no estaba aun, ella dijo «otra cosa» y
+        eligio Servicios, y el bot la escribio; esa noche Agendapro subio la
+        suya y quedo doble. Ahora espera a Agendapro."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        pid = self._transferencia(alm, ella)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
+        _toque(alm, f'va:{pid}:0')
+        _toque(alm, f'kc:{pid}:{[b[0] for b in tg.botones()].index("Servicios")}')
+        assert act.creadas == [], 'las ventas las escribe Agendapro'
+        assert alm.pendiente(pid)['decidido_por'] == 'espera_agendapro'
+        assert 'Agendapro' in tg.ultimo()[1]
+
 
 class TestLoParecido:
     def test_pregunta_si_es_el_mismo_y_no_duplica(self, mundo):

@@ -643,15 +643,17 @@ class Almacen:
             (usuario_id, libro_id),
         ).fetchall()
 
-    def ventas_ya_enlazadas(self, p: Any) -> set[str]:
-        """Las transacciones del libro de `p` que ya son de OTRO movimiento:
-        una venta de Agendapro que ya se enlazo con una transferencia no puede
-        ser tambien la de esta."""
+    def ventas_ya_enlazadas(self, p: Any) -> dict[str, float]:
+        """Cuanto ya pagaron OTROS movimientos de cada transaccion del libro de
+        `p`. Una venta se paga a veces en dos transferencias (la de Dayana:
+        30.000 y 70.000 por una de 100.000), asi que una venta enlazada sigue
+        libre hasta que lo enlazado la cubre."""
         return {
-            r['firefly_id']
+            r['firefly_id']: r['pagado']
             for r in self.cx.execute(
-                """SELECT firefly_id FROM pendientes
-                   WHERE libro_id = ? AND id != ? AND firefly_id IS NOT NULL""",
+                """SELECT firefly_id, sum(valor) AS pagado FROM pendientes
+                   WHERE libro_id = ? AND id != ? AND firefly_id IS NOT NULL
+                   GROUP BY firefly_id""",
                 (p['libro_id'], p['id']),
             )
         }
