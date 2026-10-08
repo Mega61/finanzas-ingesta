@@ -17,7 +17,9 @@ de como se usa este libro en la vida real:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import timedelta
+from types import MappingProxyType
 from typing import Any
 
 from finanzas.adaptadores import actual, db
@@ -54,8 +56,14 @@ def _guardas(p: Any, libro: Any) -> tuple[str, str] | None:
 
 
 def _ventas(
-    cliente: actual.Cliente, p: Any, antes: int, despues: int, excluir: set[str]
+    cliente: actual.Cliente,
+    p: Any,
+    antes: int,
+    despues: int,
+    pagado: Mapping[str, float],
 ) -> list[dict[str, Any]]:
+    """Las ventas de Agendapro de esos dias que todavia no estan pagadas del
+    todo por otros movimientos."""
     cuenta = cliente.cuenta_id(p['cuenta_firefly'])
     f = fechas.a_fecha(p['fecha'])
     if not cuenta or not f or float(p['valor']) <= 0:
@@ -66,12 +74,12 @@ def _ventas(
             cuenta, f - timedelta(days=antes), f + timedelta(days=despues)
         )
         if str(t.get('imported_id') or '').startswith('agendapro-tx:')
-        and t.get('id') not in excluir
+        and pagado.get(t.get('id'), 0) * 100 < (t.get('amount') or 0)
     ]
 
 
 def venta_de_agendapro(
-    cliente: actual.Cliente, p: Any, excluir: set[str] = frozenset()
+    cliente: actual.Cliente, p: Any, pagado: Mapping[str, float] = MappingProxyType({})
 ) -> dict[str, Any] | None:
     """La venta de Agendapro que es esta transferencia, si hay UNA sola.
 
@@ -79,20 +87,23 @@ def venta_de_agendapro(
     propina incluida, y eso es lo que Agendapro sube -- desde el dia anterior
     hasta VENTA_DESPUES dias despues: la que paga el sabado queda en Agendapro
     el lunes (el extracto de septiembre tiene varias). Con dos candidatas no se
-    elige: se pregunta. `excluir` son las ventas ya enlazadas con otra
-    transferencia: una venta no se cobra dos veces.
+    elige: se pregunta. `pagado` es lo que otras transferencias ya pagaron de
+    cada venta: una venta ya pagada no se cobra dos veces.
     """
     monto = actual.centavos(p['valor'])
     candidatas = [
         t
-        for t in _ventas(cliente, p, 1, VENTA_DESPUES, excluir)
+        for t in _ventas(cliente, p, 1, VENTA_DESPUES, pagado)
         if t.get('amount') == monto
     ]
     return candidatas[0] if len(candidatas) == 1 else None
 
 
 def ventas_cerca(
-    cliente: actual.Cliente, p: Any, excluir: set[str] = frozenset(), cuantas: int = 6
+    cliente: actual.Cliente,
+    p: Any,
+    pagado: Mapping[str, float] = MappingProxyType({}),
+    cuantas: int = 6,
 ) -> list[dict[str, Any]]:
     """Las ventas de Agendapro alrededor de la transferencia, de cualquier
     monto, para que ella elija cuando no hay una igual: la clienta pago otra
@@ -101,7 +112,7 @@ def ventas_cerca(
     en fecha."""
     f = fechas.a_fecha(p['fecha'])
     monto = actual.centavos(p['valor'])
-    ventas = _ventas(cliente, p, VENTANA_CERCA, VENTANA_CERCA, excluir)
+    ventas = _ventas(cliente, p, VENTANA_CERCA, VENTANA_CERCA, pagado)
 
     def orden(t: dict[str, Any]) -> tuple[int, int]:
         d = fechas.a_fecha(t.get('date'))
