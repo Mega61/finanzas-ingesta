@@ -985,6 +985,60 @@ class Almacen:
             'SELECT * FROM propuestas WHERE pendiente_id = ?', (pendiente_id,)
         ).fetchone()
 
+    # ------------------------------- la conversacion sobre un movimiento
+
+    def agregar_turno(self, pendiente_id: int, rol: str, texto_: str) -> None:
+        self.cx.execute(
+            'INSERT INTO dialogos (pendiente_id, rol, texto) VALUES (?, ?, ?)',
+            (pendiente_id, rol, texto_),
+        )
+        self.cx.commit()
+
+    def turnos(self, pendiente_id: int, limite: int = 12) -> list[tuple[str, str]]:
+        """Los ultimos `limite` turnos del hilo, del mas viejo al mas nuevo."""
+        filas = self.cx.execute(
+            """SELECT rol, texto FROM dialogos WHERE pendiente_id = ?
+               ORDER BY id DESC LIMIT ?""",
+            (pendiente_id, limite),
+        ).fetchall()
+        return [(f['rol'], f['texto']) for f in reversed(filas)]
+
+    def cerrar_dialogo(self, pendiente_id: int) -> None:
+        """El hilo y la lectura de un movimiento ya resuelto."""
+        self.cx.execute('DELETE FROM dialogos WHERE pendiente_id = ?', (pendiente_id,))
+        self.cx.execute('DELETE FROM lecturas WHERE pendiente_id = ?', (pendiente_id,))
+        self.cx.commit()
+
+    def guardar_lectura(self, pendiente_id: int, lectura: str) -> None:
+        self.cx.execute(
+            'INSERT OR REPLACE INTO lecturas (pendiente_id, lectura) VALUES (?, ?)',
+            (pendiente_id, lectura),
+        )
+        self.cx.commit()
+
+    def lectura(self, pendiente_id: int) -> str | None:
+        r = self.cx.execute(
+            'SELECT lectura FROM lecturas WHERE pendiente_id = ?', (pendiente_id,)
+        ).fetchone()
+        return r['lectura'] if r else None
+
+    def guardar_nota(self, usuario_id: int, clave: str, nota: str) -> None:
+        """Pisa lo anterior: lo ultimo que conto es lo que vale."""
+        self.cx.execute(
+            """INSERT INTO notas (usuario_id, clave, nota) VALUES (?, ?, ?)
+               ON CONFLICT (usuario_id, clave) DO UPDATE SET
+                  nota = excluded.nota, puesta_en = datetime('now')""",
+            (usuario_id, clave, nota),
+        )
+        self.cx.commit()
+
+    def nota(self, usuario_id: int, clave: str) -> str | None:
+        r = self.cx.execute(
+            'SELECT nota FROM notas WHERE usuario_id = ? AND clave = ?',
+            (usuario_id, clave),
+        ).fetchone()
+        return r['nota'] if r else None
+
     # ----------------------------------- categoria -> presupuesto, a mano
 
     def fijar_presupuesto_de_categoria(self, categoria: str, presupuesto: str) -> None:

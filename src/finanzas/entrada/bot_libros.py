@@ -46,6 +46,7 @@ from finanzas.aplicacion import (
 from finanzas.dominio import contado as _contado
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import fechas
+from finanzas.entrada import bot_conversacion
 
 MAX_CATEGORIAS = 12
 EMOJI = {'firefly': '📒', 'actual': '💅'}
@@ -1084,6 +1085,12 @@ def manejar_mensaje(cx: Any, chat: Any, msg: dict[str, Any]) -> None:
         return _comando(cx, chat, u, texto)
 
     respondiendo = (msg.get('reply_to_message') or {}).get('message_id')
+    # Viene hablando de un movimiento y escribio sin responder al mensaje: es
+    # la respuesta a la pregunta de vuelta. Si el modelo dice que no habla de
+    # eso, sigue como un mensaje cualquiera.
+    pid = bot_conversacion.hilo_abierto(chat, texto) if not respondiendo else None
+    if pid and _conversar(cx, chat, pid, texto):
+        return None
     if texto and not respondiendo and respuesta_sin_responder(cx, chat, texto):
         return None
     if texto and respondiendo:
@@ -1138,9 +1145,89 @@ def _comando(cx: Any, chat: Any, u: Any, texto: str) -> None:
     telegram.enviar(chat, AYUDA)
 
 
+def _conversar(cx: Any, chat: Any, pid: int, texto: str) -> bool:
+    """La IA lee la respuesta primero, sea a la pregunta del libro o a la de
+    la categoria: «eso es del estudio, son esmaltes» contesta las dos. False si
+    no le toca, y sigue el camino de los botones."""
+    alm = _a(cx)
+    p = alm.pendiente(pid)
+    u = alm.usuario_por_chat(chat)
+    if p is None or u is None or p['usuario_id'] != u['id']:
+        return False
+    if p['estado'] not in ('nuevo', 'error') or p['pregunta'] not in (
+        'destino',
+        'categoria',
+    ):
+        return False
+    posibles = (
+        [alm.libro(p['libro_id'])] if p['libro_id'] else ruteo.libros_posibles(alm, p)
+    )
+    libros_ = []
+    for lb in posibles:
+        try:
+            cats = _categorias(cx, p, lb)
+        except (libros.LibroNoDisponible, actual.ApiError, firefly.ApiError):
+            continue
+        libros_.append({'id': lb['id'], 'nombre': lb['nombre'], 'categorias': cats})
+    return bot_conversacion.conversar(
+        cx, chat, p, texto, libros_, con_prestamos=not p['pago_libro_id']
+    )
+
+
+def aplicar_lectura(t: Any, p: Any, lec: dict[str, Any], siempre: bool) -> bool:
+    """Lo que la IA entendio y ella confirmo, por el mismo recorrido de los
+    botones: el libro, y despues el prestamo, la categoria o la nueva. Con
+    `siempre` falso la categoria no se aprende como regla."""
+    cx, chat, pid = t.cx, t.chat, t.pid
+    if not _abierto(cx, pid, chat):
+        return False
+    alm = _a(cx)
+    if lec['libro_id'] and not p['libro_id']:
+        try:
+            p = ruteo.elegir_destino(alm, pid, lec['libro_id'])
+        except ruteo.SinCuenta:
+            telegram.enviar(
+                chat,
+                f'No tengo configurada la cuenta de <b>{_e(p["instrumento"] or "este medio")}</b> '
+                f'en {_e(lec["libro"])}. Dile a Juan que la agregue, o elige otro libro.',
+            )
+            return False
+        except ValueError:
+            t.aviso('ese libro no es tuyo')
+            return False
+    t.reemplazar(describir(cx, p) + '\n<i>✅ Confirmado</i>')
+    if lec['prestamo_con']:
+        _es_prestamo_con(cx, pid, chat, lec['prestamo_con'])
+        return True
+    if lec['categoria']:
+        grupo = _grupo_por_crear(cx, p, lec['categoria'])
+        if siempre:
+            ruteo.elegir_categoria(alm, pid, lec['categoria'])
+        else:
+            alm.actualizar_pendiente(
+                pid,
+                categoria=lec['categoria'],
+                pregunta=None,
+                decidido_por='usuario',
+                prestamo_con=None,
+            )
+        alm.actualizar_pendiente(pid, categoria_grupo=grupo)
+        cx.commit()
+        _publicar(cx, pid, chat)
+        return True
+    if lec['categoria_nueva']:
+        _crear_categoria(cx, pid, chat, lec['categoria_nueva'])
+        return True
+    # Solo dijo el libro: la categoria, por el camino de siempre.
+    siguiente(cx, pid, chat)
+    return True
+
+
 def _respuesta_escrita(cx: Any, chat: Any, pid: int, texto: str) -> None:
     p = _a(cx).pendiente(pid)
     if p is None or p['usuario_id'] != _a(cx).usuario_por_chat(chat)['id']:
+        return
+    if _conversar(cx, chat, pid, texto):
         return
     if p['pregunta'] != 'categoria' or not p['libro_id']:
         telegram.enviar(chat, 'Para eso usa los botones del mensaje, por favor.')

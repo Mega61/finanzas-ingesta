@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from finanzas.aplicacion import personas
-from finanzas.entrada import bot
+from finanzas.entrada import bot, bot_conversacion
 
 CHAT_DE_PRUEBA = '555'
 
@@ -28,10 +28,20 @@ def _sin_memoria_de_la_prueba_anterior():
     pruebas usan el mismo chat, asi que sin limpiar esto una prueba cambia el
     ruteo de la siguiente y el resultado depende del orden en que corran.
     """
-    for d in (bot.ULTIMO_CAMINO, bot.ULTIMO_TOCADO, bot.HISTORIAL):
+    for d in (
+        bot.ULTIMO_CAMINO,
+        bot.ULTIMO_TOCADO,
+        bot.HISTORIAL,
+        bot_conversacion.HILO,
+    ):
         d.clear()
     yield
-    for d in (bot.ULTIMO_CAMINO, bot.ULTIMO_TOCADO, bot.HISTORIAL):
+    for d in (
+        bot.ULTIMO_CAMINO,
+        bot.ULTIMO_TOCADO,
+        bot.HISTORIAL,
+        bot_conversacion.HILO,
+    ):
         d.clear()
 
 

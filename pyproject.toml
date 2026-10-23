@@ -99,6 +99,9 @@ ignore = [
 # verificar que a_instante los convierta a aware.
 "tests/*" = ["T20", "ARG"]
 "tests/unidad/test_fechas.py" = ["T20", "ARG", "DTZ001"]
+# Reusa el fixture `mundo` de test_bot_libros: importado por su nombre, que es
+# como pytest lo registra, y cada prueba lo recibe con ese mismo nombre.
+"tests/integracion/test_bot_conversacion.py" = ["T20", "ARG", "F811"]
 
 # Deuda conocida del codigo que se acaba de mover a src/, declarada aqui a la
 # vista y no escondida en un `# noqa` por linea:

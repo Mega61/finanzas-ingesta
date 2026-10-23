@@ -278,6 +278,185 @@ def interpretar(
     return d
 
 
+# ------------------------------------------ entender una respuesta hablando
+
+CONVERSAR = """Eres el bot de finanzas de una persona en Colombia, por Telegram.
+Le preguntaste por UN movimiento de su banco y te contesto con sus palabras.
+Tu trabajo es entender que quiso decir y decidir UNA de estas acciones:
+
+- proponer: ya sabes a donde va. Llenas lo que corresponda y la persona lo
+  confirma con un boton; NO se escribe nada sin su toque, asi que propone
+  cuando tengas una lectura razonable aunque no sea perfecta.
+- preguntar: te falta algo que solo ella sabe y sin eso propondrias a ciegas.
+  Haz UNA pregunta corta, concreta, en espanol colombiano informal, que se
+  pueda contestar en pocas palabras. Nunca repitas una pregunta que ya este en
+  la conversacion.
+- descartar: dice que no fue un movimiento real (rechazada, prueba, repetida).
+- nada: el mensaje NO habla de este movimiento (es otra cosa, otro tema, o
+  registra un gasto nuevo). No lo fuerces.
+
+Reglas:
+- Categorias: SOLO de la lista del libro. Si ninguna le queda y la persona
+  nombra o describe claramente una nueva, ponla en `categoria_nueva` (nombre
+  corto, con mayuscula inicial, como las demas) y deja `categoria` vacia.
+- Si la persona tiene varios libros y el movimiento no tiene libro, `libro` es
+  obligatorio para proponer. Si no se puede saber, pregunta a cual va.
+- Prestamo: si la plata sale y vuelve entre personas (le presto, le
+  devolvieron), pon `prestamo_con` con el nombre de la persona y no pongas
+  categoria. Solo si la lista de libros lo admite.
+- `nota`: lo que conto que sirve para la PROXIMA vez que aparezca esta misma
+  contraparte (quien es, para que suele ser). Una frase corta en tercera
+  persona: «Cuenta de Doña Luz, la arrendadora». Vacia si no conto nada asi.
+- `siempre`: true si lo que dijo vale para todas las veces que aparezca esta
+  contraparte («es el arriendo»); false si es algo de esta vez («esta vez fue
+  un regalo»).
+- La descripcion del banco suele venir truncada o con una pasarela pegada:
+  'MERCADO PAGO*TIERRAG' es Mercado Pago cobrando para 'TIERRAG'.
+- Lo que ya sabes de la contraparte y las compras parecidas te orientan, pero
+  lo que dice ahora la persona manda.
+- razon: una frase corta que ella va a leer para confirmar o corregir.
+- confianza: 0.9 o mas solo si fue explicita.
+"""
+
+
+def _esquema_conversar(
+    categorias: Iterable[str],
+    presupuestos: Iterable[str],
+    comercios: Iterable[str],
+    libros: Iterable[str],
+    con_prestamos: bool,
+) -> dict[str, Any]:
+    """Los enum son la red: una categoria, un presupuesto o un libro que no
+    existen no pueden salir. `categoria_nueva`, `nota` y `pregunta` son libres a
+    proposito: son justo lo que la persona aporta."""
+
+    def enum(vals):
+        return {'type': 'string', 'enum': list(vals)[:250]}
+
+    categorias, presupuestos = list(categorias), list(presupuestos)
+    comercios, libros = list(comercios), list(libros)
+    props: dict[str, Any] = {
+        'accion': enum(['proponer', 'preguntar', 'descartar', 'nada']),
+        'pregunta': {'type': 'string'},
+        'categoria_nueva': {'type': 'string'},
+        'nota': {'type': 'string'},
+        'siempre': {'type': 'boolean'},
+        'confianza': {'type': 'number'},
+        'razon': {'type': 'string'},
+    }
+    # Un enum vacio hace que la API rechace el esquema entero: solo se manda
+    # lo que tiene valores. Ver `_esquema_orden`.
+    if categorias:
+        props['categoria'] = enum(categorias)
+    if presupuestos:
+        props['presupuesto'] = enum(presupuestos)
+    if comercios:
+        props['comercio'] = enum(comercios)
+    if len(libros) > 1:
+        props['libro'] = enum(libros)
+    if con_prestamos:
+        props['prestamo_con'] = {'type': 'string'}
+    orden = (
+        'accion',
+        'libro',
+        'categoria',
+        'categoria_nueva',
+        'presupuesto',
+        'comercio',
+        'prestamo_con',
+        'pregunta',
+        'nota',
+        'siempre',
+        'confianza',
+        'razon',
+    )
+    return {
+        'type': 'object',
+        'properties': props,
+        'required': ['accion', 'siempre', 'confianza', 'razon'],
+        'propertyOrdering': [k for k in orden if k in props],
+    }
+
+
+def entender_respuesta(
+    movimiento: Mapping[str, Any],
+    hilo: list[tuple[str, str]],
+    catalogos: Mapping[str, list[str]],
+    presupuestos: Iterable[str] = (),
+    comercios: Iterable[str] = (),
+    nota: str | None = None,
+    similares: list[tuple[str, str, str]] | None = None,
+    con_prestamos: bool = False,
+) -> dict[str, Any]:
+    """Lee lo ultimo que dijo la persona en `hilo` y devuelve la decision.
+
+    movimiento: fecha, valor, moneda, contraparte, descripcion, libro (el
+                nombre, si ya tiene).
+    hilo:       [(rol, texto)], rol 'persona' o 'bot', del mas viejo al ultimo.
+    catalogos:  {nombre del libro: sus categorias}. Uno solo si el libro ya
+                esta decidido o si la persona lleva uno.
+    nota:       lo que ya se sabe de esta contraparte.
+
+    Devuelve el dict crudo del modelo. Validarlo contra lo que existe es de
+    quien llama: aqui solo se garantiza la forma.
+    """
+    m = movimiento
+    partes = [
+        'EL MOVIMIENTO',
+        f'  fecha: {m.get("fecha")}',
+        f'  monto: {m.get("valor")} {m.get("moneda") or "COP"}'
+        + ('  (entra plata)' if float(m.get('valor') or 0) > 0 else '  (sale plata)'),
+        f'  lo que dice el banco: {m.get("contraparte") or m.get("descripcion")}',
+        f'  libro: {m.get("libro") or "sin decidir"}',
+    ]
+    if nota:
+        partes += ['', f'LO QUE YA SABES DE ESTA CONTRAPARTE: {nota}']
+    if similares:
+        partes += ['', 'PARECIDOS YA CLASIFICADOS:']
+        partes += [
+            f"  '{d}' -> '{c}'" + (f" (presupuesto '{p}')" if p else '')
+            for d, c, p in similares[:12]
+        ]
+    partes += ['', 'LIBROS Y SUS CATEGORIAS:']
+    for libro, cats in catalogos.items():
+        partes.append(f'  {libro}: ' + ', '.join(cats))
+    presupuestos, comercios = list(presupuestos), list(comercios)
+    if presupuestos:
+        partes.append('PRESUPUESTOS: ' + ', '.join(sorted(presupuestos)))
+    if comercios:
+        partes.append('COMERCIOS CONOCIDOS: ' + ', '.join(sorted(comercios)[:250]))
+    partes += ['', 'LA CONVERSACION (lo ultimo es lo que acaba de decir):']
+    partes += [
+        f'  {"ELLA" if rol == "persona" else "TU"}: {texto}' for rol, texto in hilo
+    ]
+
+    todas = list(dict.fromkeys(c for cats in catalogos.values() for c in cats))
+    payload = {
+        'systemInstruction': {'parts': [{'text': CONVERSAR}]},
+        'contents': [{'role': 'user', 'parts': [{'text': '\n'.join(partes)}]}],
+        'generationConfig': _config_generacion(
+            max_salida=MAX_CORTO,
+            # decidir entre preguntar y proponer si se beneficia de pensar un
+            # poco, como entender una orden
+            thinking=THINKING_ORDENES,
+            extra={
+                'responseMimeType': 'application/json',
+                'responseSchema': _esquema_conversar(
+                    todas, presupuestos, comercios, catalogos.keys(), con_prestamos
+                ),
+            },
+        ),
+    }
+    crudo = texto_de(_llamar(payload), ' al conversar')
+    try:
+        return json.loads(crudo)
+    except json.JSONDecodeError:
+        mm = re.search(r'\{.*\}', crudo, re.S)
+        if not mm:
+            raise SinIA(f'no devolvio JSON: {crudo[:200]}') from None
+        return json.loads(mm.group(0))
+
+
 # -------------------------------------------- proponer una categoria nueva
 
 PROPONER = """Eres el que organiza las categorias de un libro de finanzas en

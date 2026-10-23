@@ -163,6 +163,56 @@ services:
     container_name: finanzas_actual_api
     hostname: actual-api
     restart: unless-stopped
+    # Se cuida solo. Despues de un apagon el puente arranco antes que la red,
+    # no pudo entrar a Actual («network-failure»), y se quedo asi: cada consulta
+    # devolvia 500 («PostError: unauthorized») hasta reiniciarlo a mano. Las
+    # ventas de Golden Beauty no se podian revisar y a ella le llegaba el error.
+    #
+    #   1. espera a que el servidor de Actual conteste antes de arrancar
+    #   2. corre el puente como HIJO y le pregunta cada 5 minutos por los
+    #      presupuestos. Tres fallas seguidas y lo mata: el contenedor sale y
+    #      `restart` lo levanta limpio.
+    #
+    # La pregunta exige que venga AL MENOS UN presupuesto, no solo un 200. El
+    # puente guarda el cliente ANTES de que termine de entrar; si esa entrada
+    # falla, nunca la reintenta y contesta `{"data":[]}` con 200 para siempre.
+    # Eso fue exactamente lo que paso.
+    #
+    # No sirve un healthcheck con `kill 1`: node corre como PID 1 sin manejar
+    # SIGTERM, y el kernel ignora esa senal. Por eso el puente va de hijo.
+    # Los `$$` son `$` para el shell: compose interpola los sencillos.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        i=0
+        until wget -q -T 10 --spider "$$ACTUAL_SERVER_URL"; do
+          i=$$((i + 1))
+          [ "$$i" -ge 60 ] && echo "Actual no contesta; arranco igual" && break
+          echo "esperando a $$ACTUAL_SERVER_URL ($$i)"
+          sleep 5
+        done
+        ./entrypoint.sh &
+        hijo=$$!
+        trap 'kill -TERM $$hijo; wait $$hijo; exit 0' TERM INT
+        sleep 120 & wait $$!
+        fallas=0
+        while kill -0 "$$hijo" 2>/dev/null; do
+          if wget -q -T 60 -O - http://localhost:5007/v1/budgets | grep -q '"id"'; then
+            fallas=0
+          else
+            fallas=$$((fallas + 1))
+            echo "el puente no contesta ($$fallas/3)"
+          fi
+          if [ "$$fallas" -ge 3 ]; then
+            echo "el puente quedo trabado: lo reinicio"
+            kill "$$hijo"
+            wait "$$hijo"
+            exit 1
+          fi
+          sleep 300 & wait $$!
+        done
+        wait "$$hijo"
     networks:
       - firefly
     volumes:
