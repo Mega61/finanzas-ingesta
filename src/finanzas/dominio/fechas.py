@@ -20,7 +20,7 @@ un dia de calendario es `date`, que no tiene zona y no la necesita.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 
 # Colombia: UTC-5 fijo, sin horario de verano.
 BOGOTA = timezone(timedelta(hours=-5), 'America/Bogota')
@@ -191,3 +191,35 @@ def dias_entre(a: date | str | None, b: date | str | None) -> int | None:
     if fa is None or fb is None:
         return None
     return abs((fa - fb).days)
+
+
+def desde_para_bajar(
+    ultimo_sync: str | None,
+    ahora_utc: datetime,
+    dias: int | None = None,
+    inicial: int = 30,
+    holgura: timedelta = timedelta(days=1),
+) -> datetime:
+    """Desde cuando pedirle correo a un buzon que filtra por fecha (Graph).
+
+    Antes, con un buzon ya sincronizado, la ventana era SIEMPRE de dos dias.
+    Con el servidor apagado seis dias por la mudanza, la primera bajada al
+    volver pidio «desde anteayer» y los cuatro dias de antes no volvieron
+    nunca: 17 movimientos, IKEA y Homecenter incluidos. Gmail no lo sufrio
+    porque va por UID.
+
+    Ahora arranca en el ultimo sync que funciono, con holgura, y nunca mira
+    menos de dos dias ni mas de `inicial`. `ultimo_sync` viene de
+    `datetime('now')` de SQLite: UTC sin zona. `dias` explicito manda.
+    """
+    if dias:
+        return ahora_utc - timedelta(days=dias)
+    tope = ahora_utc - timedelta(days=inicial)
+    if not ultimo_sync:
+        return tope
+    try:
+        ultimo = datetime.fromisoformat(str(ultimo_sync)).replace(tzinfo=UTC)
+    except ValueError:
+        return tope
+    desde = min(ultimo - holgura, ahora_utc - timedelta(days=2))
+    return max(desde, tope)

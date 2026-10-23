@@ -168,3 +168,41 @@ class TestReloj:
         for mes in (1, 4, 7, 10):
             d = datetime(2026, mes, 15, tzinfo=fechas.BOGOTA)
             assert d.utcoffset() == timedelta(hours=-5), mes
+
+
+class TestDesdeParaBajar:
+    """La ventana de Graph. Con la fija de dos dias, el apagon de la mudanza
+    (17 al 23 de octubre) perdio para siempre los correos del 17 al 20."""
+
+    AHORA = datetime(2026, 10, 23, 1, 28, tzinfo=UTC)
+
+    def test_despues_de_un_apagon_arranca_en_el_ultimo_sync(self):
+        desde = fechas.desde_para_bajar('2026-10-17 06:08:44', self.AHORA)
+        assert desde == datetime(2026, 10, 16, 6, 8, 44, tzinfo=UTC)
+        assert desde < datetime(2026, 10, 17, 16, 15, tzinfo=UTC), (
+            'el primer correo perdido entra en la ventana'
+        )
+
+    def test_en_marcha_normal_mira_al_menos_dos_dias(self):
+        hace_10_min = (self.AHORA - timedelta(minutes=10)).strftime('%Y-%m-%d %H:%M:%S')
+        assert fechas.desde_para_bajar(
+            hace_10_min, self.AHORA
+        ) == self.AHORA - timedelta(days=2)
+
+    def test_nunca_mas_atras_que_la_ventana_inicial(self):
+        desde = fechas.desde_para_bajar('2026-01-01 00:00:00', self.AHORA, inicial=30)
+        assert desde == self.AHORA - timedelta(days=30)
+
+    def test_sin_sync_previo_usa_la_ventana_inicial(self):
+        assert fechas.desde_para_bajar(
+            None, self.AHORA, inicial=30
+        ) == self.AHORA - timedelta(days=30)
+
+    def test_dias_explicito_manda(self):
+        desde = fechas.desde_para_bajar('2026-10-23 01:00:00', self.AHORA, dias=10)
+        assert desde == self.AHORA - timedelta(days=10)
+
+    def test_un_sync_ilegible_no_tumba_la_bajada(self):
+        assert fechas.desde_para_bajar(
+            'ayer', self.AHORA, inicial=5
+        ) == self.AHORA - timedelta(days=5)
