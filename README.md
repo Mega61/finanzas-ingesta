@@ -180,6 +180,24 @@ Lo que queda sin resolver se pregunta **una sola vez por comercio**. Algunos son
 irresolubles de otra forma: un pago QR trae solo el número de la llave, sin
 nombre.
 
+### Contestar hablando
+
+A la pregunta del bot se le contesta como a una persona: «es lo de doña Marta,
+la del aseo, cada quincena». La IA lee primero (`aplicacion/conversacion.py`)
+y hace una de tres cosas:
+
+- **propone** lo que entendió —libro, categoría, préstamo, o una categoría
+  nueva— y **no escribe nada hasta el toque**. Hay dos botones: «y para la
+  próxima» deja la regla de esa contraparte; «solo esta vez», no.
+- **pregunta de vuelta** si le falta algo que solo tú sabes. El hilo sigue
+  sobre ese movimiento aunque no deslices para responder, y vive en la base
+  (`dialogos`), no en memoria.
+- **descarta**, también con toque, si dices que no fue un movimiento.
+
+Lo que cuentes de la contraparte («cuenta de doña Marta») queda en `notas` y
+se le da al modelo la próxima vez que aparezca. Sin `GEMINI_API_KEY`, o si
+Gemini falla, el bot sigue con el emparejamiento por palabras de siempre.
+
 ---
 
 ## La conciliación

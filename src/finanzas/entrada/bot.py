@@ -38,7 +38,7 @@ from finanzas.aplicacion import (
 from finanzas.dominio import dinero as _dinero
 from finanzas.dominio import intencion
 from finanzas.dominio import texto as _texto_dom
-from finanzas.entrada import bot_libros
+from finanzas.entrada import bot_conversacion, bot_libros
 
 
 def _a(cx):
@@ -390,9 +390,19 @@ def _preguntar_presupuesto(cx, pendiente_id, chat, pr):
 
 
 def aplicar_respuesta(
-    cx, pendiente_id, categoria=None, descartar=False, presupuesto=None, comercio=None
+    cx,
+    pendiente_id,
+    categoria=None,
+    descartar=False,
+    presupuesto=None,
+    comercio=None,
+    aprender=True,
 ):
-    """Guarda la respuesta, crea la regla, y publica en Firefly."""
+    """Guarda la respuesta, crea la regla, y publica en Firefly.
+
+    Con `aprender` falso no queda regla: es lo de «solo esta vez», para que un
+    gasto raro no cambie lo que se hace siempre con ese comercio.
+    """
     p = _a(cx).pendiente(pendiente_id)
     if p is None:
         return None, 'ese movimiento ya no existe'
@@ -405,7 +415,7 @@ def aplicar_respuesta(
         return p, 'descartado, no entra a Firefly'
 
     clave = clasificador.normalizar(p['contraparte'] or p['descripcion'])
-    if clave and (categoria or presupuesto or comercio):
+    if aprender and clave and (categoria or presupuesto or comercio):
         db.regla_guardar(
             cx,
             p['usuario_id'],
@@ -2355,6 +2365,9 @@ TOQUES_DE_PENDIENTE = {
     't',
     'm',
     'sp',
+    # confirmar o corregir lo que entendio la IA (entrada/bot_conversacion.py)
+    'ic',
+    *bot_conversacion.TOQUES,
     # los de quien lleva varios libros (entrada/bot_libros.py)
     *bot_libros.TOQUES,
 }
@@ -2404,6 +2417,7 @@ TOQUES = {
     'fp': _toque_producto_en_espera,
     'fx': _toque_producto_saltar,
 }
+TOQUES.update(bot_conversacion.TOQUES)
 TOQUES.update(bot_libros.TOQUES)
 
 
@@ -2783,6 +2797,13 @@ def _texto_libre(cx, chat, texto, respondiendo_a=None):
     # escribio sin responder al mensaje, que es lo que hace casi todo el mundo
     if not respondiendo_a and bot_libros.respuesta_sin_responder(cx, chat, texto):
         return
+    # 0.5 viene hablando de un movimiento con la IA y sigue sin responder al
+    # mensaje. Si el modelo dice que esto no habla de ese movimiento, sigue
+    # por el camino de siempre.
+    hilo = bot_conversacion.hilo_abierto(chat, texto) if not respondiendo_a else None
+    if hilo and _conversar(cx, chat, hilo, texto):
+        _recordar_camino(chat, 'respuesta')
+        return
     # 1. respondio a un mensaje concreto
     if respondiendo_a:
         preguntado = _a(cx).pregunta_de_mensaje(chat, respondiendo_a)
@@ -2991,6 +3012,10 @@ def _responder_con_texto(cx, chat, pendiente_id, texto):
     if p is None:
         telegram.enviar(chat, 'Ese movimiento ya no existe.')
         return
+    # La IA lee primero: entiende, pregunta de vuelta si le falta algo, y
+    # propone para confirmar. Lo de abajo es el respaldo sin IA.
+    if _conversar(cx, chat, pendiente_id, texto):
+        return
     try:
         d = interprete.interpretar(cx, p['usuario_id'], p, texto)
     except Exception as ex:
@@ -3063,6 +3088,64 @@ def _responder_con_texto(cx, chat, pendiente_id, texto):
             _guardar_sugerencias(cx, pendiente_id, sug)
             botones.append(crear)
     telegram.enviar(chat, '\n'.join(lineas), botones)
+
+
+def _conversar(cx, chat, pendiente_id, texto):
+    """La respuesta, leida por la IA con el catalogo de Juan: un libro, sus
+    categorias, sus presupuestos y sus comercios. False si no le toca."""
+    p = _a(cx).pendiente(pendiente_id)
+    if p is None or p['usuario_id'] != _uid(cx, chat):
+        return False
+    if not ia.disponible():
+        return False
+    try:
+        cat = interprete.catalogo(cx, p['usuario_id'])
+    except Exception as ex:
+        registro.aviso(f'  sin catalogo para conversar: {ex}')
+        return False
+    libro = {'id': p['libro_id'], 'nombre': 'Personal', 'categorias': cat['categorias']}
+    return bot_conversacion.conversar(
+        cx,
+        chat,
+        p,
+        texto,
+        [libro],
+        presupuestos=cat['presupuestos'],
+        comercios=cat['comercios'],
+    )
+
+
+def _toque_confirmar_lectura(t):
+    """Confirmo lo que entendio la IA. `idx` 1 = y aprenderlo; 0 = solo esta
+    vez. Cada bot lo escribe por su camino."""
+    r = bot_conversacion.confirmada(t)
+    if r is None:
+        return
+    p, lec = r
+    siempre = t.idx == 1
+    if lec['accion'] == 'descartar':
+        _toque_descartar(t)
+    elif ruteo.usa_ruteo(_a(t.cx), p['usuario_id']):
+        if not bot_libros.aplicar_lectura(t, p, lec, siempre):
+            return
+        t.aviso('listo')
+    else:
+        etiqueta = lec['categoria'] or lec['categoria_nueva']
+        if not etiqueta:
+            t.aviso('esa opción ya no está')
+            return
+        t.resolver(
+            etiqueta,
+            categoria=etiqueta,
+            presupuesto=lec['presupuesto'],
+            comercio=lec['comercio'],
+            aprender=siempre,
+        )
+    bot_conversacion.cerrar(t, p, lec)
+
+
+# Va aparte: la tabla de toques esta arriba y esta funcion se define aqui.
+TOQUES['ic'] = _toque_confirmar_lectura
 
 
 # Por nombre: ruff lo toma por un «+» disfrazado si va pegado en el texto.
