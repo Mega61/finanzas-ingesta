@@ -22,7 +22,7 @@ import email as _email
 import os
 import sys
 import traceback
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from email import policy
 
 from finanzas import config
@@ -133,14 +133,15 @@ def paso_bajar(cx, tope=None, interactivo=False, dias=None):
         # buzon completo: fueron 1819 correos de anos atras, con 770 plantillas
         # viejas que el parser no conoce. No hace dano pero ensucia el log y
         # tarda. Por defecto se limita a INGESTA_DIAS_INICIAL.
-        atras = dias or int(config.get('INGESTA_DIAS_INICIAL', '30'))
-        if b['ultimo_sync'] and not dias:
-            atras = 2  # ya sincronizo antes: solo lo reciente, con holgura
-        # Graph filtra en UTC. utcnow() esta deprecado en 3.12 y devuelve un
-        # naive que solo por convencion se lee como UTC.
-        desde = (datetime.now(UTC) - timedelta(days=atras)).strftime(
-            '%Y-%m-%dT%H:%M:%SZ'
-        )
+        # Ya sincronizado, desde el ultimo sync que funciono: con una ventana
+        # fija de dos dias, un apagon mas largo perdia correos para siempre.
+        # Graph filtra en UTC.
+        desde = fechas.desde_para_bajar(
+            b['ultimo_sync'],
+            datetime.now(UTC),
+            dias=dias,
+            inicial=int(config.get('INGESTA_DIAS_INICIAL', '30')),
+        ).strftime('%Y-%m-%dT%H:%M:%SZ')
         try:
             nuevos, rep = graph.bajar(
                 cx, b['id'], desde=desde, tope=tope, interactivo=interactivo
