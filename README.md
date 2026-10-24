@@ -114,7 +114,7 @@ camino fácil en un lado distinto (verificado a mediados de 2026).
 `src/finanzas/parsers/bancolombia_alertas.py` — probado contra un archivo de
 **863 correos
 reales: 100% clasificados, 0 sin reconocer.** Las 71 plantillas distintas del
-banco se reducen a 13 familias.
+banco se reducen a 14 familias.
 
 ```bash
 pytest tests/integracion/test_alertas.py -s
@@ -128,6 +128,7 @@ pytest tests/integracion/test_alertas.py -s
 | `transf_cuenta` · `transf_llave` | transferencia a cuenta o a llave Bre-b |
 | `transf_entrada` · `transf_entrada_simple` | transferencia recibida |
 | `pago_producto` · `boton_bancolombia` | pago de factura y PSE |
+| `pago_programado` | débito automático de una factura inscrita (EPM, el arriendo), que llega de `@bancolombia.com.co` |
 | `ingreso_nomina` · `ingreso_cuenta` | nómina y pagos recibidos |
 | `debito_tarjeta` · `avance` | traslados entre productos propios |
 

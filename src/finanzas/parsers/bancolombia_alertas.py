@@ -126,7 +126,8 @@ IGNORAR = [
     ),
     (
         'clave_dinamica',
-        r'(Inscribiste tu Clave Dinamica|inscribiste al servicio de Clave Dinamica)',
+        r'(Inscribiste tu Clave Dinamica|inscribiste al servicio de Clave Dinamica'
+        r'|informa la Clave Dinamica\s+\d)',
     ),
     ('topes', r'Actualizaste los topes de tus transacciones'),
     # El codigo de un solo uso que manda el banco al cambiar el correo de las
@@ -306,6 +307,30 @@ def _f7(m, msg):
         ben,
         f'PAGO A {ben}',
         'pago_producto',
+    )
+
+
+@_familia(
+    'pago_programado',
+    r'informa pago Factura Programada\s+(.+?)\s+Ref\s+(\S+)\s+por\s+\$\s*([\d.,]+)\s+desde\s+(TC|cta\.?|cuenta)\s*\*\s?(\d{3,4})\.?\s*([\d/]{8,10})',
+)
+def _f14(m, msg):
+    # El debito automatico de una factura inscrita: EPM, el arriendo. Llega de
+    # `@bancolombia.com.co` y no del remitente de las alertas, asi que hasta
+    # octubre de 2026 no se bajaba: entraba al libro solo al conciliar.
+    ben = m.group(1).strip()
+    tarjeta = m.group(4).upper() == 'TC'
+    return Evento(
+        'pago_factura',
+        parse_fecha(m.group(6)),
+        None,
+        'COP',
+        -parse_monto(m.group(3)),
+        m.group(5),
+        'tarjeta' if tarjeta else 'cuenta',
+        ben,
+        f'PAGO PROGRAMADO {ben}',
+        'pago_programado',
     )
 
 

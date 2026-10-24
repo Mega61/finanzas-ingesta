@@ -30,9 +30,10 @@ from datetime import date, timedelta
 from email import policy
 from email.message import EmailMessage
 
-from finanzas.dominio import fechas
+from finanzas.dominio import fechas, texto
 
-REMITENTES = ('notificacionesbancolombia.com',)
+# Ver `graph.REMITENTES`: los pagos programados llegan del segundo.
+REMITENTES = ('notificacionesbancolombia.com', '@bancolombia.com.co')
 TIMEOUT = 60
 
 # IMAP pide el mes en ingles ('01-Sep-2026'). strftime('%b') lo da en el idioma
@@ -130,13 +131,26 @@ def bajar(
         if ultimo is not None:
             uids = {u for u in uids if u > ultimo}
 
-        correos = list(_leer(cx, sorted(uids)))
+        # Un codigo de un solo uso no se guarda; el cursor si avanza sobre el.
+        correos = [
+            c
+            for c in _leer(cx, sorted(uids))
+            if not texto.es_codigo_de_seguridad(_texto_de(c.mensaje))
+        ]
         tope = max([ultimo or 0, *uids]) if (uids or ultimo) else None
         nuevo_cursor = f'{validez}:{tope}' if tope else cursor
         return correos, nuevo_cursor
     finally:
         with contextlib.suppress(imaplib.IMAP4.error, OSError):
             cx.logout()
+
+
+def _texto_de(msg: EmailMessage) -> str:
+    with contextlib.suppress(Exception):
+        cuerpo = msg.get_body(preferencelist=('plain', 'html'))
+        if cuerpo is not None:
+            return str(cuerpo.get_content())
+    return ''
 
 
 def _uidvalidity(cx: imaplib.IMAP4) -> str:
