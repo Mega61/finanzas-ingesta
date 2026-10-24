@@ -250,3 +250,18 @@ def cuenta_de_cadena(nombre: str | None) -> str | None:
         if patron.search(limpio):
             return cuenta
     return None
+
+
+# Los codigos de un solo uso que manda el banco («Bancolombia te informa la
+# Clave Dinamica 503167»). Llegan del mismo remitente que los pagos
+# programados, y no tienen por que quedar guardados en ninguna base: se
+# reconocen ANTES de bajar el correo y se saltan.
+_CODIGO_DE_SEGURIDAD = re.compile(
+    r'(informa la clave din[aá]mica\s+\d|le enviamos su clave din[aá]mica'
+    r'|es el c[oó]digo que necesitas para|este c[oó]digo es de un solo uso)',
+    re.I,
+)
+
+
+def es_codigo_de_seguridad(texto: str | None) -> bool:
+    return bool(texto and _CODIGO_DE_SEGURIDAD.search(texto))
