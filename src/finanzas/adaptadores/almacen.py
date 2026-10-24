@@ -985,6 +985,41 @@ class Almacen:
             'SELECT * FROM propuestas WHERE pendiente_id = ?', (pendiente_id,)
         ).fetchone()
 
+    # ------------------------------------------------------ el plan de caja
+
+    def guardar_plan(
+        self, usuario_id: int, datos: str, motivo: str, confirmado: bool = False
+    ) -> int:
+        """Una version del plan. Sin confirmar es una propuesta: no rige
+        hasta el toque."""
+        cur = self.cx.execute(
+            'INSERT INTO planes (usuario_id, datos, motivo, confirmado) VALUES (?, ?, ?, ?)',
+            (usuario_id, datos, motivo, 1 if confirmado else 0),
+        )
+        self.cx.commit()
+        return int(cur.lastrowid)
+
+    def plan_vigente(self, usuario_id: int) -> sqlite3.Row | None:
+        return self.cx.execute(
+            """SELECT * FROM planes WHERE usuario_id = ? AND confirmado = 1
+               ORDER BY creado_en DESC, id DESC LIMIT 1""",
+            (usuario_id,),
+        ).fetchone()
+
+    def plan_version(self, plan_id: int) -> sqlite3.Row | None:
+        return self.cx.execute(
+            'SELECT * FROM planes WHERE id = ?', (plan_id,)
+        ).fetchone()
+
+    def confirmar_plan(self, plan_id: int) -> None:
+        """La propuesta pasa a ser la vigente: la mas nueva confirmada."""
+        self.cx.execute(
+            """UPDATE planes SET confirmado = 1, creado_en = datetime('now')
+               WHERE id = ? AND confirmado = 0""",
+            (plan_id,),
+        )
+        self.cx.commit()
+
     # ------------------------------- la conversacion sobre un movimiento
 
     def agregar_turno(self, pendiente_id: int, rol: str, texto_: str) -> None:

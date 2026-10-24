@@ -28,8 +28,9 @@ import traceback
 from datetime import timedelta
 
 from finanzas import config, registro
-from finanzas.adaptadores import db, telegram
-from finanzas.aplicacion import conciliador
+from finanzas.adaptadores import db, firefly, telegram
+from finanzas.aplicacion import conciliador, libros, plan_firefly
+from finanzas.aplicacion import plan as plan_caja
 from finanzas.dominio import fechas
 from finanzas.entrada import bot, bot_libros, demonio
 
@@ -77,6 +78,22 @@ def _avisar(texto):
         return
     with contextlib.suppress(Exception):
         telegram.enviar(chat, texto)
+
+
+def _sincronizar_plan(cx, u):
+    """Una vez al dia, la alcancia del fondo con el saldo de hoy, y las
+    facturas fijas como dice el plan. Solo quien tiene plan."""
+    try:
+        vigente = plan_caja.vigente(db.almacen(cx), u['id'])
+        if vigente is None:
+            return
+        with firefly.usar(libros.conexion_firefly_de(db.almacen(cx), u['id'])):
+            h = plan_firefly.sincronizar(vigente[0])
+        if h['alcancia']:
+            a = h['alcancia']
+            log('plan', f'{a["nombre"]}: {a["actual"]:,.0f} de {a["objetivo"]:,.0f}')
+    except Exception as ex:
+        log('plan', f'ERROR ({u["nombre"]}): {ex}')
 
 
 # --------------------------------------------------------------- hilo ingesta
@@ -145,6 +162,7 @@ def hilo_ingesta(uid):
                         log('resumen', f'mandado a {u["nombre"]}')
                     except Exception as ex:
                         log('resumen', f'ERROR ({u["nombre"]}): {ex}')
+                    _sincronizar_plan(cx, u)
                 proximo_resumen = _proxima_hora(HORA_RESUMEN)
 
             if proxima_concil and ahora >= proxima_concil:

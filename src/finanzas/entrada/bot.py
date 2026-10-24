@@ -28,6 +28,8 @@ from finanzas.aplicacion import (
     libros,
     movimientos,
     personas,
+    plan_edicion,
+    plan_firefly,
     prestamos,
     presupuestos,
     publicador,
@@ -35,8 +37,9 @@ from finanzas.aplicacion import (
     tablero,
     taxonomia,
 )
+from finanzas.aplicacion import plan as plan_caja
 from finanzas.dominio import dinero as _dinero
-from finanzas.dominio import intencion
+from finanzas.dominio import fechas, intencion
 from finanzas.dominio import texto as _texto_dom
 from finanzas.entrada import bot_conversacion, bot_libros
 
@@ -556,6 +559,7 @@ DESCRIPCIONES = (
     ('/listo', 'ya están bien, no me preguntes más'),
     ('/productos', 'clasificar lo que compraste en el super'),
     ('/presupuestos', 'cómo van los cinco presupuestos del mes'),
+    ('/plan', 'tu plan de caja y el fondo; «/plan» y lo que cambia, para cambiarlo'),
     ('/prestamos', 'quién te debe y a quién le debes'),
     ('/version', 'qué código está corriendo'),
     ('/ayuda', 'esto'),
@@ -607,9 +611,10 @@ def cmd_tablero(cx, chat):
     Lo que falta por clasificar va al final, en una linea, y solo si hay algo:
     antes era todo el resumen, y no decia nada de la plata.
     """
-    t = tablero.armar()
-    texto = t.texto
     uid = _uid(cx, chat)
+    vigente = plan_caja.vigente(_a(cx), uid) if uid is not None else None
+    t = tablero.armar(plan=vigente[0] if vigente else None)
+    texto = t.texto
     total_preg = sum(f['n'] for f in db.resumen(cx, uid) if f['pregunta'] != 'nada')
     if total_preg:
         texto += f'\n\n❓ Tengo <b>{total_preg}</b> por preguntarte. /pendientes'
@@ -2481,6 +2486,88 @@ def _cmd_listo(cx, chat, texto):
     cmd_listo(cx, chat, texto)
 
 
+def _cmd_plan(cx, chat, texto):
+    """«/plan» lo muestra; «/plan la rappi paga el 10» lo cambia, con toque."""
+    uid = _uid(cx, chat)
+    if uid is None:
+        return
+    pedido = (
+        texto.split(maxsplit=1)[1].strip() if len(texto.split(maxsplit=1)) > 1 else ''
+    )
+    if not pedido:
+        vigente = plan_caja.vigente(_a(cx), uid)
+        if vigente is None:
+            telegram.enviar(chat, 'No tienes un plan de caja todavía.')
+            return
+        p = vigente[0]
+        saldos = tablero.saldos()
+        hoy = fechas.hoy()
+        proy = plan_caja.proyectar(p, hoy, saldos, tablero.movimientos_recientes(hoy))
+        telegram.enviar(chat, plan_edicion.texto(p, saldos, proy))
+        return
+    try:
+        cuentas = list(firefly.accounts_index())
+    except firefly.ApiError:
+        cuentas = []
+    prop = plan_edicion.proponer(_a(cx), uid, pedido, cuentas, fechas.hoy())
+    if prop.accion == 'preguntar':
+        telegram.enviar(
+            chat,
+            f'💬 {_escapar(prop.pregunta)}\n<i>Respóndeme con «/plan» y lo que falta.</i>',
+        )
+        return
+    if prop.accion != 'cambiar':
+        telegram.enviar(
+            chat, _escapar(prop.resumen or 'No vi nada que cambiar en el plan.')
+        )
+        return
+    lineas = ['<b>Cambio el plan así:</b>', *(_escapar(c) for c in prop.cambios)]
+    if prop.resumen:
+        lineas.append(f'\n<i>{_escapar(prop.resumen)}</i>')
+    telegram.enviar(
+        chat,
+        '\n'.join(lineas),
+        [
+            [
+                ('✅ Sí, cámbialo', f'pv:{prop.plan_id}:1'),
+                ('✖️ No', f'pv:{prop.plan_id}:0'),
+            ]
+        ],
+    )
+
+
+def _toque_plan(t):
+    """Confirma o descarta un cambio del plan. Solo el dueño del plan."""
+    uid = _uid(t.cx, t.chat)
+    fila = _a(t.cx).plan_version(t.pid)
+    if fila is None or fila['usuario_id'] != uid or fila['confirmado']:
+        t.aviso('ese cambio ya no está')
+        return
+    if t.idx == 0:
+        t.aviso('no lo cambio')
+        t.reemplazar('✖️ El plan queda como estaba.')
+        return
+    p = plan_edicion.confirmar(_a(t.cx), uid, t.pid)
+    t.aviso('plan cambiado')
+    detalle = ''
+    try:
+        h = plan_firefly.sincronizar(p)
+        partes = []
+        if h['alcancia']:
+            partes.append(f'la alcancía «{h["alcancia"]["nombre"]}»')
+        if h['facturas']:
+            partes.append(f'{len(h["facturas"])} facturas fijas')
+        if partes:
+            detalle = '\n<i>En Firefly: ' + ' y '.join(partes) + '.</i>'
+    except firefly.ApiError as ex:
+        detalle = f'\n⚠️ No pude reflejarlo en Firefly: {_escapar(str(ex)[:150])}'
+    t.reemplazar('✅ Plan cambiado.' + detalle + '\n/plan para verlo.')
+
+
+# Va aparte: la tabla de toques esta arriba y esta funcion se define aqui.
+TOQUES['pv'] = _toque_plan
+
+
 def _cmd_presupuestos(_cx, chat, _texto):
     telegram.enviar(chat, '<b>Presupuestos del mes</b>\n\n' + presupuestos.formatear())
 
@@ -2498,6 +2585,7 @@ COMANDOS = {
     '/sinconfirmar': _cmd_sinconfirmar,
     '/version': _cmd_version,
     '/presupuestos': _cmd_presupuestos,
+    '/plan': _cmd_plan,
     '/prestamos': lambda cx, chat, _texto: telegram.enviar(
         chat, bot_libros.texto_de_prestamos(cx, _usuario_de(cx, chat))
     ),

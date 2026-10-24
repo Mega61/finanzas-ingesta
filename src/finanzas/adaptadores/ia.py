@@ -457,6 +457,79 @@ def entender_respuesta(
         return json.loads(mm.group(0))
 
 
+# --------------------------------------------- cambiar el plan de caja hablando
+
+PLAN = """Eres el que lleva el plan de caja de una persona en Colombia. Te dan el
+plan actual en JSON y lo que la persona dijo. Devuelves el plan COMPLETO ya
+cambiado, con la misma estructura, cambiando SOLO lo que pidio.
+
+La estructura:
+- cuenta: la cuenta que se proyecta. reserva: de donde se saca si no alcanza.
+  colchon: el minimo que no se quiere romper. horizonte_dias: cuanto mirar.
+- ingreso[] y compromiso[]: {concepto, monto, y `dia` (cada mes) o `fecha`
+  (una vez, YYYY-MM-DD); opcionales desde/hasta (YYYY-MM-DD) y medio}. El
+  medio de un compromiso es la cuenta o el `nombre` de una tarjeta del plan.
+- tarjeta[]: {nombre, corte (dia), pago (dia), gasto_diario, y opcional
+  sin_interes {saldo, al, cuota}}. El nombre tiene que ser una de las CUENTAS
+  DE FIREFLY que te doy.
+- meta: {nombre, cuenta, objetivo}: a cuanto se quiere llevar una cuenta.
+
+Reglas:
+- Montos en pesos, como numero: «2,8 millones» es 2800000, «200 mil» 200000.
+- Lo que ya paso y era de una sola vez («ya pague la DIAN») se quita.
+- Si cambia algo desde una fecha, usa `desde`; si deja de ser, usa `hasta`.
+- No inventes conceptos que no dijo. No toques lo que no menciono.
+- accion: «cambiar» si sabes que cambiar; «preguntar» si falta un dato que
+  solo ella sabe (una pregunta corta); «nada» si no habla del plan.
+- resumen: una frase en espanol de lo que cambiaste.
+"""
+
+
+def entender_cambio_de_plan(
+    texto: str, plan_actual: str, cuentas: Iterable[str], hoy: str
+) -> dict[str, Any]:
+    """Devuelve {accion, plan (JSON del plan completo, como texto), pregunta,
+    resumen}. Validar el plan nuevo es de quien llama."""
+    partes = [
+        f'HOY: {hoy}',
+        'CUENTAS DE FIREFLY: ' + ', '.join(sorted(cuentas)),
+        '',
+        'EL PLAN ACTUAL:',
+        plan_actual,
+        '',
+        f'LO QUE DIJO: {texto}',
+    ]
+    esquema = {
+        'type': 'object',
+        'properties': {
+            'accion': {'type': 'string', 'enum': ['cambiar', 'preguntar', 'nada']},
+            'plan': {'type': 'string'},
+            'pregunta': {'type': 'string'},
+            'resumen': {'type': 'string'},
+        },
+        'required': ['accion', 'resumen'],
+        'propertyOrdering': ['accion', 'resumen', 'pregunta', 'plan'],
+    }
+    payload = {
+        'systemInstruction': {'parts': [{'text': PLAN}]},
+        'contents': [{'role': 'user', 'parts': [{'text': '\n'.join(partes)}]}],
+        'generationConfig': _config_generacion(
+            # el plan completo de vuelta es largo: tope holgado
+            max_salida=16000,
+            thinking=THINKING_ORDENES,
+            extra={'responseMimeType': 'application/json', 'responseSchema': esquema},
+        ),
+    }
+    crudo = texto_de(_llamar(payload), ' al cambiar el plan')
+    try:
+        return json.loads(crudo)
+    except json.JSONDecodeError:
+        mm = re.search(r'\{.*\}', crudo, re.S)
+        if not mm:
+            raise SinIA(f'no devolvio JSON: {crudo[:200]}') from None
+        return json.loads(mm.group(0))
+
+
 # -------------------------------------------- proponer una categoria nueva
 
 PROPONER = """Eres el que organiza las categorias de un libro de finanzas en

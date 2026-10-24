@@ -57,6 +57,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from finanzas import config
+from finanzas.adaptadores.almacen import Almacen
 from finanzas.dominio import fechas
 
 # Un compromiso con fecha futura que ya aparece pagado en Firefly no se vuelve a
@@ -160,6 +161,16 @@ class Tarjeta:
 
 
 @dataclass(frozen=True)
+class Meta:
+    """A cuanto se quiere llevar una cuenta: el fondo de emergencia en Nu.
+    En Firefly es una alcancia (piggy bank) sobre esa cuenta."""
+
+    nombre: str
+    cuenta: str
+    objetivo: float
+
+
+@dataclass(frozen=True)
 class Plan:
     cuenta: str
     reserva: str | None
@@ -168,6 +179,7 @@ class Plan:
     ingresos: tuple[Regla, ...] = ()
     compromisos: tuple[Regla, ...] = ()
     tarjetas: tuple[Tarjeta, ...] = field(default_factory=tuple)
+    meta: Meta | None = None
 
 
 @dataclass
@@ -233,17 +245,48 @@ def _texto_crudo() -> tuple[str, str] | None:
     return None
 
 
-def leer() -> Plan | None:
-    """El plan configurado, o None si no hay."""
+def _datos_configurados() -> dict[str, Any] | None:
     crudo = _texto_crudo()
     if crudo is None:
         return None
     formato, contenido = crudo
     try:
-        datos = json.loads(contenido) if formato == 'json' else tomllib.loads(contenido)
+        return json.loads(contenido) if formato == 'json' else tomllib.loads(contenido)
     except (json.JSONDecodeError, tomllib.TOMLDecodeError) as ex:
         raise PlanInvalido(f'el plan no se lee: {ex}') from None
-    return interpretar(datos)
+
+
+def leer() -> Plan | None:
+    """El plan configurado por archivo o entorno, o None si no hay. Lo usa
+    quien no tiene base; el bot lee el de la base (`vigente`)."""
+    datos = _datos_configurados()
+    return interpretar(datos) if datos is not None else None
+
+
+def a_json(datos: dict[str, Any]) -> str:
+    """Las fechas de TOML no son JSON: van como texto ISO, que es lo que el
+    plan sabe leer."""
+    return json.dumps(datos, ensure_ascii=False, default=str, indent=1)
+
+
+def vigente(alm: Almacen, usuario_id: int) -> tuple[Plan, dict[str, Any]] | None:
+    """El plan que rige: la ultima version confirmada en la base.
+
+    La primera vez no hay ninguna, y se importa el de antes -- PLAN_JSON en
+    Portainer o plan.toml --, que queda como version 1. Desde ahi la variable
+    ya no se usa: el plan se cambia hablando con el bot.
+    """
+    fila = alm.plan_vigente(usuario_id)
+    if fila is not None:
+        datos = json.loads(fila['datos'])
+        return interpretar(datos), datos
+    datos = _datos_configurados()
+    if datos is None:
+        return None
+    datos = json.loads(a_json(datos))
+    plan = interpretar(datos)
+    alm.guardar_plan(usuario_id, a_json(datos), 'importado', confirmado=True)
+    return plan, datos
 
 
 def _fecha(v: Any, donde: str) -> date | None:
@@ -317,7 +360,18 @@ def interpretar(datos: dict[str, Any]) -> Plan:
                 f'compromiso «{c.concepto}»: el medio «{c.medio}» no es la cuenta '
                 f'ni una tarjeta del plan'
             )
+    m = datos.get('meta')
+    meta = None
+    if m:
+        if not m.get('cuenta') or not m.get('objetivo'):
+            raise PlanInvalido('la meta necesita `cuenta` y `objetivo`')
+        meta = Meta(
+            nombre=str(m.get('nombre') or 'Fondo de emergencia'),
+            cuenta=str(m['cuenta']),
+            objetivo=abs(float(m['objetivo'])),
+        )
     return Plan(
+        meta=meta,
         cuenta=str(cuenta),
         reserva=datos.get('reserva'),
         colchon=float(datos.get('colchon') or 0),

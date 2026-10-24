@@ -198,6 +198,22 @@ Lo que cuentes de la contraparte («cuenta de doña Marta») queda en `notas` y
 se le da al modelo la próxima vez que aparezca. Sin `GEMINI_API_KEY`, o si
 Gemini falla, el bot sigue con el emparejamiento por palabras de siempre.
 
+### El plan de caja
+
+Lo que va a entrar y salir, las tarjetas con su corte y su pago, y la meta del
+fondo de emergencia. Vive en el bot, versionado en la tabla `planes`:
+
+```
+/plan                                      el plan, la meta y lo que viene
+/plan la rappi paga el 10 y corta el 29    lo cambia: muestra la diferencia
+                                           y rige solo con el toque
+```
+
+Lo que se puede ver en Firefly se ve allá: la meta es una alcancía (piggy
+bank) sobre su cuenta, al día con el saldo, y cada compromiso mensual es una
+factura fija (bill). La primera vez se importa solo desde `PLAN_JSON` o
+`plan.toml`; desde ahí esas dos ya no se leen.
+
 ---
 
 ## La conciliación

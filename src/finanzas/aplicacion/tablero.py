@@ -71,6 +71,11 @@ def _saldos() -> dict[str, float]:
     return {c['nombre']: c['saldo'] for c in [*activos, *deudas]}
 
 
+def saldos() -> dict[str, float]:
+    """{cuenta: saldo} de Firefly: activos en positivo, deudas en negativo."""
+    return _saldos()
+
+
 def _texto(hoy, saldos, estado, plan, proy) -> str:
     fin = fechas.fin_de_mes(hoy)
     lineas = [f'<b>Así vas · {graficos.dia_mes(hoy)}</b>', '']
@@ -133,12 +138,13 @@ def _texto(hoy, saldos, estado, plan, proy) -> str:
     return '\n'.join(lineas)
 
 
-def armar(hoy: date | None = None) -> Tablero:
+def armar(hoy: date | None = None, plan: _plan.Plan | None = None) -> Tablero:
+    """`plan` es el vigente de la base; sin el, el del archivo o el entorno."""
     hoy = hoy or fechas.hoy()
     fin = fechas.fin_de_mes(hoy)
     estado = presupuestos.estado(hoy)
     saldos = _saldos()
-    plan = _plan.leer()
+    plan = plan or _plan.leer()
     proy = None
     if plan:
         proy = _plan.proyectar(plan, hoy, saldos, movimientos_recientes(hoy))
