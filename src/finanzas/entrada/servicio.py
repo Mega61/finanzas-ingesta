@@ -29,8 +29,8 @@ from datetime import timedelta
 
 from finanzas import config, registro
 from finanzas.adaptadores import db, telegram
-from finanzas.aplicacion import conciliador
-from finanzas.dominio import fechas
+from finanzas.aplicacion import conciliador, por_factura
+from finanzas.dominio import dinero, fechas
 from finanzas.entrada import bot, bot_libros, demonio
 
 # Cada cuanto se revisa el correo.
@@ -79,6 +79,30 @@ def _avisar(texto):
         telegram.enviar(chat, texto)
 
 
+def _contar_por_factura(cx, c):
+    """Le dice a quien compro que su compra cambio de categoria por la
+    factura. Sin botones: si no es, se corrige como cualquier otra."""
+    plata = dinero.formatear(abs(c['valor']), 'COP')
+    log(
+        'factura',
+        f'#{c["pendiente_id"]} {plata} {c["contraparte"]}: '
+        f'{c["antes"]} -> {c["categoria"]} ({c["razon"]})',
+    )
+    if not EN_SERIO:
+        return
+    u = next((x for x in db.almacen(cx).usuarios() if x['id'] == c['usuario_id']), None)
+    if not u or not u['telegram_chat_id']:
+        return
+    with contextlib.suppress(Exception):
+        telegram.enviar(
+            u['telegram_chat_id'],
+            f'🧾 Por la factura, lo de <b>{c["contraparte"]}</b> por {plata} '
+            f'({c["fecha"]}) era <b>{c["categoria"]}</b>'
+            + (f', no {c["antes"]}' if c['antes'] else '')
+            + f'.\n<i>{c["razon"]}</i>',
+        )
+
+
 # --------------------------------------------------------------- hilo ingesta
 
 
@@ -96,6 +120,10 @@ def pasada(cx, uid):
     # Las facturas de supermercado van despues y con su propio cupo: son
     # menos urgentes que una alerta del banco y no deben taparla.
     demonio.paso_facturas(cx)
+    # Con la factura a la mano, la compra que la regla mando a Mercado y era
+    # un almuerzo o un mecato se corrige, y se cuenta.
+    for c in por_factura.revisar(cx, dry_run=not EN_SERIO):
+        _contar_por_factura(cx, c)
     productos = bot.preguntar_productos(cx)
     if nuevos or conteo or mandadas or productos:
         log(
