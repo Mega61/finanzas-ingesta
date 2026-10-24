@@ -189,11 +189,13 @@ def texto(plan: _plan.Plan, saldos: dict[str, float], proy: Any | None) -> str:
                 f'{dinero.formatear(e.monto, "COP", con_signo=True)}  {e.concepto}'
                 for e in proximos
             ]
-        if proy.faltante:
-            lineas.append(
-                f'\n⚠️ Pasa <b>{plata(proy.faltante)}</b> de {proy.reserva or "la reserva"} '
-                f'antes del {proy.faltante_antes_de.day}/{proy.faltante_antes_de.month:02d}.'
-            )
+        if proy.traslados:
+            de = proy.reserva or 'la reserva'
+            lineas += ['', f'<b>Lo que hay que pasar de {de}</b>']
+            lineas += [
+                f'antes del {d.day}/{d.month:02d}  <b>{plata(m)}</b>'
+                for d, m in proy.traslados
+            ]
     lineas += [
         '',
         f'{len(plan.ingresos)} ingresos · {len(plan.compromisos)} compromisos · '

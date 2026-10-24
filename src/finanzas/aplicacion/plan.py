@@ -194,6 +194,10 @@ class Proyeccion:
     # Cuanto pasar de la reserva, y antes de que dia, para no bajar del colchon.
     faltante: float = 0.0
     faltante_antes_de: date | None = None
+    # El mismo faltante, por tramos: cuanto pasar y antes de que dia, en
+    # orden. Decir «pasa 4,5M antes de hoy» cuando hoy solo hacen falta 410
+    # mil y el resto es para la tarjeta de noviembre asustaba sin razon.
+    traslados: list[tuple[date, float]] = field(default_factory=list)
     pagos_de_tarjeta: dict[str, list[tuple[date, float]]] = field(default_factory=dict)
 
 
@@ -502,4 +506,26 @@ def proyectar(
     if minimo[1] < plan.colchon:
         p.faltante = plan.colchon - minimo[1]
         p.faltante_antes_de = next(d for d, s in serie if s < plan.colchon)
+        p.traslados = traslados(serie, plan.colchon)
     return p
+
+
+def traslados(
+    serie: list[tuple[date, float]], colchon: float, redondeo: float = 50000
+) -> list[tuple[date, float]]:
+    """Cuanto pasar de la reserva y antes de que dia, por tramos.
+
+    Se recorre la serie y, cada vez que el saldo -- con lo ya pasado -- baja
+    del colchon, se pasa lo justo para volver a el, redondeado hacia arriba.
+    La suma da el faltante de siempre (mas el redondeo), pero cada tramo con
+    su fecha: hoy lo de hoy, y lo de la tarjeta antes de la tarjeta.
+    """
+    fuera: list[tuple[date, float]] = []
+    pasado = 0.0
+    for d, s in serie:
+        falta = colchon - (s + pasado)
+        if falta > 0:
+            monto = -(-falta // redondeo) * redondeo
+            fuera.append((d, monto))
+            pasado += monto
+    return fuera
