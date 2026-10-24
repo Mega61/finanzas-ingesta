@@ -20,6 +20,7 @@ import urllib.request
 
 from finanzas import config, registro
 from finanzas.adaptadores import db
+from finanzas.dominio import texto
 
 GRAPH = 'https://graph.microsoft.com/v1.0'
 CACHE = os.path.join(config.DATOS, '.cache_graph.json')
@@ -29,6 +30,10 @@ CACHE = os.path.join(config.DATOS, '.cache_graph.json')
 REMITENTES = [
     'notificacionesbancolombia.com',
     'documentosbancolombia.com',
+    # Los pagos programados (EPM, el arriendo) llegan de aqui, y en abril de
+    # 2026 tambien las compras de siempre. Con la arroba: sin ella entraria
+    # `solicitudesgrupobancolombia.com.co`, que es publicidad.
+    '@bancolombia.com.co',
 ]
 
 # Las facturas electronicas NO se filtran por remitente, y es a proposito.
@@ -152,6 +157,8 @@ def es_factura(msg):
 
 
 def _nos_interesa(msg):
+    if _es_del_banco(msg) and texto.es_codigo_de_seguridad(cuerpo_plano(msg)):
+        return False  # un codigo de un solo uso: ni se guarda
     return _es_del_banco(msg) or es_factura(msg)
 
 

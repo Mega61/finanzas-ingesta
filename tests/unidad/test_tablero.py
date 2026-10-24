@@ -154,9 +154,12 @@ def test_a_mariana_le_llega_la_cola(monkeypatch):
 def test_el_tablero_suma_las_preguntas_pendientes(monkeypatch):
     enviado = {}
     monkeypatch.setattr(
-        bot.tablero, 'armar', lambda: tablero.Tablero(b'png', '<b>Así vas</b>')
+        bot.tablero,
+        'armar',
+        lambda plan=None: tablero.Tablero(b'png', '<b>Así vas</b>'),
     )
     monkeypatch.setattr(bot, '_uid', lambda cx, chat: 1)
+    monkeypatch.setattr(bot.plan_caja, 'vigente', lambda alm, uid: None)
     monkeypatch.setattr(
         bot.db,
         'resumen',

@@ -18,9 +18,11 @@ import urllib.request
 from collections.abc import Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from finanzas import config
+from finanzas.dominio import fechas
 
 # Si Firefly esta detras de Cloudflare, el user-agent por defecto de urllib es
 # rechazado (error 1010). Hablandole por la red interna de Docker esto no hace
@@ -317,6 +319,75 @@ def actualizar_split(
         conexion=conexion,
     )
     return True
+
+
+# ------------------------------------------------- alcancias y facturas fijas
+#
+# El plan de caja vive en el bot, pero lo que se puede ver en Firefly se ve
+# alla: la meta del fondo como alcancia (piggy bank) y los compromisos de cada
+# mes como facturas (bills). Firefly 6.2 en adelante: una alcancia tiene una
+# lista de cuentas, cada una con su `current_amount`.
+
+
+def alcancias(conexion: Conexion | None = None) -> list[dict[str, Any]]:
+    return get_all('/api/v1/piggy-banks', conexion=conexion)
+
+
+def guardar_alcancia(
+    nombre: str,
+    objetivo: float,
+    cuenta_id: str,
+    actual: float,
+    alcancia_id: str | None = None,
+    notas: str | None = None,
+    conexion: Conexion | None = None,
+) -> str:
+    """Crea la alcancia, o la actualiza si viene `alcancia_id`. Devuelve su id."""
+    cuerpo: dict[str, Any] = {
+        'name': nombre,
+        'target_amount': f'{objetivo:.2f}',
+        'accounts': [{'account_id': str(cuenta_id), 'current_amount': f'{actual:.2f}'}],
+    }
+    if notas is not None:
+        cuerpo['notes'] = notas
+    if alcancia_id:
+        r = call('PUT', f'/api/v1/piggy-banks/{alcancia_id}', cuerpo, conexion=conexion)
+    else:
+        cuerpo['start_date'] = fechas.hoy().isoformat()
+        r = call('POST', '/api/v1/piggy-banks', cuerpo, conexion=conexion)
+    return str(r['data']['id'])
+
+
+def facturas_fijas(conexion: Conexion | None = None) -> list[dict[str, Any]]:
+    return get_all('/api/v1/bills', conexion=conexion)
+
+
+def guardar_factura_fija(
+    nombre: str,
+    monto: float,
+    desde: date,
+    activa: bool = True,
+    factura_id: str | None = None,
+    notas: str | None = None,
+    conexion: Conexion | None = None,
+) -> str:
+    """Una factura mensual (bill). Crea, o actualiza si viene `factura_id`."""
+    cuerpo: dict[str, Any] = {
+        'name': nombre,
+        'amount_min': f'{monto:.2f}',
+        'amount_max': f'{monto:.2f}',
+        'date': desde.isoformat(),
+        'repeat_freq': 'monthly',
+        'skip': 0,
+        'active': activa,
+    }
+    if notas is not None:
+        cuerpo['notes'] = notas
+    if factura_id:
+        r = call('PUT', f'/api/v1/bills/{factura_id}', cuerpo, conexion=conexion)
+    else:
+        r = call('POST', '/api/v1/bills', cuerpo, conexion=conexion)
+    return str(r['data']['id'])
 
 
 def destinos_recurrentes(conexion: Conexion | None = None) -> dict[str, float]:

@@ -985,6 +985,41 @@ class Almacen:
             'SELECT * FROM propuestas WHERE pendiente_id = ?', (pendiente_id,)
         ).fetchone()
 
+    # ------------------------------------------------------ el plan de caja
+
+    def guardar_plan(
+        self, usuario_id: int, datos: str, motivo: str, confirmado: bool = False
+    ) -> int:
+        """Una version del plan. Sin confirmar es una propuesta: no rige
+        hasta el toque."""
+        cur = self.cx.execute(
+            'INSERT INTO planes (usuario_id, datos, motivo, confirmado) VALUES (?, ?, ?, ?)',
+            (usuario_id, datos, motivo, 1 if confirmado else 0),
+        )
+        self.cx.commit()
+        return int(cur.lastrowid)
+
+    def plan_vigente(self, usuario_id: int) -> sqlite3.Row | None:
+        return self.cx.execute(
+            """SELECT * FROM planes WHERE usuario_id = ? AND confirmado = 1
+               ORDER BY creado_en DESC, id DESC LIMIT 1""",
+            (usuario_id,),
+        ).fetchone()
+
+    def plan_version(self, plan_id: int) -> sqlite3.Row | None:
+        return self.cx.execute(
+            'SELECT * FROM planes WHERE id = ?', (plan_id,)
+        ).fetchone()
+
+    def confirmar_plan(self, plan_id: int) -> None:
+        """La propuesta pasa a ser la vigente: la mas nueva confirmada."""
+        self.cx.execute(
+            """UPDATE planes SET confirmado = 1, creado_en = datetime('now')
+               WHERE id = ? AND confirmado = 0""",
+            (plan_id,),
+        )
+        self.cx.commit()
+
     # ------------------------------- la conversacion sobre un movimiento
 
     def agregar_turno(self, pendiente_id: int, rol: str, texto_: str) -> None:
@@ -1328,6 +1363,47 @@ class Almacen:
         )
         self.cx.commit()
         return True
+
+    def compras_por_revisar_con_factura(self, dias: int = 7) -> list[sqlite3.Row]:
+        """Compras con tarjeta ya publicadas, de los ultimos `dias`, cuya
+        categoria no la decidio la persona ni una factura todavia."""
+        return self.cx.execute(
+            """SELECT * FROM pendientes
+               WHERE estado = 'publicado' AND tipo = 'compra_tarjeta'
+                 AND firefly_id IS NOT NULL AND valor < 0
+                 AND COALESCE(decidido_por, '') NOT IN ('usuario', 'factura')
+                 AND fecha >= date('now', ?)
+               ORDER BY fecha""",
+            (f'-{int(dias)} days',),
+        ).fetchall()
+
+    def facturas_del_monto(
+        self, usuario_id: int, valor: float, fecha: str, dias: int = 1
+    ) -> list[sqlite3.Row]:
+        """Las facturas de ESA persona por ese monto (al peso, con dos de
+        holgura por redondeo), desde el dia de la compra hasta `dias` despues:
+        un pedido en linea se factura al dia siguiente. Solo las del buzon de
+        la persona: una factura de otro no explica una compra suya."""
+        return self.cx.execute(
+            """SELECT f.* FROM facturas f
+               JOIN facturas_crudas fc ON fc.id = f.cruda_id
+               JOIN correos_crudos cc ON cc.id = fc.correo_id
+               JOIN buzones b ON b.id = cc.buzon_id
+               WHERE b.usuario_id = ? AND f.tipo = 'factura'
+                 AND ABS(f.total - ?) <= 2
+                 AND f.fecha BETWEEN ? AND date(?, ?)""",
+            (usuario_id, abs(float(valor)), fecha, fecha, f'+{int(dias)} days'),
+        ).fetchall()
+
+    def lineas_con_grupo(self, cufe: str) -> list[sqlite3.Row]:
+        """Las lineas de una factura con el grupo que les dio el catalogo."""
+        return self.cx.execute(
+            """SELECT l.descripcion, l.total, c.grupo, c.categoria
+               FROM factura_lineas l
+               LEFT JOIN catalogo c ON c.nit = l.nit AND c.codigo = l.codigo
+               WHERE l.cufe = ? ORDER BY l.n""",
+            (cufe,),
+        ).fetchall()
 
     def catalogo_ver(self, nit: str, codigo: str):
         return self.cx.execute(
