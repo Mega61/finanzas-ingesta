@@ -340,12 +340,15 @@ def guardar_alcancia(
     actual: float,
     alcancia_id: str | None = None,
     notas: str | None = None,
+    moneda: str = 'COP',
     conexion: Conexion | None = None,
 ) -> str:
     """Crea la alcancia, o la actualiza si viene `alcancia_id`. Devuelve su id."""
+    # Firefly 6.6 exige la moneda al crear: sin ella responde 422.
     cuerpo: dict[str, Any] = {
         'name': nombre,
         'target_amount': f'{objetivo:.2f}',
+        'transaction_currency_code': moneda,
         'accounts': [{'account_id': str(cuenta_id), 'current_amount': f'{actual:.2f}'}],
     }
     if notas is not None:
@@ -369,11 +372,13 @@ def guardar_factura_fija(
     activa: bool = True,
     factura_id: str | None = None,
     notas: str | None = None,
+    moneda: str = 'COP',
     conexion: Conexion | None = None,
 ) -> str:
     """Una factura mensual (bill). Crea, o actualiza si viene `factura_id`."""
     cuerpo: dict[str, Any] = {
         'name': nombre,
+        'currency_code': moneda,
         'amount_min': f'{monto:.2f}',
         'amount_max': f'{monto:.2f}',
         'date': desde.isoformat(),

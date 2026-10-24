@@ -212,3 +212,21 @@ def test_se_lee_de_plan_json(monkeypatch):
     pl = P.leer()
     assert pl.cuenta == 'Banco'
     assert pl.ingresos[0].dia == 15
+
+
+def test_los_traslados_van_por_tramos_con_su_fecha():
+    """Lo que paso el 24-oct: hoy faltaban 410 mil para el colchon y el resto
+    era para las tarjetas de noviembre. Antes salia todo junto «antes de hoy»."""
+    serie = [
+        (date(2026, 10, 24), 91198),  # despues de la contadora
+        (date(2026, 10, 30), 4047432),  # la quincena
+        (date(2026, 11, 10), 3693134),  # la Rappi
+        (date(2026, 11, 19), -3155000),  # la Mastercard con la DIAN
+        (date(2026, 11, 23), -5905000),  # el arriendo nuevo
+    ]
+    assert P.traslados(serie, 500000) == [
+        (date(2026, 10, 24), 450000),
+        (date(2026, 11, 19), 3250000),
+        (date(2026, 11, 23), 2750000),
+    ]
+    assert P.traslados([(date(2026, 1, 1), 900000)], 500000) == []

@@ -14,7 +14,7 @@ from datetime import date
 
 import pytest
 
-from finanzas.adaptadores import db, ia
+from finanzas.adaptadores import db, firefly, ia
 from finanzas.adaptadores.almacen import Almacen
 from finanzas.aplicacion import plan, plan_edicion, plan_firefly
 
@@ -345,3 +345,19 @@ def test_la_factura_fija_es_la_del_tramo_que_toca_primero(monkeypatch):
         '2800000.0',
         '2026-12-23',
     )
+
+
+def test_firefly_recibe_la_moneda(monkeypatch):
+    """Firefly 6.6 respondio 422 al crear la alcancia sin moneda: la prueba
+    con el Firefly falso no lo vio, porque el falso no la exigia."""
+    enviados = []
+
+    def call(metodo, ruta, cuerpo=None, conexion=None):
+        enviados.append((metodo, ruta, cuerpo))
+        return {'data': {'id': '1'}}
+
+    monkeypatch.setattr(firefly, 'call', call)
+    firefly.guardar_alcancia('Fondo de emergencia', 25000000, '24', 22091619)
+    firefly.guardar_factura_fija('Arriendo nuevo', 2750000, date(2026, 11, 23))
+    assert enviados[0][2]['transaction_currency_code'] == 'COP'
+    assert enviados[1][2]['currency_code'] == 'COP'
