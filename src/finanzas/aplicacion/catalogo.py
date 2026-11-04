@@ -1,4 +1,4 @@
-"""Clasifica un producto de supermercado: (nit, codigo) -> tipo, grupo, categoria.
+"""Clasifica un producto de supermercado (o de la drogueria): (nit, codigo) -> tipo, grupo, categoria.
 
 Tres niveles, del que manda al detalle:
 
@@ -302,7 +302,34 @@ NO_CONSUMIBLES = frozenset({'Tecnologia', 'Electrodomesticos', 'Hogar'})
 # Y como quedaban 'Sin clasificar', el bot volvia a preguntar por ellos cada
 # tres dias para siempre: las once lineas de la factura de EPM (energia, gas,
 # alumbrado, aseo) no tenian forma de cerrarse, porque 'saltar' solo aplaza.
-NITS_MERCADO = frozenset({'890900608', '900276962', '900522508'})
+#
+# Farmatodo entra en noviembre de 2026, y no es por la canasta: la mitad de
+# sus facturas son mecato y la otra mitad drogueria, y sin catalogo no habia
+# como decir cual era cual. Todas quedaban en Mercado por la regla del
+# comercio, incluido el ibuprofeno.
+NITS_MERCADO = frozenset(
+    {
+        '890900608',  # Exito
+        '900276962',  # D1
+        '900522508',  # Supervaquita
+        '830129327',  # Farmatodo
+    }
+)
+
+# Un medicamento. Va antes que la regla del IVA 0%, que manda todo exento a
+# Carnes: en una drogueria lo exento es la amoxicilina, no el pollo. Los
+# nombres de Farmatodo dicen la presentacion («Tabletas Caja X10Tab»,
+# «Blister x 10 Capsulas») o la dosis («800Mg»), y eso no lo dice nada que se
+# coma.
+MEDICINA = re.compile(
+    r'\d+ ?mg\b|\d+ ?ml.*(jarabe|suspension|gotas)|tableta|\btab\b|capsula|'
+    r'blister|jarabe|suspension oral|ampolla|ovulo|supositorio|\bfraccion\b|'
+    r'ibuprofeno|acetaminofen|naproxeno|amoxicilina|loratadina|cetirizina|'
+    r'omeprazol|esomeprazol|losartan|dolex|advil|noxpirin|antigripal|'
+    r'sales de rehidratacion|suero oral|buscapina|compositum|'
+    r'\bx ?\d+ ?(tab|cap|grag)',
+    re.I,
+)
 
 # El grupo que cierra la pregunta. No es 'Sin clasificar' —asi sale de la cola
 # del bot— y no es consumible —asi sale de la canasta—, que son las dos cosas
@@ -406,6 +433,9 @@ def _grupo_y_categoria(nit, codigo, desc, iva):
     if codigo in tabla:
         g, c = tabla[codigo]
         return g, c, 'override'
+    # 2b. medicamentos, antes de que el IVA 0% los mande a Carnes
+    if MEDICINA.search(desc):
+        return 'Cuidado personal', 'Salud', 'medicina'
     # 3. IVA 0% = carne / pescado exento. Va DESPUES de los overrides porque
     #    hay exentos que no son carne, y ANTES de las palabras porque un corte
     #    llamado "TABLA" no lo caza ninguna regla de texto.

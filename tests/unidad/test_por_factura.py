@@ -74,3 +74,33 @@ def test_lo_de_la_gata():
 
 def test_factura_vacia():
     assert categoria([]) is None
+
+
+MEDICINA = ('Cuidado personal', 'Salud')
+SERVICIO = ('Servicios', 'Domicilio')
+
+
+def test_la_drogueria_es_medicamentos():
+    r = categoria(
+        [
+            _l('Fraccion Ibuprofeno Genfar 800Mg', MEDICINA, 4250),
+            _l('Fraccion Amoxicilina 500Mg', MEDICINA, 4950),
+            _l('Servicio Domicilio Web', SERVICIO, 9000),
+        ]
+    )
+    assert r[0] == 'Medicamentos'
+
+
+def test_farmatodo_con_mecato_y_pastillas_no_se_toca():
+    """La factura real del 1-nov: galletas, chocolatina, ibuprofeno,
+    amoxicilina y el domicilio. Mezclada: se queda como estaba."""
+    r = categoria(
+        [
+            _l('Servicio Domicilio Web', SERVICIO, 9000),
+            _l('Fraccion Ibuprofeno Genfar 800Mg', MEDICINA, 4250),
+            _l('$Galletas Oreo Cobertura', DULCE, 15924),
+            _l('Fraccion Amoxicilina 500Mg', MEDICINA, 4950),
+            _l('Chocolatina Jumbo Mani', DULCE, 7941),
+        ]
+    )
+    assert r is None

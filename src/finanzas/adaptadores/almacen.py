@@ -958,6 +958,19 @@ class Almacen:
         ).fetchone()
         return r['opciones'].split('\n') if r else []
 
+    def guardar_sospechosos(self, pendiente_id: int, opciones: list[dict]) -> None:
+        self.cx.execute(
+            'INSERT OR REPLACE INTO sospechosos (pendiente_id, opciones) VALUES (?, ?)',
+            (pendiente_id, json.dumps(opciones, ensure_ascii=False)),
+        )
+        self.cx.commit()
+
+    def sospechosos(self, pendiente_id: int) -> list[dict]:
+        r = self.cx.execute(
+            'SELECT opciones FROM sospechosos WHERE pendiente_id = ?', (pendiente_id,)
+        ).fetchone()
+        return json.loads(r['opciones']) if r else []
+
     def guardar_propuesta(
         self,
         pendiente_id: int,

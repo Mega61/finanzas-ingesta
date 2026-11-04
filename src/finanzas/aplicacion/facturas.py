@@ -80,7 +80,16 @@ def clasificar(cx, solo_nuevos: bool = True) -> dict:
 
     n_nuevos = n_sin = 0
     for r in filas:
-        if solo_nuevos and db.catalogo_ver(cx, r['nit'], r['codigo']):
+        ya = db.catalogo_ver(cx, r['nit'], r['codigo'])
+        # Un producto que quedo «No es mercado» porque su comercio todavia no
+        # estaba en NITS_MERCADO se vuelve a mirar cuando entra: si no, los de
+        # Farmatodo de antes de noviembre de 2026 seguirian fuera para siempre.
+        vuelve = (
+            ya is not None
+            and ya['origen'] == 'no_mercado'
+            and r['nit'] in cat.NITS_MERCADO
+        )
+        if solo_nuevos and ya and not vuelve:
             continue
         tipo, grupo, categoria, origen = cat.clasificar(
             r['nit'], r['codigo'], r['descripcion'] or '', r['iva']

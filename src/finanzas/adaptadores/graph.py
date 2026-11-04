@@ -17,10 +17,12 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import UTC, datetime
 
 from finanzas import config, registro
 from finanzas.adaptadores import db
 from finanzas.dominio import texto
+from finanzas.dominio.sospechosos import Correo
 
 GRAPH = 'https://graph.microsoft.com/v1.0'
 CACHE = os.path.join(config.DATOS, '.cache_graph.json')
@@ -222,6 +224,42 @@ def mensajes(tok, desde=None, tope=None):
             if tope and vistos >= tope:
                 return
         url = datos.get('@odata.nextLink')
+
+
+def correos_entre(tok: str, desde: datetime, hasta: datetime) -> list[Correo]:
+    """TODO el correo recibido en esa ventana, de cualquier remitente.
+
+    Es la unica lectura del buzon que no pasa por `_nos_interesa`, y por eso
+    no se guarda: se usa para buscar a los sospechosos de un cargo raro y se
+    olvida. El correo personal no entra a la base.
+    """
+    q = {
+        '$select': 'receivedDateTime,from,subject,body',
+        '$filter': (
+            f'receivedDateTime ge {desde.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ} and '
+            f'receivedDateTime le {hasta.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}'
+        ),
+        '$orderby': 'receivedDateTime asc',
+        '$top': '50',
+    }
+    datos = _http(f'{GRAPH}/me/messages?' + urllib.parse.urlencode(q), tok)
+    fuera = []
+    for m in datos.get('value', []):
+        de = (m.get('from') or {}).get('emailAddress') or {}
+        fuera.append(
+            Correo(
+                remitente=de.get('address') or '',
+                nombre=de.get('name') or '',
+                asunto=m.get('subject') or '',
+                recibido=datetime.fromisoformat(
+                    m['receivedDateTime'].replace('Z', '+00:00')
+                ),
+                # Basta el principio: el monto y el comercio van arriba, y un
+                # boletin entero no aporta nada.
+                cuerpo=cuerpo_plano(m)[:4000],
+            )
+        )
+    return fuera
 
 
 def cuerpo_plano(msg):
