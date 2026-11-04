@@ -519,6 +519,18 @@ class Almacen:
 
     # ------------------------------------------------------------- la cola
 
+    def pendientes_del_dia(
+        self, usuario_id: int, fecha: str, tipo: str
+    ) -> list[sqlite3.Row]:
+        """Los movimientos de ese tipo y ese dia, que no esten descartados.
+        Para emparejar las dos alertas de un mismo avance."""
+        return self.cx.execute(
+            """SELECT * FROM pendientes
+               WHERE usuario_id = ? AND fecha = ? AND tipo = ?
+                 AND estado != 'descartado'""",
+            (usuario_id, fecha, tipo),
+        ).fetchall()
+
     def crear_pendiente(self, **campos: Any) -> tuple[int, bool]:
         """Devuelve (id, era_nuevo).
 
