@@ -155,9 +155,13 @@ def siguiente(cx: Any, pendiente_id: int, chat: Any) -> None:
 def _es_una_venta(lb: Any, p: Any) -> bool:
     """Plata que entra al estudio como «Servicios»: es una venta, y las ventas
     las escribe Agendapro. Si el bot tambien la escribiera, contaria doble en
-    cuanto Agendapro la suba (pasó con Angel y Verónica)."""
+    cuanto Agendapro la suba (pasó con Angel y Verónica).
+
+    Salvo que ya se espero y no llego, o ella dijo «anótala tú»: ahi la escribe
+    el bot. Mandarla a esperar otra vez era el bucle de cada cuatro dias."""
     return bool(
         lb
+        and p['decidido_por'] not in ('espera_vencida', 'venta_a_mano')
         and lb['tipo'] == 'actual'
         and float(p['valor']) > 0
         and p['categoria'] == 'Servicios'
@@ -181,7 +185,7 @@ def _la_escribe_agendapro(cx: Any, p: Any, chat: Any) -> None:
         publicador_actual.enlazar_con(cx, p, venta, 'venta_agendapro')
         telegram.enviar(
             chat,
-            '✅ Es la venta de Agendapro: no agregué nada.\n'
+            '✅ Es la venta de la Caja: no agregué nada.\n'
             + _la_venta(venta)
             + '\n\n'
             + describir(cx, alm.pendiente(p['id'])),
@@ -191,8 +195,8 @@ def _la_escribe_agendapro(cx: Any, p: Any, chat: Any) -> None:
     cx.commit()
     telegram.enviar(
         chat,
-        '💈 Las ventas las escribe Agendapro, así no se cuentan dos veces. '
-        'Si no está registrada, regístrala allá; cuando aparezca, la enlazo.\n'
+        '💈 Las ventas llegan de la Caja del panel cuando se cierra el día, así no '
+        'se cuentan dos veces. Cuando llegue, la enlazo sola.\n'
         + describir(cx, alm.pendiente(p['id'])),
     )
 
@@ -427,7 +431,7 @@ def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
     if venta:
         texto = (
             describir(cx, p)
-            + '\n\nEn Agendapro hay una venta igual:\n'
+            + '\n\nEn la Caja hay una venta igual:\n'
             + _la_venta(venta)
             + '\n\n<b>¿Es esa venta?</b>'
             '\n<i>Si es, no agrego nada: ya está en el libro.</i>'
@@ -441,17 +445,27 @@ def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
         texto = describir(cx, p) + '\n\n<b>¿Es el pago de una clienta?</b>'
         if cerca:
             texto += (
-                '\n<i>No hay una venta igual en Agendapro. Si es una de estas, '
+                '\n<i>No hay una venta igual en la Caja. Si es una de estas, '
                 'tócala y la enlazo:</i>'
             )
         botones = [[(_quien(t), f'vc:{p["id"]}:{i}')] for i, t in enumerate(cerca)]
+        # Siempre hay un «sí» y un «no». Antes, vencida la espera y sin ventas
+        # cerca, el unico boton era «No está en Agendapro»; ella elegia
+        # Servicios, el bot volvia a esperar, y a los dias la misma pregunta.
         if _puede_esperar(p):
             texto += (
-                '\n<i>Agendapro sube las ventas en la noche; si todavía no está, '
-                'espero a que aparezca y la enlazo, para no contarla dos veces.</i>'
+                '\n<i>Las ventas llegan cuando se cierra el día en la Caja del '
+                'panel; si no se ha cerrado, espero y la enlazo sola.</i>'
             )
-            botones.append([('⏳ Sí, pero todavía no está', f'va:{p["id"]}:2')])
-        botones.append([('📝 No está en Agendapro', f'va:{p["id"]}:0')])
+            botones.append([('⏳ Sí, todavía no se cierra el día', f'va:{p["id"]}:2')])
+        else:
+            texto += (
+                '\n<i>No llegó ninguna venta igual de la Caja. Si ese día no se '
+                'cerró, ciérralo en el panel y la enlazo sola; si no pasó por la '
+                'Caja, la anoto yo.</i>'
+            )
+            botones.append([('✍️ Sí, anótala tú', f'va:{p["id"]}:3')])
+        botones.append([('📝 No, es otra cosa', f'va:{p["id"]}:0')])
     _enviar(cx, chat, p, texto, botones)
     return True
 
@@ -671,6 +685,10 @@ def toque_categoria(t: Any) -> None:
     grupo = _grupo_por_crear(t.cx, p, cats[t.idx])
     ruteo.elegir_categoria(_a(t.cx), t.pid, cats[t.idx])
     _a(t.cx).actualizar_pendiente(t.pid, categoria_grupo=grupo)
+    if p['decidido_por'] == 'espera_vencida' and cats[t.idx] == 'Servicios':
+        # Ya se espero a la Caja y no llego: mandarla a esperar otra vez era
+        # el bucle. Se escribe.
+        _a(t.cx).actualizar_pendiente(t.pid, decidido_por='venta_a_mano')
     t.cx.commit()
     t.aviso(cats[t.idx])
     t.reemplazar(describir(t.cx, _a(t.cx).pendiente(t.pid)))
@@ -941,7 +959,8 @@ def toque_escribir_categoria(t: Any) -> None:
 
 def toque_venta(t: Any) -> None:
     """1 = es la venta de Agendapro que ya esta · 2 = es de una clienta, esperar
-    a Agendapro · 0 = es otra cosa, preguntar la categoria."""
+    a Agendapro · 3 = es de una clienta y no llego: la escribe el bot · 0 = es
+    otra cosa, preguntar la categoria."""
     p = _es_suyo(t.cx, t)
     if not p:
         return
@@ -949,6 +968,13 @@ def toque_venta(t: Any) -> None:
     if t.idx == 0:
         t.aviso('entonces, la categoría')
         return _preguntar_categoria(t.cx, p, t.chat)
+    if t.idx == 3:
+        alm.actualizar_pendiente(
+            t.pid, categoria='Servicios', pregunta=None, decidido_por='venta_a_mano'
+        )
+        t.cx.commit()
+        t.aviso('la anoto')
+        return _publicar(t.cx, t.pid, t.chat)
     lb = alm.libro(p['libro_id'])
     venta = publicador_actual.venta_de_agendapro(
         libros.cliente(lb), p, alm.ventas_ya_enlazadas(p)
@@ -959,7 +985,7 @@ def toque_venta(t: Any) -> None:
         t.cx.commit()
         t.aviso('enlazada')
         t.reemplazar(
-            '✅ Es la venta de Agendapro: no agregué nada.\n'
+            '✅ Es la venta de la Caja: no agregué nada.\n'
             + _la_venta(venta)
             + '\n\n'
             + describir(t.cx, alm.pendiente(t.pid))
@@ -973,9 +999,9 @@ def toque_venta(t: Any) -> None:
         t.pid, categoria='Servicios', pregunta=None, decidido_por='espera_agendapro'
     )
     t.cx.commit()
-    t.aviso('espero a Agendapro')
+    t.aviso('espero el cierre de la Caja')
     t.reemplazar(
-        '⏳ Espero a que Agendapro la suba y la enlazo. Si en unos días no aparece, te pregunto.\n'
+        '⏳ Espero a que llegue del cierre de la Caja y la enlazo. Si en unos días no llega, te pregunto.\n'
         + describir(t.cx, alm.pendiente(t.pid))
     )
     return None
@@ -1014,10 +1040,10 @@ def toque_venta_cercana(t: Any) -> None:
     if venta.get('amount') != actual.centavos(p['valor']):
         ojo = (
             f'\n⚠️ La venta dice {_plata(venta["amount"] / 100)} y llegaron '
-            f'{_plata(float(p["valor"]))}: corrígela en Agendapro si no cuadra.'
+            f'{_plata(float(p["valor"]))}: corrígela en la Caja si no cuadra.'
         )
     t.reemplazar(
-        '✅ Es la venta de Agendapro: no agregué nada.\n'
+        '✅ Es la venta de la Caja: no agregué nada.\n'
         + _la_venta(venta)
         + ojo
         + '\n\n'
@@ -1381,10 +1407,12 @@ def revisar_ventas_en_espera(cx: Any) -> int:
     """Las transferencias que la persona dijo que eran de una clienta y que
     Agendapro todavia no habia subido. Se enlazan cuando aparecen; si en unos
     dias no aparecen, se le pregunta UNA vez mas, ya sin la opcion de esperar.
+    Las vencidas que ella no ha contestado tambien se miran: si despues se
+    cierra ese dia en la Caja, se enlazan solas.
     Devuelve cuantas enlazo."""
     alm = _a(cx)
     enlazadas = 0
-    for p in alm.en_espera_de_agendapro():
+    for p in alm.en_espera_de_agendapro() + alm.vencidas_de_agendapro():
         lb = alm.libro(p['libro_id'])
         chat = p['telegram_chat_id']
         try:
@@ -1400,11 +1428,14 @@ def revisar_ventas_en_espera(cx: Any) -> int:
             if chat:
                 telegram.enviar(
                     chat,
-                    '✅ Ya apareció en Agendapro, la enlacé.\n'
+                    '✅ Ya llegó de la Caja, la enlacé.\n'
                     + _la_venta(venta)
                     + '\n\n'
                     + describir(cx, alm.pendiente(p['id'])),
                 )
+            continue
+        if p['decidido_por'] == 'espera_vencida':
+            # Ya se le pregunto: solo se enlaza si llega, sin volver a avisar.
             continue
         desde = _espera_desde(p)
         if desde and (fechas.hoy() - desde).days >= DIAS_DE_ESPERA and chat:
@@ -1414,7 +1445,7 @@ def revisar_ventas_en_espera(cx: Any) -> int:
             cx.commit()
             telegram.enviar(
                 chat,
-                f'⏳ Esperé {DIAS_DE_ESPERA} días y no apareció una venta igual en Agendapro.',
+                f'⏳ Esperé {DIAS_DE_ESPERA} días y no llegó una venta igual de la Caja.',
             )
             siguiente(cx, p['id'], chat)
     return enlazadas

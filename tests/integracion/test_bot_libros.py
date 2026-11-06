@@ -455,7 +455,7 @@ class TestLaVentaDeAgendapro:
         assert 'Marisol Pérez · Semipermanente pies' in pregunta, 'se ve de quien es'
         _toque(alm, f'va:{pid}:1')
         confirmacion = tg.editados[-1][1]
-        assert 'Es la venta de Agendapro' in confirmacion
+        assert 'Es la venta de la Caja' in confirmacion
         assert 'Marisol Pérez' in confirmacion, 'y la confirmacion dice cual enlazo'
         assert act.creadas == [], 'no se cuenta dos veces'
         p = alm.pendiente(pid)
@@ -506,7 +506,9 @@ class TestLaVentaDeAgendapro:
         _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
         botones = [b[0] for b in tg.botones()]
         assert any('Dayana Vargas' in b for b in botones), botones
-        assert not any('todavía no está' in b for b in botones), 'vieja: no se espera'
+        assert not any('todavía no se cierra' in b for b in botones), (
+            'vieja: no se espera'
+        )
         _toque(alm, f'vc:{pid}:0')
         p = alm.pendiente(pid)
         assert (p['estado'], p['firefly_id']) == ('publicado', 'ag-d')
@@ -546,8 +548,8 @@ class TestLaVentaDeAgendapro:
             (str(hace), str(hace), pid),
         )
         bot_libros.revisar_ventas_en_espera(alm.cx)
-        assert 'no apareció' in tg.enviados[-2][1]
-        assert not any('todavía no está' in b[0] for b in tg.botones())
+        assert 'no llegó' in tg.enviados[-2][1]
+        assert not any('todavía no se cierra' in b[0] for b in tg.botones())
         # un boton viejo de «espera» tampoco la vuelve a meter en la espera
         _toque(alm, f'va:{pid}:2')
         assert alm.pendiente(pid)['decidido_por'] != 'espera_agendapro'
@@ -586,7 +588,62 @@ class TestLaVentaDeAgendapro:
         _toque(alm, f'kc:{pid}:{[b[0] for b in tg.botones()].index("Servicios")}')
         assert act.creadas == [], 'las ventas las escribe Agendapro'
         assert alm.pendiente(pid)['decidido_por'] == 'espera_agendapro'
-        assert 'Agendapro' in tg.ultimo()[1]
+        assert 'Caja' in tg.ultimo()[1]
+
+    def _vencida(self, alm, tg, ella):
+        """Una transferencia de clienta que se espero y no llego."""
+        ayer = fechas.hoy() - timedelta(days=1)
+        pid = self._transferencia(alm, ella, fecha=ayer)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
+        _toque(alm, f'va:{pid}:2')
+        hace = fechas.hoy() - timedelta(days=bot_libros.DIAS_DE_ESPERA + 1)
+        alm.cx.execute(
+            'UPDATE pendientes SET fecha = ?, actualizado_en = ? WHERE id = ?',
+            (str(hace), str(hace), pid),
+        )
+        bot_libros.revisar_ventas_en_espera(alm.cx)
+        return pid
+
+    def test_vencida_la_espera_siempre_hay_un_si_y_un_no(self, mundo):
+        """Lo de Mariana (oct 27-31): vencida la espera y sin ventas cerca, el
+        unico boton era «No está en Agendapro»."""
+        alm, tg, _ff, _act, _juan, ella = mundo
+        self._vencida(alm, tg, ella)
+        botones = [b[0] for b in tg.botones()]
+        assert '✍️ Sí, anótala tú' in botones, botones
+        assert '📝 No, es otra cosa' in botones, botones
+        assert 'Caja' in tg.ultimo()[1]
+        assert 'Agendapro' not in tg.ultimo()[1]
+
+    def test_anotala_tu_la_escribe_como_servicios(self, mundo):
+        alm, tg, _ff, act, _juan, ella = mundo
+        pid = self._vencida(alm, tg, ella)
+        _toque(alm, f'va:{pid}:3')
+        assert len(act.creadas) == 1, 'ahora si la escribe el bot'
+        p = alm.pendiente(pid)
+        assert p['estado'] == 'publicado'
+        assert p['categoria'] == 'Servicios'
+        assert alm.en_espera_de_agendapro() == []
+
+    def test_servicios_despues_de_la_espera_no_vuelve_a_esperar(self, mundo):
+        """El bucle: «otra cosa» -> Servicios -> a esperar otra vez -> a los
+        cuatro dias la misma pregunta."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        pid = self._vencida(alm, tg, ella)
+        _toque(alm, f'va:{pid}:0')
+        _toque(alm, f'kc:{pid}:{[b[0] for b in tg.botones()].index("Servicios")}')
+        assert len(act.creadas) == 1
+        assert alm.pendiente(pid)['decidido_por'] != 'espera_agendapro'
+        assert alm.en_espera_de_agendapro() == []
+
+    def test_vencida_se_enlaza_si_despues_cierran_el_dia(self, mundo):
+        alm, tg, _ff, act, _juan, ella = mundo
+        pid = self._vencida(alm, tg, ella)
+        p = alm.pendiente(pid)
+        act.tx.append(_venta('ag-c', fechas.a_fecha(p['fecha']), 40000, 'Sara · Uñas'))
+        assert bot_libros.revisar_ventas_en_espera(alm.cx) == 1
+        assert alm.pendiente(pid)['firefly_id'] == 'ag-c'
+        assert act.creadas == []
 
 
 class TestLoParecido:
