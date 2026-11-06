@@ -147,7 +147,7 @@ def siguiente(cx: Any, pendiente_id: int, chat: Any) -> None:
         return _preguntar_categoria(cx, p, chat)
     if p['pregunta'] == 'existencia':
         return _preguntar_parecido(cx, p, chat)
-    if p['decidido_por'] == 'espera_agendapro':
+    if p['decidido_por'] in publicador_actual.ESPERAS:
         return None
     return _publicar(cx, p['id'], chat)
 
@@ -157,11 +157,12 @@ def _es_una_venta(lb: Any, p: Any) -> bool:
     las escribe Agendapro. Si el bot tambien la escribiera, contaria doble en
     cuanto Agendapro la suba (pasó con Angel y Verónica).
 
-    Salvo que ya se espero y no llego, o ella dijo «anótala tú»: ahi la escribe
-    el bot. Mandarla a esperar otra vez era el bucle de cada cuatro dias."""
+    Salvo que ella dijo «anótala tú»: ahi la escribe el bot. Que la espera se
+    venciera no basta: casi siempre es que falta cerrar el dia en la Caja, y
+    si el bot la escribiera, al cerrarlo contaria doble (oct 27-31)."""
     return bool(
         lb
-        and p['decidido_por'] not in ('espera_vencida', 'venta_a_mano')
+        and p['decidido_por'] != 'venta_a_mano'
         and lb['tipo'] == 'actual'
         and float(p['valor']) > 0
         and p['categoria'] == 'Servicios'
@@ -191,7 +192,14 @@ def _la_escribe_agendapro(cx: Any, p: Any, chat: Any) -> None:
             + describir(cx, alm.pendiente(p['id'])),
         )
         return
-    alm.actualizar_pendiente(p['id'], pregunta=None, decidido_por='espera_agendapro')
+    # Una que ya se espero sigue vencida: volver a la espera seria volver a
+    # avisar a los cuatro dias, el bucle.
+    espera = (
+        'espera_vencida'
+        if p['decidido_por'] == 'espera_vencida'
+        else 'espera_agendapro'
+    )
+    alm.actualizar_pendiente(p['id'], pregunta=None, decidido_por=espera)
     cx.commit()
     telegram.enviar(
         chat,
@@ -462,7 +470,7 @@ def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
             texto += (
                 '\n<i>No llegó ninguna venta igual de la Caja. Si ese día no se '
                 'cerró, ciérralo en el panel y la enlazo sola; si no pasó por la '
-                'Caja, la anoto yo.</i>'
+                'Caja, la anoto yo.</i>\n' + _OJO_DOBLE
             )
             botones.append([('✍️ Sí, anótala tú', f'va:{p["id"]}:3')])
         botones.append([('📝 No, es otra cosa', f'va:{p["id"]}:0')])
@@ -686,9 +694,9 @@ def toque_categoria(t: Any) -> None:
     ruteo.elegir_categoria(_a(t.cx), t.pid, cats[t.idx])
     _a(t.cx).actualizar_pendiente(t.pid, categoria_grupo=grupo)
     if p['decidido_por'] == 'espera_vencida' and cats[t.idx] == 'Servicios':
-        # Ya se espero a la Caja y no llego: mandarla a esperar otra vez era
-        # el bucle. Se escribe.
-        _a(t.cx).actualizar_pendiente(t.pid, decidido_por='venta_a_mano')
+        # Un boton viejo de una vencida: sigue esperando el cierre de la Caja,
+        # sin reiniciar la espera ni escribirla (contaria doble al cerrar).
+        _a(t.cx).actualizar_pendiente(t.pid, decidido_por='espera_vencida')
     t.cx.commit()
     t.aviso(cats[t.idx])
     t.reemplazar(describir(t.cx, _a(t.cx).pendiente(t.pid)))
@@ -966,6 +974,13 @@ def toque_venta(t: Any) -> None:
         return
     alm = _a(t.cx)
     if t.idx == 0:
+        if p['decidido_por'] in publicador_actual.ESPERAS:
+            # Dijo que no era una venta: ya no se espera nada de la Caja.
+            alm.actualizar_pendiente(
+                t.pid, pregunta='categoria', decidido_por='usuario'
+            )
+            t.cx.commit()
+            p = alm.pendiente(t.pid)
         t.aviso('entonces, la categoría')
         return _preguntar_categoria(t.cx, p, t.chat)
     if t.idx == 3:
@@ -1403,12 +1418,65 @@ def _espera_desde(p: Any) -> Any:
     return max(d for d in (f, dijo) if d) if (f or dijo) else None
 
 
+_OJO_DOBLE = (
+    '⚠️ <i>«Anótala tú» solo si esa plata nunca va a pasar por la Caja: si '
+    'después se cierra el día, la venta queda dos veces.</i>'
+)
+
+
+def _avisar_falta_cierre(cx: Any, p: Any, chat: Any) -> None:
+    """La espera se vencio. Lo mas probable es que falte cerrar ese dia en la
+    Caja del panel (oct 27-31: las cuentas cerradas, el dia no, y la plata sin
+    llegar a Actual). Se dice eso, y se sigue esperando: no queda pregunta
+    abierta, porque cada pregunta empujaba a elegir Servicios, el bot la
+    escribia, y al cerrar el dia quedaba doble.
+
+    Anotarla es un boton aparte y avisado; tambien estan las ventas cercanas
+    (se cobro otro monto, o quedo otro dia) y «no era una venta»."""
+    alm = _a(cx)
+    alm.actualizar_pendiente(p['id'], decidido_por='espera_vencida', pregunta=None)
+    cx.commit()
+    p = alm.pendiente(p['id'])
+    f = fechas.a_fecha(p['fecha'])
+    dia = f'el <b>{fechas.corta(f)}</b>' if f else 'ese día'
+    cerca: list[dict[str, Any]] = []
+    cerrado = None
+    try:
+        cliente = libros.cliente(alm.libro(p['libro_id']))
+        cerca = publicador_actual.ventas_cerca(cliente, p, alm.ventas_ya_enlazadas(p))
+        if f:
+            cerrado = publicador_actual.dia_cerrado_en_caja(cliente, f)
+    except (libros.LibroNoDisponible, actual.ApiError):
+        pass
+    if cerrado:
+        causa = (
+            f'⏳ {dia[0].upper()}{dia[1:]} sí se cerró en la Caja, pero no llegó una '
+            'venta de este valor: se cobró otro monto, o quedó en otro día. '
+            'Corrígela en la Caja y la enlazo sola.'
+        )
+    else:
+        causa = (
+            f'⏳ No ha llegado la venta de la Caja: '
+            f'{"falta" if cerrado is False else "lo más seguro es que falte"} '
+            f'cerrar {dia} en la Caja del panel. Ciérralo y la enlazo sola, '
+            'no tienes que contestarme.'
+        )
+    texto = causa + '\n\n' + describir(cx, p)
+    alm.guardar_sugerencias(p['id'], [str(t['id']) for t in cerca])
+    botones = [[(_quien(t), f'vc:{p["id"]}:{i}')] for i, t in enumerate(cerca)]
+    if cerca:
+        texto += '\n\n<i>Si es una de estas, tócala y la enlazo:</i>'
+    texto += '\n\n' + _OJO_DOBLE
+    botones.append([('✍️ No pasó por la Caja: anótala tú', f'va:{p["id"]}:3')])
+    botones.append([('📝 No era una venta', f'va:{p["id"]}:0')])
+    _enviar(cx, chat, p, texto, botones)
+
+
 def revisar_ventas_en_espera(cx: Any) -> int:
     """Las transferencias que la persona dijo que eran de una clienta y que
-    Agendapro todavia no habia subido. Se enlazan cuando aparecen; si en unos
-    dias no aparecen, se le pregunta UNA vez mas, ya sin la opcion de esperar.
-    Las vencidas que ella no ha contestado tambien se miran: si despues se
-    cierra ese dia en la Caja, se enlazan solas.
+    la Caja todavia no habia subido. Se enlazan cuando aparecen; si en unos
+    dias no aparecen, se le avisa UNA vez que falta cerrar el dia, y se sigue
+    esperando: si despues se cierra, se enlazan solas.
     Devuelve cuantas enlazo."""
     alm = _a(cx)
     enlazadas = 0
@@ -1435,17 +1503,13 @@ def revisar_ventas_en_espera(cx: Any) -> int:
                 )
             continue
         if p['decidido_por'] == 'espera_vencida':
-            # Ya se le pregunto: solo se enlaza si llega, sin volver a avisar.
+            # Ya se le aviso: solo se enlaza si llega, sin volver a avisar. Las
+            # que vencieron antes de este aviso quedaron con la pregunta de la
+            # categoria abierta; esas reciben el aviso una vez, y se cierra.
+            if p['pregunta'] and chat:
+                _avisar_falta_cierre(cx, p, chat)
             continue
         desde = _espera_desde(p)
         if desde and (fechas.hoy() - desde).days >= DIAS_DE_ESPERA and chat:
-            alm.actualizar_pendiente(
-                p['id'], decidido_por='espera_vencida', pregunta='categoria'
-            )
-            cx.commit()
-            telegram.enviar(
-                chat,
-                f'⏳ Esperé {DIAS_DE_ESPERA} días y no llegó una venta igual de la Caja.',
-            )
-            siguiente(cx, p['id'], chat)
+            _avisar_falta_cierre(cx, p, chat)
     return enlazadas

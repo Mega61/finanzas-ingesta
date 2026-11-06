@@ -452,11 +452,14 @@ def publicar_pendientes(cx, desde=None, dry_run=True, limite=500):
             continue
         if ruteo.usa_ruteo(alm, libro['usuario_id']):
             # Quien lleva varios libros publica solo lo que ya contesto del
-            # todo: con una pregunta abierta, o esperando a Agendapro, no.
+            # todo: con una pregunta abierta, o esperando la venta de la Caja,
+            # no. Vencida la espera tampoco: si el dia se cierra despues,
+            # contaria doble.
             del_libro = [
                 p
                 for p in del_libro
-                if not p['pregunta'] and p['decidido_por'] != 'espera_agendapro'
+                if not p['pregunta']
+                and p['decidido_por'] not in publicador_actual.ESPERAS
             ]
             if not del_libro:
                 continue

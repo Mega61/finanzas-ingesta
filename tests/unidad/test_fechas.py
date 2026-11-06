@@ -206,3 +206,8 @@ class TestDesdeParaBajar:
         assert fechas.desde_para_bajar(
             'ayer', self.AHORA, inicial=5
         ) == self.AHORA - timedelta(days=5)
+
+
+def test_corta_nombra_el_dia_como_en_el_chat():
+    assert fechas.corta(date(2026, 10, 27)) == '27 oct'
+    assert fechas.corta(date(2026, 1, 5)) == '5 ene'

@@ -185,6 +185,27 @@ def inicio_de_mes(d: date) -> date:
     return d.replace(day=1)
 
 
+_MES_CORTO = (
+    'ene',
+    'feb',
+    'mar',
+    'abr',
+    'may',
+    'jun',
+    'jul',
+    'ago',
+    'sep',
+    'oct',
+    'nov',
+    'dic',
+)
+
+
+def corta(d: date) -> str:
+    """«27 oct»: como se nombra un dia en un mensaje del bot."""
+    return f'{d.day} {_MES_CORTO[d.month - 1]}'
+
+
 def dias_entre(a: date | str | None, b: date | str | None) -> int | None:
     """Dias absolutos entre dos fechas. None si alguna no se entiende."""
     fa, fb = a_fecha(a), a_fecha(b)

@@ -34,6 +34,12 @@ DIAS = 2
 VENTA_DESPUES = 3
 # Cuantos dias a cada lado se muestran ventas para que ella elija.
 VENTANA_CERCA = 7
+# Una transferencia de clienta que espera su venta de la Caja. Mientras espera
+# no la escribe nadie mas que el CRM: ni el publicador ni el bot.
+ESPERAS = ('espera_agendapro', 'espera_vencida')
+# Las ventas que sube el CRM desde el cierre de la Caja del panel (las de antes
+# del 24 de octubre venian del scraper de Agendapro, con otro id).
+_DE_LA_CAJA = 'agendapro-tx:ea-appt:'
 
 
 def _parece(a: int, b: int) -> bool:
@@ -97,6 +103,25 @@ def venta_de_agendapro(
         if t.get('amount') == monto
     ]
     return candidatas[0] if len(candidatas) == 1 else None
+
+
+def dia_cerrado_en_caja(cliente: actual.Cliente, dia: Any) -> bool | None:
+    """¿Ya llego alguna venta del cierre de ese dia en la Caja, en cualquier
+    cuenta? Si llego otra y la de esta transferencia no, el dia SI se cerro: lo
+    que no cuadra es el monto o el dia de la venta. Si no llego ninguna, lo mas
+    seguro es que el dia siga sin cerrar. None si no se puede saber."""
+    f = fechas.a_fecha(dia)
+    if f is None:
+        return None
+    try:
+        cuentas = [c['id'] for c in cliente.cuentas() if not c.get('closed')]
+        return any(
+            str(t.get('imported_id') or '').startswith(_DE_LA_CAJA)
+            for c in cuentas
+            for t in cliente.transacciones(c, f, f)
+        )
+    except actual.ApiError:
+        return None
 
 
 def ventas_cerca(
