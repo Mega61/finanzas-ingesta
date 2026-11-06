@@ -12,6 +12,7 @@ grupo en el catalogo. Esto decide solo con lo que es claro:
   Mecato            80% o mas es dulce, bebida o panaderia, y al menos un
                     tercio es dulce (pan y gaseosa para la casa es mercado)
   Gato              80% o mas es de la gata
+  Medicamentos      80% o mas es drogueria (lo de Farmatodo que no es mecato)
   Cuidado personal  80% o mas es de cuidado personal
 
 Lo mezclado no se toca: un mercado con un almuerzo adentro sigue siendo
@@ -38,6 +39,7 @@ DULCE = ('Alimentacion', 'Snacks y dulces')
 ANTOJO = {DULCE, ('Alimentacion', 'Bebidas'), ('Alimentacion', 'Panaderia')}
 GATO = ('Mascotas', 'Gato')
 CUIDADO = ('Cuidado personal', None)
+MEDICINA = ('Cuidado personal', 'Salud')
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,14 @@ def categoria(lineas: Iterable[Linea]) -> tuple[str, str] | None:
         return 'Mecato', razon(antojo)
     if parte(gato) >= UMBRAL:
         return 'Gato', razon(gato)
+
+    def medicina(ln: Linea) -> bool:
+        return _es(ln, MEDICINA)
+
+    # Antes que cuidado personal, que la contiene: un ibuprofeno es Salud
+    # dentro del grupo de cuidado personal, y en Firefly es Medicamentos.
+    if parte(medicina) >= UMBRAL:
+        return 'Medicamentos', razon(medicina)
     if parte(cuidado) >= UMBRAL:
         return 'Cuidado personal', razon(cuidado)
     return None

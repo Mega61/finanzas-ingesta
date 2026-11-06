@@ -34,6 +34,7 @@ from finanzas.aplicacion import (
     presupuestos,
     publicador,
     ruteo,
+    sospechosos,
     tablero,
     taxonomia,
 )
@@ -182,67 +183,16 @@ def _preguntar_de_siempre(cx, filas):
             continue
 
         sug = sugerir_categorias(cx, p['usuario_id'], p, todas)
-        # el indice va en el callback por el limite de 64 bytes
-        botones = []
-        # Entra plata y alguien le debe, o sale y el le debe a alguien: puede
-        # ser la devolucion de un prestamo. Primero, y con ✓ si el monto
-        # cuadra; igual es un toque (entrada/bot_libros.py los atiende).
-        for j, (persona, saldo, exacto) in enumerate(
-            prestamos.devoluciones_posibles(_a(cx), p)
-        ):
-            que = 'te debe' if saldo > 0 else 'le debes'
-            botones.append(
-                [
-                    (
-                        f'🤝 Devolución · {persona} ({que} {_plata(abs(saldo))})'
-                        + (' ✓' if exacto else ''),
-                        f'kd:{p["id"]}:{j}',
-                    )
-                ]
-            )
-        fila = []
-        for i, c in enumerate(sug):
-            fila.append((c, f'c:{p["id"]}:{i}'))
-            if len(fila) == 2:
-                botones.append(fila)
-                fila = []
-        if fila:
-            botones.append(fila)
-        botones.append(
-            [
-                ('✏️ escribirlo', f't:{p["id"]}:0'),
-                ('🤝 préstamo', f'kl:{p["id"]}:0'),
-            ]
-        )
-        # Si ya esta en Firefly, se ofrece el menu completo: presupuesto,
-        # etiquetas, comercio y las 71 categorias. Antes solo habia ocho
-        # botones de categoria y no habia camino a nada mas.
-        if p['firefly_id']:
-            botones.append(
-                [
-                    ('📂 categorías', f'lc:{p["firefly_id"]}:0'),
-                    ('💰 presupuesto', f'pb:{p["firefly_id"]}:0'),
-                ]
-            )
-            botones.append(
-                [
-                    ('🏷 etiqueta', f'le:{p["firefly_id"]}:0'),
-                    ('🏪 comercio', f'nc:{p["firefly_id"]}:0'),
-                ]
-            )
-        botones.append([('🚫 No es un movimiento', f'x:{p["id"]}:0')])
-
-        texto = (
-            '¿Qué es esto?\n\n'
-            + describir(p)
-            + f'\n\n<i>{_escapar(p["descripcion"])}</i>'
-            # Los botones son el atajo, no la unica via. Decirlo importa: sin
-            # esto la unica forma visible de contestar eran ocho categorias de
-            # setenta y una, y para todo lo demas —presupuesto, etiqueta,
-            # nombre del comercio— no habia camino.
-            + '\n\n<i>O escríbeme y ya: «fue ropa en Etre, antojos, '
-            'etiqueta Ropa».</i>'
-        )
+        # Los correos de alrededor, solo si no se sabe quien es: un cargo con
+        # regla y categoria no necesita detective.
+        sosp = [
+            {'comercio': s.comercio, 'motivo': s.motivo}
+            for s in sospechosos.buscar(_a(cx), p)
+        ]
+        if sosp:
+            _a(cx).guardar_sospechosos(p['id'], sosp)
+        botones = _botones_de_pregunta(cx, p, sug, sosp)
+        texto = _texto_de_pregunta(p, sosp)
         try:
             msg = telegram.enviar(chat, texto, botones)
             db.marcar_preguntado(cx, p['id'])
@@ -253,6 +203,85 @@ def _preguntar_de_siempre(cx, filas):
         except telegram.TelegramError as ex:
             print(f'  no pude preguntar por #{p["id"]}: {ex}')
     return mandadas
+
+
+def _botones_de_pregunta(cx, p, sug, sosp, elegido=None):
+    """La botonera de «¿Qué es esto?». Aparte para poder redibujarla cuando
+    se toca un sospechoso: queda el comercio marcado y siguen las categorias."""
+    # el indice va en el callback por el limite de 64 bytes
+    botones = []
+    # Primero los sospechosos: si alguno es, eso dice mas que la categoria.
+    for i, s in enumerate(sosp):
+        marca = '✓ ' if s['comercio'] == elegido else '🔎 ¿'
+        cierre = '' if s['comercio'] == elegido else '?'
+        botones.append([(f'{marca}{s["comercio"][:40]}{cierre}', f'zs:{p["id"]}:{i}')])
+    # Entra plata y alguien le debe, o sale y el le debe a alguien: puede ser
+    # la devolucion de un prestamo. Con ✓ si el monto cuadra; igual es un
+    # toque (entrada/bot_libros.py los atiende).
+    for j, (persona, saldo, exacto) in enumerate(
+        prestamos.devoluciones_posibles(_a(cx), p)
+    ):
+        que = 'te debe' if saldo > 0 else 'le debes'
+        botones.append(
+            [
+                (
+                    f'🤝 Devolución · {persona} ({que} {_plata(abs(saldo))})'
+                    + (' ✓' if exacto else ''),
+                    f'kd:{p["id"]}:{j}',
+                )
+            ]
+        )
+    fila = []
+    for i, c in enumerate(sug):
+        fila.append((c, f'c:{p["id"]}:{i}'))
+        if len(fila) == 2:
+            botones.append(fila)
+            fila = []
+    if fila:
+        botones.append(fila)
+    botones.append(
+        [
+            ('✏️ escribirlo', f't:{p["id"]}:0'),
+            ('🤝 préstamo', f'kl:{p["id"]}:0'),
+        ]
+    )
+    # Si ya esta en Firefly, se ofrece el menu completo: presupuesto,
+    # etiquetas, comercio y las 71 categorias. Antes solo habia ocho botones
+    # de categoria y no habia camino a nada mas.
+    if p['firefly_id']:
+        botones.append(
+            [
+                ('📂 categorías', f'lc:{p["firefly_id"]}:0'),
+                ('💰 presupuesto', f'pb:{p["firefly_id"]}:0'),
+            ]
+        )
+        botones.append(
+            [
+                ('🏷 etiqueta', f'le:{p["firefly_id"]}:0'),
+                ('🏪 comercio', f'nc:{p["firefly_id"]}:0'),
+            ]
+        )
+    botones.append([('🚫 No es un movimiento', f'x:{p["id"]}:0')])
+    return botones
+
+
+def _texto_de_pregunta(p, sosp, elegido=None):
+    texto = (
+        '¿Qué es esto?\n\n' + describir(p) + f'\n\n<i>{_escapar(p["descripcion"])}</i>'
+    )
+    if elegido:
+        texto += f'\n\n🏪 <b>{_escapar(elegido)}</b> ✓ — falta la categoría'
+    elif sosp:
+        texto += '\n\n🔎 <b>En tu correo, a esa hora:</b>'
+        for s in sosp:
+            texto += f'\n• <b>{_escapar(s["comercio"])}</b>: {_escapar(s["motivo"])}'
+    # Los botones son el atajo, no la unica via. Decirlo importa: sin esto la
+    # unica forma visible de contestar eran ocho categorias de setenta y una,
+    # y para todo lo demas —presupuesto, etiqueta, nombre del comercio— no
+    # habia camino.
+    return texto + (
+        '\n\n<i>O escríbeme y ya: «fue ropa en Etre, antojos, etiqueta Ropa».</i>'
+    )
 
 
 def _preguntar_fantasma(cx, p, chat):
@@ -745,6 +774,37 @@ def _toque_categoria(t):
         t.aviso('esa opción ya no está')
         return
     t.resolver(cat, categoria=cat)
+
+
+def _toque_sospechoso(t):
+    """Eligio a uno de los sospechosos del correo: ese es el comercio.
+
+    No cierra la pregunta: falta la categoria, y la botonera se redibuja con
+    el comercio marcado. Tampoco deja regla: detras de RAPYD*MC hay cien
+    comercios, y que hoy fuera Corferias no dice nada de la proxima vez.
+    """
+    sosp = _a(t.cx).sospechosos(t.pid)
+    if t.idx >= len(sosp):
+        t.aviso('esa opción ya no está')
+        return
+    comercio = sosp[t.idx]['comercio']
+    p = _a(t.cx).pendiente(t.pid)
+    if p is None:
+        t.aviso('ese movimiento ya no existe')
+        return
+    db.pendiente_actualizar(t.cx, t.pid, cuenta_destino=comercio)
+    t.cx.commit()
+    if p['firefly_id']:
+        _corregir_en_firefly(t.cx, p, None, None, comercio)
+    t.aviso(f'🏪 {comercio}')
+    p = _a(t.cx).pendiente(t.pid)
+    sug = _leer_sugerencias(t.cx, t.pid)
+    telegram.editar(
+        t.chat,
+        t.mid,
+        _texto_de_pregunta(p, sosp, elegido=comercio),
+        _botones_de_pregunta(t.cx, p, sug, sosp, elegido=comercio),
+    )
 
 
 def _toque_descartar(t):
@@ -2370,6 +2430,7 @@ TOQUES_DE_PENDIENTE = {
     't',
     'm',
     'sp',
+    'zs',
     # confirmar o corregir lo que entendio la IA (entrada/bot_conversacion.py)
     'ic',
     *bot_conversacion.TOQUES,
@@ -2382,6 +2443,8 @@ TOQUES_DE_CATALOGO = {'fg', 'fc', 'fv', 'fp', 'fx'}
 
 TOQUES = {
     'c': _toque_categoria,
+    # Un sospechoso del correo: ese fue el comercio (ver aplicacion/sospechosos).
+    'zs': _toque_sospechoso,
     'x': _toque_descartar,
     'd': _toque_borrar_fantasma,
     'k': _toque_dejarlo,

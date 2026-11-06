@@ -130,6 +130,10 @@ IGNORAR = [
         r'|informa la Clave Dinamica\s+\d)',
     ),
     ('topes', r'Actualizaste los topes de tus transacciones'),
+    # Entrar a la Sucursal Telefonica o al chat con la clave: un aviso de
+    # seguridad, no plata. Llega con la plantilla nueva y el parser lo dejaba
+    # como «sin reconocer».
+    ('identificacion', r'Te identificaste con tu clave principal'),
     # El codigo de un solo uso que manda el banco al cambiar el correo de las
     # alertas o actualizar datos. Trae un numero de seis cifras que no es plata.
     (
@@ -464,6 +468,28 @@ def _f13(m, msg):
     )
     ev.traslado_a = m.group(6)
     return ev
+
+
+@_familia(
+    'recarga_civica',
+    r'Recargaste\s+\$?\s*([\d.,]+)\s+a\s+(Tarjeta Civica)\s+desde tu cuenta\s*\*+\s?(\d{3,4})\s+el\s+([\d/]+)\s+([\d:]+)',
+)
+def _f15(m, msg):
+    # La plantilla nueva (an.notificacionesbancolombia.com) de noviembre de
+    # 2026. Las recargas de la Civica no se veian: quedaban «sin reconocer» y
+    # solo aparecian al cerrar el mes con el extracto.
+    return Evento(
+        'pago_factura',
+        parse_fecha(m.group(4)),
+        m.group(5),
+        'COP',
+        -parse_monto(m.group(1)),
+        m.group(3),
+        'cuenta',
+        'Tarjeta Civica',
+        'Recarga de Tarjeta Civica',
+        'recarga_civica',
+    )
 
 
 # --------------------------------------------------------------------- API

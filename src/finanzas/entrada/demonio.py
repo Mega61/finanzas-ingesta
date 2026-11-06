@@ -35,7 +35,7 @@ from finanzas.aplicacion import (
     publicador,
     ruteo,
 )
-from finanzas.dominio import fechas
+from finanzas.dominio import espejos, fechas
 from finanzas.parsers import bancolombia_alertas as alertas
 
 # Si la configuracion de personas no se pudo aplicar, el motivo. El servicio
@@ -244,6 +244,49 @@ def paso_importar(cx, uid, carpeta=None):
     return nuevos
 
 
+def _es_espejo_de_avance(cx, c, ev, fecha_ev):
+    """Si este correo es la otra pata de un avance. Mira en las dos
+    direcciones, porque el «recibiste» puede llegar antes que el avance.
+
+    Si el que llega es el avance y el «recibiste» ya estaba en la cola, se
+    descarta aquel (si todavia no llego a un libro) y el avance sigue normal.
+    """
+    alm = db.almacen(cx)
+    este = {
+        'tipo': ev.tipo,
+        'fecha': fecha_ev,
+        'hora': ev.hora,
+        'valor': ev.valor,
+        'instrumento': ev.instrumento,
+        'traslado_a': ev.traslado_a,
+    }
+    if ev.tipo == 'transferencia_entrada':
+        return any(
+            espejos.es_espejo(a, este)
+            for a in alm.pendientes_del_dia(c['usuario_id'], fecha_ev, 'avance')
+        )
+    if ev.tipo == 'avance':
+        for e in alm.pendientes_del_dia(
+            c['usuario_id'], fecha_ev, 'transferencia_entrada'
+        ):
+            if not espejos.es_espejo(este, e):
+                continue
+            if e['firefly_id']:
+                print(
+                    f'  ojo: #{e["id"]} es la otra pata de un avance y ya esta '
+                    f'en Firefly ({e["firefly_id"]}): hay que borrarlo a mano'
+                )
+                continue
+            db.pendiente_actualizar(
+                cx,
+                e['id'],
+                estado='descartado',
+                pregunta=None,
+                decidido_por='espejo_de_avance',
+            )
+    return False
+
+
 def paso_procesar(cx, uid):
     """correos_crudos -> pendientes, ya clasificados."""
     filas = db.correos_sin_procesar(cx, limite=2000)
@@ -325,6 +368,31 @@ def paso_procesar(cx, uid):
                 decidido_por='anterior_a_la_marca_de_agua',
             )
             conteo['historico'] = conteo.get('historico', 0) + 1
+            db.correo_marcar_procesado(cx, c['id'])
+            continue
+
+        # Las dos alertas de un mismo avance (ver dominio/espejos.py): el
+        # «recibiste» es la otra pata del traslado, no un ingreso.
+        if _es_espejo_de_avance(cx, c, ev, fecha_ev):
+            db.pendiente_crear(
+                cx,
+                correo_id=c['id'],
+                usuario_id=c['usuario_id'],
+                tipo=ev.tipo,
+                fecha=fecha_ev,
+                hora=ev.hora,
+                moneda=ev.moneda,
+                valor=ev.valor,
+                instrumento=ev.instrumento,
+                clase_instrumento=ev.clase_instrumento,
+                contraparte=ev.contraparte,
+                descripcion=ev.descripcion,
+                plantilla=ev.plantilla,
+                external_id=publicador.external_id(c['message_id']),
+                estado='descartado',
+                decidido_por='espejo_de_avance',
+            )
+            conteo['espejo'] = conteo.get('espejo', 0) + 1
             db.correo_marcar_procesado(cx, c['id'])
             continue
 

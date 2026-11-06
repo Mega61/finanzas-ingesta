@@ -26,6 +26,7 @@ from finanzas.aplicacion import catalogo as cat
 EXITO = '890900608'
 D1 = '900276962'
 SUPERVAQUITA = '900522508'
+FARMATODO = '830129327'
 
 
 @pytest.mark.parametrize(
@@ -35,7 +36,6 @@ SUPERVAQUITA = '900522508'
         ('890904996', 'GAS NATURAL REGULADO', 0.0),
         ('890904996', 'ALUMBRADO PÚBLICO SABANETA', 0.0),
         ('901867500', 'PLAN DE SALUD Y BIENESTAR MES TRAINING PRE VENTA 1.0', 0.0),
-        ('830129327', 'BUSCAPINA COMPOSITUM NF CAJA X10', 19.0),
         ('890912426', 'NUPEC FELINO INDOOR X 3KG', 19.0),
     ],
 )
@@ -48,7 +48,7 @@ def test_lo_que_no_es_super_no_entra_al_mercado(nit, desc, iva):
     assert grupo != 'Sin clasificar', 'el bot seguiria preguntando por el'
 
 
-@pytest.mark.parametrize('nit', [EXITO, D1, SUPERVAQUITA])
+@pytest.mark.parametrize('nit', [EXITO, D1, SUPERVAQUITA, FARMATODO])
 def test_el_super_sigue_clasificandose_como_siempre(nit):
     tipo, grupo, _c, origen = cat.clasificar(nit, '1', 'LECHE ENTERA X 1000ML', 0.0)
     assert grupo != cat.NO_ES_MERCADO
@@ -70,9 +70,30 @@ def test_tipo_de_no_asciende_a_consumible():
     assert cat.tipo_de(cat.NO_ES_MERCADO) == cat.NO_ES_MERCADO
 
 
-def test_los_tres_nits_son_los_del_dashboard():
+def test_los_nits_son_los_del_dashboard():
     """Si alguien agrega una cadena, que sea aqui y no en cuatro sitios."""
-    assert {EXITO, D1, SUPERVAQUITA} == cat.NITS_MERCADO
+    assert {EXITO, D1, SUPERVAQUITA, FARMATODO} == cat.NITS_MERCADO
+
+
+@pytest.mark.parametrize(
+    'desc,iva',
+    [
+        ('Fraccion Ibuprofeno Genfar 800Mg Tabletas Caja X10Tab.', None),
+        # Exenta de IVA: antes de la regla de medicina, esto era pollo.
+        ('Fraccion Amoxicilina 500Mg AG Blister x 10 Capsulas', 0.0),
+        ('BUSCAPINA COMPOSITUM NF CAJA X10', 19.0),
+    ],
+)
+def test_en_farmatodo_la_pastilla_es_salud(desc, iva):
+    _t, grupo, categoria, origen = cat.clasificar(FARMATODO, '1', desc, iva)
+    assert (grupo, categoria, origen) == ('Cuidado personal', 'Salud', 'medicina')
+
+
+def test_en_farmatodo_el_mecato_sigue_siendo_mecato():
+    _t, grupo, categoria, _o = cat.clasificar(
+        FARMATODO, '1', 'Chocolatina Jumbo Mani x 90 gr', 19.0
+    )
+    assert (grupo, categoria) == ('Alimentacion', 'Snacks y dulces')
 
 
 def test_no_mercado_le_gana_a_una_respuesta_tuya(tmp_path):
