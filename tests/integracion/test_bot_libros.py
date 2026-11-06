@@ -548,8 +548,11 @@ class TestLaVentaDeAgendapro:
             (str(hace), str(hace), pid),
         )
         bot_libros.revisar_ventas_en_espera(alm.cx)
-        assert 'no llegó' in tg.enviados[-2][1]
+        assert f'cerrar el <b>{fechas.corta(hace)}</b>' in tg.ultimo()[1]
         assert not any('todavía no se cierra' in b[0] for b in tg.botones())
+        enviados = len(tg.enviados)
+        bot_libros.revisar_ventas_en_espera(alm.cx)
+        assert len(tg.enviados) == enviados, 'se avisa una sola vez'
         # un boton viejo de «espera» tampoco la vuelve a meter en la espera
         _toque(alm, f'va:{pid}:2')
         assert alm.pendiente(pid)['decidido_por'] != 'espera_agendapro'
@@ -604,16 +607,55 @@ class TestLaVentaDeAgendapro:
         bot_libros.revisar_ventas_en_espera(alm.cx)
         return pid
 
-    def test_vencida_la_espera_siempre_hay_un_si_y_un_no(self, mundo):
-        """Lo de Mariana (oct 27-31): vencida la espera y sin ventas cerca, el
-        unico boton era «No está en Agendapro»."""
-        alm, tg, _ff, _act, _juan, ella = mundo
-        self._vencida(alm, tg, ella)
+    def test_vencida_dice_que_falta_cerrar_el_dia_y_no_deja_pregunta(self, mundo):
+        """Lo de Mariana (oct 27-31): las cuentas cerradas, el dia no. La
+        pregunta de la categoria empujaba a Servicios -> el bot la escribia ->
+        al cerrar el dia, doble. Ahora dice la causa y sigue esperando."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        pid = self._vencida(alm, tg, ella)
+        texto = tg.ultimo()[1]
+        assert 'falta cerrar el' in texto, texto
+        assert 'Caja del panel' in texto
+        assert 'dos veces' in texto, 'anotarla viene avisado'
         botones = [b[0] for b in tg.botones()]
-        assert '✍️ Sí, anótala tú' in botones, botones
-        assert '📝 No, es otra cosa' in botones, botones
-        assert 'Caja' in tg.ultimo()[1]
-        assert 'Agendapro' not in tg.ultimo()[1]
+        assert '✍️ No pasó por la Caja: anótala tú' in botones, botones
+        assert '📝 No era una venta' in botones, botones
+        p = alm.pendiente(pid)
+        assert (p['decidido_por'], p['pregunta']) == ('espera_vencida', None)
+        publicador.publicar_pendientes(alm.cx, dry_run=False)
+        assert act.creadas == [], 'vencida tampoco la escribe el publicador'
+
+    def test_si_el_dia_si_se_cerro_lo_dice(self, mundo):
+        """Otra venta del mismo dia llego de la Caja: el dia se cerro, lo que
+        no cuadra es el monto (Geraldine: 49.500 cobrado, 50.000 transferido)."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        hace = fechas.hoy() - timedelta(days=bot_libros.DIAS_DE_ESPERA + 1)
+        act.tx.append(
+            {
+                **_venta('ag-x', hace, 49500, 'Geraldine · Semi pies'),
+                'imported_id': 'agendapro-tx:ea-appt:44',
+            }
+        )
+        self._vencida(alm, tg, ella)
+        texto = tg.ultimo()[1]
+        assert 'sí se cerró' in texto, texto
+        assert any('Geraldine' in b[0] for b in tg.botones()), 'y la ofrece'
+
+    def test_las_vencidas_de_antes_reciben_el_aviso_una_vez(self, mundo):
+        """Las ocho de oct 27-31 vencieron con la pregunta de la categoria
+        abierta. En la pasada siguiente reciben el aviso nuevo, una vez."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        pid = self._vencida(alm, tg, ella)
+        alm.actualizar_pendiente(pid, pregunta='categoria')
+        alm.cx.commit()
+        enviados = len(tg.enviados)
+        bot_libros.revisar_ventas_en_espera(alm.cx)
+        assert len(tg.enviados) == enviados + 1
+        assert 'falta cerrar' in tg.ultimo()[1]
+        assert alm.pendiente(pid)['pregunta'] is None
+        bot_libros.revisar_ventas_en_espera(alm.cx)
+        assert len(tg.enviados) == enviados + 1, 'una sola vez'
+        assert act.creadas == []
 
     def test_anotala_tu_la_escribe_como_servicios(self, mundo):
         alm, tg, _ff, act, _juan, ella = mundo
@@ -625,15 +667,28 @@ class TestLaVentaDeAgendapro:
         assert p['categoria'] == 'Servicios'
         assert alm.en_espera_de_agendapro() == []
 
-    def test_servicios_despues_de_la_espera_no_vuelve_a_esperar(self, mundo):
-        """El bucle: «otra cosa» -> Servicios -> a esperar otra vez -> a los
-        cuatro dias la misma pregunta."""
+    def test_servicios_despues_de_la_espera_no_la_escribe(self, mundo):
+        """Antes, vencida la espera, elegir Servicios la escribia: al cerrar
+        el dia en la Caja quedaba doble. Escribirla es solo «anótala tú»."""
         alm, tg, _ff, act, _juan, ella = mundo
         pid = self._vencida(alm, tg, ella)
         _toque(alm, f'va:{pid}:0')
         _toque(alm, f'kc:{pid}:{[b[0] for b in tg.botones()].index("Servicios")}')
-        assert len(act.creadas) == 1
-        assert alm.pendiente(pid)['decidido_por'] != 'espera_agendapro'
+        assert act.creadas == []
+
+    def test_un_boton_viejo_de_categoria_no_la_escribe_ni_reinicia_la_espera(
+        self, mundo
+    ):
+        """Las vencidas de antes tienen en el chat la pregunta de la categoria.
+        Tocar Servicios ahi la deja esperando el cierre, sin volver a avisar."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        pid = self._vencida(alm, tg, ella)
+        alm.actualizar_pendiente(pid, pregunta='categoria')
+        alm.cx.commit()
+        bot_libros._preguntar_categoria(alm.cx, alm.pendiente(pid), ELLA)
+        _toque(alm, f'kc:{pid}:{[b[0] for b in tg.botones()].index("Servicios")}')
+        assert act.creadas == []
+        assert alm.pendiente(pid)['decidido_por'] == 'espera_vencida'
         assert alm.en_espera_de_agendapro() == []
 
     def test_vencida_se_enlaza_si_despues_cierran_el_dia(self, mundo):
