@@ -30,6 +30,7 @@ from finanzas.aplicacion import (
     personas,
     plan_edicion,
     plan_firefly,
+    por_factura,
     prestamos,
     presupuestos,
     publicador,
@@ -1754,6 +1755,83 @@ def _texto_producto(p):
     )
 
 
+def preguntar_mezcla(cx, m):
+    """Una compra de Farmatodo con factura mezclada: pastillas, mecato y
+    protector solar en la misma. La regla del comercio dice Mercado y casi
+    nunca lo es, asi que se pregunta con lo que trae la factura, de lo que mas
+    pesa a lo que menos. Una sola vez por compra."""
+    p, opciones = m['pendiente'], m['opciones']
+    u = next((x for x in _a(cx).usuarios() if x['id'] == p['usuario_id']), None)
+    if not u or not u['telegram_chat_id']:
+        return False
+    actual = p['categoria'] or 'sin categoría'
+    cats = [c for c, _parte, _r in opciones]
+    _guardar_sugerencias(cx, p['id'], [*cats, actual])
+    lineas = '\n'.join(
+        f'• <b>{html.escape(c)}</b> {round(parte * 100)}% — <i>{html.escape(razon[:70])}</i>'
+        for c, parte, razon in opciones
+    )
+    texto = (
+        f'🧾 Lo de <b>{html.escape(p["contraparte"] or "")}</b> por '
+        f'{_plata(abs(p["valor"]))} ({p["fecha"]}) trae de todo:\n{lineas}\n\n'
+        f'Quedó como <b>{html.escape(actual)}</b>. <b>¿Qué categoría le dejo?</b>'
+    )
+    botones = _botonera(
+        [
+            (f'{c} {round(parte * 100)}%', f'fz:{p["id"]}:{i}')
+            for i, (c, parte, _r) in enumerate(opciones)
+        ]
+    )
+    botones.append(
+        [
+            (f'✅ Dejarlo en {actual}', f'fz:{p["id"]}:{len(cats)}'),
+            ('📂 otra', f'lc:{p["firefly_id"]}:0'),
+        ]
+    )
+    telegram.enviar(u['telegram_chat_id'], texto, botones)
+    db.bitacora(
+        cx,
+        'por_factura_mezcla',
+        usuario_id=p['usuario_id'],
+        pendiente_id=p['id'],
+        firefly_id=p['firefly_id'],
+        payload={'opciones': cats, 'factura': m['factura']['numero']},
+        ok=True,
+    )
+    cx.commit()
+    return True
+
+
+def _toque_mezcla(t):
+    """Eligio la categoria de una compra mezclada (ver `preguntar_mezcla`)."""
+    alm = _a(t.cx)
+    p = alm.pendiente(t.pid)
+    if p is None or p['usuario_id'] != _usuario_de(t.cx, t.chat) or not p['firefly_id']:
+        t.aviso('esa compra ya no está')
+        return
+    sug = _leer_sugerencias(t.cx, t.pid)
+    if t.idx >= len(sug):
+        t.aviso('esa opción ya no está')
+        return
+    cat = sug[t.idx]
+    if cat == p['categoria']:
+        alm.actualizar_pendiente(t.pid, decidido_por='usuario')
+        t.cx.commit()
+        t.aviso(f'se queda en {cat}')
+        t.reemplazar(f'✅ Se queda en <b>{html.escape(cat)}</b>.')
+        return
+    cambios = {'categoria': cat}
+    pres = por_factura.presupuesto_de(cat, t.cx)
+    if pres:
+        cambios['presupuesto'] = pres
+    if _aplicar_edicion(t.cx, t.chat, str(p['firefly_id']), cambios, aviso=t.aviso):
+        alm.actualizar_pendiente(
+            t.pid, categoria=cat, presupuesto=pres, decidido_por='usuario'
+        )
+        t.cx.commit()
+        t.reemplazar(f'✅ Quedó en <b>{html.escape(cat)}</b>.')
+
+
 def preguntar_productos(cx, limite=MAX_PRODUCTOS):
     """Manda las preguntas de catalogo pendientes. Devuelve cuantas mando."""
     chat = config.get('TELEGRAM_CHAT_ID_JUAN')
@@ -2445,6 +2523,8 @@ TOQUES = {
     'c': _toque_categoria,
     # Un sospechoso del correo: ese fue el comercio (ver aplicacion/sospechosos).
     'zs': _toque_sospechoso,
+    # Una compra de Farmatodo mezclada: que categoria le queda.
+    'fz': _toque_mezcla,
     'x': _toque_descartar,
     'd': _toque_borrar_fantasma,
     'k': _toque_dejarlo,

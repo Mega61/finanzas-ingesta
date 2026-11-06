@@ -104,3 +104,51 @@ def categoria(lineas: Iterable[Linea]) -> tuple[str, str] | None:
     if parte(cuidado) >= UMBRAL:
         return 'Cuidado personal', razon(cuidado)
     return None
+
+
+# Lo que pesa menos que esto no sale de opcion: una bolsa o un chicle no hacen
+# de una compra de shampoo un mecato.
+MEZCLA_MINIMA = 0.15
+
+
+def mezcla(lineas: Iterable[Linea]) -> list[tuple[str, float, str]]:
+    """Las categorias de Firefly que hay en una factura mezclada, de la que
+    mas pesa a la que menos: [(categoria, parte, razon)].
+
+    Es para preguntar, no para decidir: en Farmatodo una compra con pastillas,
+    galletas y protector solar no es Mercado, y no hay una sola respuesta.
+    Lo de alimentacion que no es antojo, y el aseo, cuentan como Mercado.
+    """
+    todas = [ln for ln in lineas if ln.total and ln.total > 0]
+    lineas = [ln for ln in todas if ln.grupo not in NO_VOTAN]
+    total = sum(ln.total for ln in lineas)
+    if total <= 0 or total < CONOCIDO_MINIMO * sum(ln.total for ln in todas):
+        return []
+
+    def cual(ln: Linea) -> str:
+        if _es(ln, COMIDA):
+            return 'Restaurante'
+        if any(_es(ln, k) for k in ANTOJO):
+            return 'Mecato'
+        if _es(ln, GATO):
+            return 'Gato'
+        if _es(ln, MEDICINA):
+            return 'Medicamentos'
+        if _es(ln, CUIDADO):
+            return 'Cuidado personal'
+        return 'Mercado'
+
+    suma: dict[str, float] = {}
+    nombres: dict[str, list[str]] = {}
+    for ln in lineas:
+        c = cual(ln)
+        suma[c] = suma.get(c, 0) + ln.total
+        nombres.setdefault(c, [])
+        if ln.descripcion not in nombres[c]:
+            nombres[c].append(ln.descripcion)
+    salida = [
+        (c, v / total, ', '.join(nombres[c][:3]))
+        for c, v in suma.items()
+        if v / total >= MEZCLA_MINIMA
+    ]
+    return sorted(salida, key=lambda x: -x[1])

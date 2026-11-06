@@ -1278,6 +1278,16 @@ class Almacen:
 
     # ------------------------------------------------------------ bitacora
 
+    def ya_anotado(self, pendiente_id: int, accion: str) -> bool:
+        """Si la bitacora ya tiene esa accion para ese movimiento."""
+        return (
+            self.cx.execute(
+                'SELECT 1 FROM bitacora WHERE pendiente_id = ? AND accion = ? LIMIT 1',
+                (pendiente_id, accion),
+            ).fetchone()
+            is not None
+        )
+
     def anotar(
         self,
         accion: str,

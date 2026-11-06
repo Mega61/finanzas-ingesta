@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from finanzas.dominio.por_factura import Linea, categoria
+from finanzas.dominio.por_factura import Linea, categoria, mezcla
 
 COMIDA = ('Comida preparada', 'Comida preparada')
 DULCE = ('Alimentacion', 'Snacks y dulces')
@@ -104,3 +104,31 @@ def test_farmatodo_con_mecato_y_pastillas_no_se_toca():
         ]
     )
     assert r is None
+
+
+def test_la_mezcla_de_farmatodo_trae_sus_opciones():
+    """La del 1-nov otra vez: no se decide, pero se puede preguntar con lo que
+    trae, de lo que mas pesa a lo que menos. El domicilio no vota."""
+    r = mezcla(
+        [
+            _l('Servicio Domicilio Web', SERVICIO, 9000),
+            _l('Fraccion Ibuprofeno Genfar 800Mg', MEDICINA, 4250),
+            _l('$Galletas Oreo Cobertura', DULCE, 15924),
+            _l('Fraccion Amoxicilina 500Mg', MEDICINA, 4950),
+            _l('Chocolatina Jumbo Mani', DULCE, 7941),
+        ]
+    )
+    assert [c for c, _p, _r in r] == ['Mecato', 'Medicamentos']
+    assert round(r[0][1], 2) == 0.72
+
+
+def test_lo_que_pesa_poco_no_sale_de_opcion():
+    r = mezcla(
+        [
+            _l('Shampoo Fructis', ('Cuidado personal', 'Cabello'), 28000),
+            _l('Protector Solar Fps 50', ('Cuidado personal', 'Piel'), 52000),
+            _l('Toallas de Cocina', ('Aseo y hogar', 'Limpieza'), 12000),
+            _l('Chicle', DULCE, 2000),
+        ]
+    )
+    assert [c for c, _p, _r in r] == ['Cuidado personal'], 'el chicle no es opcion'
