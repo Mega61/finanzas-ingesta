@@ -680,6 +680,16 @@ class Almacen:
                  AND p.estado IN ('nuevo', 'error') AND p.libro_id IS NOT NULL"""
         ).fetchall()
 
+    def vencidas_de_agendapro(self) -> list[sqlite3.Row]:
+        """Las que se esperaron y no llegaron, y ella no ha contestado. Si
+        despues se cierra ese dia en la Caja, la venta llega y se enlazan."""
+        return self.cx.execute(
+            """SELECT p.*, u.telegram_chat_id FROM pendientes p
+               JOIN usuarios u ON u.id = p.usuario_id
+               WHERE p.decidido_por = 'espera_vencida'
+                 AND p.estado IN ('nuevo', 'error') AND p.libro_id IS NOT NULL"""
+        ).fetchall()
+
     def marcar_preguntado(self, pendiente_id: int) -> None:
         self.cx.execute(
             "UPDATE pendientes SET preguntado_en = datetime('now') WHERE id = ?",
