@@ -161,6 +161,14 @@ REGLAS = [
         'Cuidado personal',
         'Otros',
     ),
+    # El protector solar de Farmatodo («... Fps 50 Frasco x180 ml») caia en
+    # Abarrotes por «frasco x», y una compra de cuidado personal quedo Mercado.
+    (
+        r'protector solar|bloqueador|\bfps ?\d|after sun|crema (facial|de manos)|'
+        r'locion (corporal|hidratante)|hidratante corporal|serum|contorno de ojos',
+        'Cuidado personal',
+        'Piel',
+    ),
     (
         r'bolsa (de )?basur|bolsa apartamento|bolsa apto|bolsa.*resid|bolsa.*indus|'
         r'bolsa pequena',
@@ -193,6 +201,14 @@ REGLAS = [
     # Harina" es pan, no harina, y el atun enlatado dice "Aceite" en el
     # nombre, que lo mandaba a Abarrotes mientras el mismo atun sin la
     # palabra caia en Pescados. Partido en dos, el dashboard mentia.
+    # El mecato que nombra una especia o un pan: «Papas ... Limon Pimienta»
+    # caia en Abarrotes y el Chocoramo no lo cogia nada. Antes de las especias.
+    (
+        r'pasabocas|chocor+amo|\bponque|papas (fritas|original|lima|receta|'
+        r'margarita|onduladas|de paquete)',
+        'Alimentacion',
+        'Snacks y dulces',
+    ),
     # Especias antes que todo lo demas: "PIMIENTA MOLIDA" y "Canela Molida"
     # caian en Carnes por la palabra "molida".
     (
@@ -320,10 +336,11 @@ NITS_MERCADO = frozenset(
 # Carnes: en una drogueria lo exento es la amoxicilina, no el pollo. Los
 # nombres de Farmatodo dicen la presentacion («Tabletas Caja X10Tab»,
 # «Blister x 10 Capsulas») o la dosis («800Mg»), y eso no lo dice nada que se
-# coma.
+# coma. «Fraccion» no: Farmatodo la pone a todo lo que vende por unidad, y el
+# Chocoramo quedaba como Salud.
 MEDICINA = re.compile(
     r'\d+ ?mg\b|\d+ ?ml.*(jarabe|suspension|gotas)|tableta|\btab\b|capsula|'
-    r'blister|jarabe|suspension oral|ampolla|ovulo|supositorio|\bfraccion\b|'
+    r'blister|jarabe|suspension oral|ampolla|ovulo|supositorio|'
     r'ibuprofeno|acetaminofen|naproxeno|amoxicilina|loratadina|cetirizina|'
     r'omeprazol|esomeprazol|losartan|dolex|advil|noxpirin|antigripal|'
     r'sales de rehidratacion|suero oral|buscapina|compositum|'
@@ -369,6 +386,7 @@ CATEGORIAS = {
         'Higiene bucal',
         'Cabello',
         'Desodorante',
+        'Piel',
         'Salud',
         'Otros',
     ),
