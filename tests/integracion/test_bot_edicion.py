@@ -622,3 +622,63 @@ class TestCrearCategoriaDesdeElChat:
         monkeypatch.setattr(bot, 'sugerir_categorias', lambda cx, u, p: ['Mercado'])
         bot._pedir_categoria_a_mano(alm.cx, '555', p, 'gato')
         assert not any('Crear' in t for fila in tg.botones[-1] for t, _ in fila)
+
+
+class TestLaCompraMezclada:
+    """Farmatodo: pastillas, galletas y protector en la misma factura. La
+    regla del comercio la dejaba en Mercado; ahora se pregunta."""
+
+    def _pendiente(self, alm, uid):
+        bid = alm.guardar_buzon(uid, 'graph', 'juan@ejemplo.com')
+        cid, _ = alm.guardar_correo(
+            bid, '<m@banco>', 'banco', 'Alerta', '2026-09-01', 'Compraste ...'
+        )
+        pid, _ = alm.crear_pendiente(
+            correo_id=cid,
+            usuario_id=uid,
+            libro_id=_libro(alm, uid),
+            destino_por='unico',
+            tipo='compra_tarjeta',
+            fecha='2026-09-01',
+            valor=-21040.0,
+            contraparte='FARMATODO SABANETA S',
+            external_id='bc-mezcla',
+            estado='publicado',
+        )
+        alm.actualizar_pendiente(pid, firefly_id='1456', categoria='Mercado')
+        alm.cx.commit()
+        return pid
+
+    def _mezcla(self, alm, pid):
+        return {
+            'pendiente': alm.pendiente(pid),
+            'factura': {'numero': 'SB1'},
+            'opciones': [
+                ('Mecato', 0.72, 'Galletas Oreo, Chocolatina'),
+                ('Medicamentos', 0.28, 'Ibuprofeno, Amoxicilina'),
+            ],
+        }
+
+    def test_pregunta_con_lo_que_trae_y_aplica_lo_que_elige(self, entorno):
+        alm, tg, estado, uid = entorno
+        pid = self._pendiente(alm, uid)
+        assert bot.preguntar_mezcla(alm.cx, self._mezcla(alm, pid))
+        assert 'Mecato' in tg.enviados[-1] and '72%' in tg.enviados[-1]
+        datos = tg.datos_de_botones()
+        assert f'fz:{pid}:0' in datos and 'lc:1456:0' in datos
+        assert alm.ya_anotado(pid, 'por_factura_mezcla'), 'una sola vez'
+
+        bot.manejar_update(alm.cx, _cb(f'fz:{pid}:1'))
+        put = estado['puts'][-1]
+        assert put[0] == '1456'
+        assert put[1]['transactions'][0]['category_name'] == 'Medicamentos'
+        p = alm.pendiente(pid)
+        assert (p['categoria'], p['decidido_por']) == ('Medicamentos', 'usuario')
+
+    def test_dejarlo_como_esta_no_toca_firefly(self, entorno):
+        alm, _tg, estado, uid = entorno
+        pid = self._pendiente(alm, uid)
+        bot.preguntar_mezcla(alm.cx, self._mezcla(alm, pid))
+        bot.manejar_update(alm.cx, _cb(f'fz:{pid}:2'))
+        assert estado['puts'] == []
+        assert alm.pendiente(pid)['decidido_por'] == 'usuario'

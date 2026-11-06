@@ -141,6 +141,14 @@ def pasada(cx, uid):
     # un almuerzo o un mecato se corrige, y se cuenta.
     for c in por_factura.revisar(cx, dry_run=not EN_SERIO):
         _contar_por_factura(cx, c)
+    # Y la de Farmatodo que es de todo un poco no se adivina: se pregunta.
+    for m in por_factura.mezclas_por_preguntar(cx):
+        if not EN_SERIO:
+            continue
+        try:
+            bot.preguntar_mezcla(cx, m)
+        except Exception as ex:  # una pregunta que falla no tumba la pasada
+            log('factura', f'no pude preguntar #{m["pendiente"]["id"]}: {ex}')
     productos = bot.preguntar_productos(cx)
     if nuevos or conteo or mandadas or productos:
         log(

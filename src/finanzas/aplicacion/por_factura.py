@@ -11,6 +11,7 @@ factura. Y una compra con dos facturas posibles del mismo monto no se adivina.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from finanzas import registro
@@ -21,9 +22,20 @@ from finanzas.dominio import por_factura
 
 DIAS = 7
 
+# Los comercios donde una compra mezclada se pregunta en vez de quedarse con
+# la regla del comercio. En Farmatodo la regla dice Mercado, y lo mezclado es
+# pastillas, mecato y cuidado personal: casi nunca mercado.
+PREGUNTAR_MEZCLA = frozenset({'830129327'})  # Farmatodo
 
-def _presupuesto(categoria: str) -> str | None:
-    """El presupuesto de la categoria: el seguro, o el que mas lleva."""
+
+def _presupuesto(categoria: str, cx: Any = None) -> str | None:
+    """El presupuesto de la categoria: el que dijo la persona o el codigo, el
+    seguro, o el que mas lleva. Sin lo primero, una compra que la factura
+    pasaba a Medicamentos se quedaba en el presupuesto de Mercado."""
+    with contextlib.suppress(Exception):
+        dicho = presupuestos.presupuesto_de_categoria(categoria, cx)
+        if dicho:
+            return dicho
     try:
         info = presupuestos.mapa_categoria().get(categoria)
     except Exception as ex:
@@ -65,7 +77,7 @@ def revisar(cx: Any, dias: int = DIAS, dry_run: bool = False) -> list[dict[str, 
         if d is None:
             continue
         categoria, razon, f = d
-        presupuesto = _presupuesto(categoria)
+        presupuesto = _presupuesto(categoria, cx)
         cambio = {
             'pendiente_id': p['id'],
             'usuario_id': p['usuario_id'],
@@ -107,3 +119,37 @@ def revisar(cx: Any, dias: int = DIAS, dry_run: bool = False) -> list[dict[str, 
         cx.commit()
         cambios.append(cambio)
     return cambios
+
+
+def mezclas_por_preguntar(cx: Any, dias: int = DIAS) -> list[dict[str, Any]]:
+    """Las compras recientes de un comercio de `PREGUNTAR_MEZCLA` cuya factura
+    es mezclada: no hay una categoria clara, y la regla del comercio no es
+    respuesta. Una vez por compra; contestada, ya no entra."""
+    alm = Almacen(cx)
+    salida = []
+    for p in alm.compras_por_revisar_con_factura(dias):
+        if alm.ya_anotado(p['id'], 'por_factura_mezcla'):
+            continue
+        candidatas = alm.facturas_del_monto(
+            p['usuario_id'], p['valor'], str(p['fecha'])
+        )
+        if len(candidatas) != 1 or candidatas[0]['nit'] not in PREGUNTAR_MEZCLA:
+            continue
+        f = candidatas[0]
+        lineas = [
+            por_factura.Linea(
+                r['descripcion'] or '', r['grupo'], r['categoria'], r['total'] or 0
+            )
+            for r in alm.lineas_con_grupo(f['cufe'])
+        ]
+        if por_factura.categoria(lineas) is not None:
+            continue
+        opciones = por_factura.mezcla(lineas)
+        if len(opciones) < 2:
+            continue
+        salida.append({'pendiente': p, 'factura': f, 'opciones': opciones})
+    return salida
+
+
+def presupuesto_de(categoria: str, cx: Any = None) -> str | None:
+    return _presupuesto(categoria, cx)
