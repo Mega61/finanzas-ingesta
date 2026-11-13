@@ -369,15 +369,33 @@ class Indice:
             for t in _tokens(r['patron']):
                 self.doc_freq[t] = self.doc_freq.get(t, 0) + 1
 
+        # La mejor regla de cada cuenta de Firefly, para cuando lo que se
+        # reconoce es la cadena ('TIENDA D1 SAB AVES M' es D1) y no el texto.
+        # La cuenta 'D1' no deja regla propia: su nombre tiene 2 letras y el
+        # sembrador no guarda claves tan cortas.
+        self.por_cuenta = {}
+        for r in filas:
+            if not r['cuenta_firefly'] or not r['categoria']:
+                continue
+            prev = self.por_cuenta.get(r['cuenta_firefly'])
+            if prev is None or _peso(r) > _peso(prev):
+                self.por_cuenta[r['cuenta_firefly']] = r
+
+        # Las categorias que existen en este libro: una marca de la tabla
+        # fija solo pone una categoria que ya uses.
+        self.categorias = {r['categoria'] for r in filas if r['categoria']}
+
     def _por_token(self, clave):
         """La mejor regla de comercio que comparta una palabra distintiva."""
-        tk = _tokens(clave)
+        # Solo las palabras de la MARCA: 'ENVIGADO' en 'IKEA ENVIGADO' dice
+        # donde, no quien, y no puede emparejar con 'Viva Envigado'.
+        tk = {t for t in _texto.marca(clave) if len(t) > 2}
         if not tk:
             return None, 0.0
         mejor, mejor_s = None, 0.0
         for r in self.comercio:
             tp = _tokens(r['patron'])
-            comunes = tk & tp
+            comunes = tk & tp & _texto.nucleo(r['patron'])
             if not comunes:
                 continue
             # una palabra que aparece en muchos comercios no distingue nada
@@ -399,7 +417,12 @@ class Indice:
         return None, 0.0
 
     def buscar(self, clave):
-        """Devuelve (regla, confianza) o (None, 0), de mas fuerte a mas debil."""
+        """Devuelve (regla, confianza) o (None, 0), de mas fuerte a mas debil.
+
+        Lo que no sea identico tiene que coincidir en la MARCA, no en el
+        lugar. 'MINISO VIVA ENVIGADO' contiene 'VIVA ENVIGADO', que es el
+        parqueadero: por subcadena se iba a Transporte Moto con 0.88.
+        """
         if not clave:
             return None, 0.0
 
@@ -408,31 +431,138 @@ class Indice:
         if r is not None:
             return r, 0.92
 
-        # 2. el nombre del comercio esta dentro de lo que dijo el banco:
+        palabras_marca = _texto.marca(clave)
+        marca = set(palabras_marca)
+        texto_marca = ' '.join(palabras_marca)
+
+        def es_de_la_marca(patron):
+            """La regla habla de la marca, no del lugar: o esta dentro de la
+            marca ('STEAM' en 'STEAMGAMES'), o comparte con ella una palabra
+            que no es lugar ni generica ('TIENDA' no basta, 'D1' si)."""
+            identidad = _texto.nucleo(patron) - GENERICAS
+            if not identidad:
+                return False  # 'VIVA ENVIGADO', 'AVES MARIA': solo lugar
+            return patron in texto_marca or bool(identidad & marca)
+
+        # 2. una cadena conocida en el texto: 'TIENDA D1 SAB AVES M' es D1
+        #    aunque el resto diga Aves Maria. Gana a cualquier parecido.
+        cadena = _texto.cuenta_de_cadena(clave)
+        if cadena and cadena in self.por_cuenta:
+            return self.por_cuenta[cadena], 0.86
+
+        # 3. el nombre del comercio esta dentro de lo que dijo el banco:
         #    'FARMACIA' dentro de 'FARMACIA NORTE S'
         for r in self.comercio:
             p = r['patron']
-            if len(p) >= 4 and p in clave:
+            if len(p) >= 4 and p in clave and es_de_la_marca(p):
                 return r, 0.88
 
-        # 3. al contrario: 'DIDI' dentro de 'DIDI RIDES'
+        # 3b. lo mismo sin espacios, que el banco pone y quita a su gusto:
+        #     'HOME CENTER' al comienzo de 'HOMECENTER ENVIGADO'
+        compacta = ''.join(palabras_marca)
         for r in self.comercio:
-            if len(clave) >= 4 and clave in r['patron']:
+            p = r['patron'].replace(' ', '')
+            if len(p) >= 6 and compacta.startswith(p) and _texto.nucleo(r['patron']):
                 return r, 0.84
 
-        # 4. comparten una palabra distintiva: 'SUPER NORTE 45' con 'GRUPO SUPER'
+        # 4. al contrario: 'DIDI' dentro de 'DIDI RIDES'. Lo que tiene que
+        #    estar dentro es la marca, no la sucursal.
+        for r in self.comercio:
+            if (
+                len(texto_marca) >= 4
+                and texto_marca in r['patron']
+                and _texto.nucleo(r['patron']) - GENERICAS
+            ):
+                return r, 0.84
+
+        # 5. comparten una palabra distintiva: 'SUPER NORTE 45' con 'GRUPO SUPER'
         r, conf = self._por_token(clave)
         if r is not None:
             return r, conf
 
-        # 5. ya sin comercios: las descripciones, solo por subcadena y con
+        # 6. ya sin comercios: las descripciones, solo por subcadena y con
         #    confianza baja a proposito.
         for r in self.desc:
             p = r['patron']
-            if len(p) >= 6 and (p in clave or clave in p):
+            if len(p) >= 6 and (p in clave or clave in p) and es_de_la_marca(p):
                 return r, 0.73
 
+        # 7. una marca tan conocida que no hace falta haberla visto
+        r = self._marca_conocida(clave)
+        if r is not None:
+            return r, 0.75
+
+        # 8. el parqueadero del centro comercial: el unico caso donde el lugar
+        #    SI es el comercio. 'THE PARKING VIVA ENV' -> 'Viva Envigado'.
+        r = self._parqueadero(clave)
+        if r is not None:
+            return r, 0.80
+
         return None, 0.0
+
+    def categoria_de_marca(self, clave):
+        """La categoria de la tabla fija para esa marca, si existe en tu libro."""
+        hallada = _texto.marca_conocida(clave)
+        if hallada is None or hallada[1] not in self.categorias:
+            return None
+        return hallada[1]
+
+    def _marca_conocida(self, clave):
+        """La regla de una marca de `texto.MARCAS`.
+
+        Si ya hay una regla tuya con esa marca ('MACDONALDS' -> Mecato), esa
+        manda. Si no, la categoria de la tabla, pero solo si existe en tu
+        libro: no se inventa una categoria que no usas.
+        """
+        hallada = _texto.marca_conocida(clave)
+        if hallada is None:
+            return None
+        cuenta, categoria, patron = hallada
+        for r in self.comercio:
+            if r['categoria'] and patron.search(r['patron'].replace(' ', '')):
+                return r
+        if self.categoria_de_marca(clave) is None:
+            return None
+        return {
+            'patron': cuenta.upper(),
+            'cuenta_firefly': cuenta,
+            'categoria': categoria,
+            'presupuesto': None,
+            'origen': 'marca',
+            'aciertos': 0,
+        }
+
+    def _parqueadero(self, clave):
+        """La regla del SITIO donde se parqueo: una cuenta cuyo nombre es solo
+        lugar ('Viva Envigado') y comparte ese lugar con la alerta."""
+        if not _texto.PARQUEADERO.search(clave):
+            return None
+        donde = _texto.lugar(clave)
+        if not donde:
+            return None
+        mejor, mejor_n = None, 0
+        for r in self.comercio:
+            if _texto.nucleo(r['patron']) or not r['categoria']:
+                continue
+            # 'ENV' es 'ENVIGADO' cortado: cuenta como la misma palabra
+            n = sum(
+                any(p == d or (len(d) >= 3 and p.startswith(d)) for p in donde_r)
+                for d in donde
+                for donde_r in [r['patron'].split()]
+            )
+            if n > mejor_n:
+                mejor, mejor_n = r, n
+        return mejor
+
+
+def _peso(r):
+    """Que regla representa mejor a su cuenta: la que confirmaste, despues la
+    del nombre de comercio, despues la mas usada."""
+    return (
+        r['origen'] in ('usuario', 'manual'),
+        r['origen'] == 'comercio',
+        r['aciertos'] or 0,
+    )
 
 
 def clasificar(cx, usuario_id, evento, indice=None):
@@ -484,6 +614,11 @@ def clasificar(cx, usuario_id, evento, indice=None):
         # un atributo ('Viaticos') o que se fusiono. Se resuelve aqui para que
         # el historico no siga reinyectando la taxonomia vieja.
         cat_final, etiqueta, preguntar = taxonomia.resolver(regla['categoria'])
+        if cat_final is None:
+            # La regla de 'Ikea' quedo con 'Compras', que ya se retiro. Si la
+            # marca es conocida, al menos llega con la categoria probable: la
+            # pregunta sigue abierta igual.
+            cat_final = idx.categoria_de_marca(clave)
         r['cuenta_destino'] = regla['cuenta_firefly']
         r['categoria'] = cat_final
         # El presupuesto sale de tres sitios, en este orden:
@@ -502,7 +637,9 @@ def clasificar(cx, usuario_id, evento, indice=None):
         )
         r['etiquetas'] = etiqueta
         r['confianza'] = 0.4 if preguntar else conf
-        r['decidido_por'] = 'historico' if regla['origen'] == 'historico' else 'regla'
+        r['decidido_por'] = {'historico': 'historico', 'marca': 'marca'}.get(
+            regla['origen'], 'regla'
+        )
         if preguntar:
             r['pregunta'] = 'categoria'
             return r

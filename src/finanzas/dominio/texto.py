@@ -265,3 +265,187 @@ _CODIGO_DE_SEGURIDAD = re.compile(
 
 def es_codigo_de_seguridad(texto: str | None) -> bool:
     return bool(texto and _CODIGO_DE_SEGURIDAD.search(texto))
+
+
+# ------------------------------------------------------- lugar y marca
+# El banco manda el PUNTO DE VENTA: la marca primero y despues el centro
+# comercial, el barrio o el municipio, cortado a 20 letras:
+#
+#   MINISO VIVA ENVIGADO    TIENDA D1 SAB AVES M    THE PARKING VIVA ENV
+#   IKEA ENVIGADO           HOMECENTER ENVIGADO     STARBUCKS VIVA ENVIG
+#
+# Y en Firefly hay cuentas que SON un lugar: 'Viva Envigado' y 'Aves Maria'
+# son los parqueaderos donde se deja la moto, con categoria Transporte Moto.
+# Emparejar por palabras sin saber esto hizo que un Miniso, un D1 y un
+# Homecenter quedaran como parqueadero: compartian VIVA, AVES o ENVIGADO, que
+# dicen DONDE fue la compra, no QUE se compro.
+#
+# Estas palabras nunca hacen coincidir un comercio. La lista no tiene que
+# estar completa: una palabra de lugar que falte solo vuelve a abrir la
+# posibilidad de un parecido equivocado, que igual queda preguntado.
+LUGARES = frozenset(
+    {
+        # municipios del valle de Aburra y alrededores
+        'MEDELLIN',
+        'ENVIGADO',
+        'SABANETA',
+        'ITAGUI',
+        'BELLO',
+        'ESTRELLA',
+        'CALDAS',
+        'COPACABANA',
+        'GIRARDOTA',
+        'RIONEGRO',
+        'RETIRO',
+        'GUARNE',
+        'MARINILLA',
+        'BOGOTA',
+        'CALI',
+        'CARTAGENA',
+        'BARRANQUILLA',
+        # centros comerciales
+        'VIVA',
+        'AVES',
+        'MARIA',
+        'MAYORCA',
+        'MOLINOS',
+        'OVIEDO',
+        'SANTAFE',
+        'TESORO',
+        'UNICENTRO',
+        'OCEANOMALL',
+        'PREMIUM',
+        'ARKADIA',
+        'FLORIDA',
+        'VIZCAYA',
+        'ANDINO',
+        'CITYPLAZA',
+        'PLAZA',
+        'MALL',
+        'OUTLET',
+        # barrios y zonas
+        'POBLADO',
+        'LAURELES',
+        'ESTADIO',
+        'BELEN',
+        'ENVIGADENO',
+        'NORTE',
+        'SUR',
+        'ORIENTE',
+        'OCCIDENTE',
+    }
+)
+
+# Las abreviaturas que el propio banco usa para la sucursal, en cualquier
+# posicion: 'TIENDA D1 SAB AVES M'.
+ABREVIATURAS = frozenset({'SAB', 'ENV', 'ENVI', 'ENVIG', 'ENVIGA', 'MDE', 'ITA'})
+
+# Y el corte a 20 letras: 'ENVIGADO' llega como 'ENVIGA', 'SABANETA' como
+# 'SABANE'. Un prefijo de 3 o mas letras de un lugar cuenta como lugar solo si
+# es la ULTIMA palabra, que es la unica que el corte puede dejar a medias.
+_PREFIJO_MINIMO = 3
+
+
+def es_lugar(palabra: str, ultima: bool = False) -> bool:
+    """¿Esta palabra (ya normalizada) dice donde, y no quien?
+
+    >>> es_lugar('SAB'), es_lugar('ENVIGA', ultima=True), es_lugar('MINISO')
+    (True, True, False)
+    """
+    if palabra in LUGARES or palabra in ABREVIATURAS:
+        return True
+    return (
+        ultima
+        and len(palabra) >= _PREFIJO_MINIMO
+        and any(lugar.startswith(palabra) for lugar in LUGARES)
+    )
+
+
+def _palabras_de_lugar(palabras: list[str]) -> list[bool]:
+    """Para cada palabra, si es de lugar. La primera nunca: es la marca
+    ('VIVA AEROBUS' es una aerolinea)."""
+    n = len(palabras)
+    return [i > 0 and es_lugar(p, ultima=i == n - 1) for i, p in enumerate(palabras)]
+
+
+def marca(clave: str | None) -> list[str]:
+    """Las palabras de la marca: la primera siempre, y las siguientes hasta
+    la primera palabra de lugar. Lo que viene despues es la sucursal.
+
+    >>> marca('MINISO VIVA ENVIGADO')
+    ['MINISO']
+    >>> marca('TIENDA D1 SAB AVES M')
+    ['TIENDA', 'D1']
+    >>> marca('VIVA AEROBUS')
+    ['VIVA', 'AEROBUS']
+    """
+    palabras = (clave or '').split()
+    fuera = []
+    for p, es in zip(palabras, _palabras_de_lugar(palabras), strict=True):
+        if es:
+            break
+        fuera.append(p)
+    return fuera
+
+
+def lugar(clave: str | None) -> list[str]:
+    """Las palabras de lugar de un nombre, sin la primera (que es la marca)."""
+    palabras = (clave or '').split()
+    return [
+        p for p, es in zip(palabras, _palabras_de_lugar(palabras), strict=True) if es
+    ]
+
+
+def nucleo(patron: str | None) -> set[str]:
+    """Lo que identifica a una regla: sus palabras menos los lugares.
+
+    Aqui la primera palabra NO se salva: 'VIVA ENVIGADO' y 'AVES MARIA' son
+    cuentas que no tienen mas que lugar, y su nucleo queda vacio. Esas reglas
+    son de un SITIO, no de un comercio, y no se emparejan por palabras.
+
+    >>> sorted(nucleo('VIVA ENVIGADO')), sorted(nucleo('VIVA AEROBUS'))
+    ([], ['AEROBUS'])
+    """
+    return {
+        p for p in (patron or '').split() if p not in LUGARES and p not in ABREVIATURAS
+    }
+
+
+# Pagar el parqueadero del centro comercial: la unica compra donde el lugar SI
+# es el comercio. 'THE PARKING VIVA ENV' va a la cuenta 'Viva Envigado'.
+PARQUEADERO = re.compile(r'\b(PARKING|PARQUEADERO|PARQ|PARQUEO|PARKIN)\b')
+
+
+# Marcas tan conocidas que no hace falta haberlas visto para saber que son.
+# Solo actuan cuando NO hay regla aprendida, y solo si la categoria existe en
+# el libro de quien compra: una regla tuya, o una respuesta por Telegram,
+# siempre mandan. Lo que decide esta tabla igual se pregunta (no es una regla
+# exacta), pero ya llega a Firefly con la categoria probable y no en blanco.
+#
+# Se compara contra el nombre SIN espacios, porque el banco los pone y los
+# quita: 'HOMECENTER' y 'HOME CENTER', 'MCDONAL D NVIGA O'.
+MARCAS = (
+    ('McDonalds', 'Restaurante', re.compile(r'^MA?CDONAL')),
+    ('Burger King', 'Restaurante', re.compile(r'^BURGERKING')),
+    ('KFC', 'Restaurante', re.compile(r'^KFC')),
+    ('Frisby', 'Restaurante', re.compile(r'^FRISBY')),
+    ('El Corral', 'Restaurante', re.compile(r'^(HAMBURGUESAS)?ELCORRAL')),
+    ('Ikea', 'Compras Casa', re.compile(r'^IKEA')),
+    ('Homecenter', 'Compras Casa', re.compile(r'^HOMECENTER')),
+    ('Easy', 'Compras Casa', re.compile(r'^EASY')),
+)
+
+
+def marca_conocida(clave: str | None) -> tuple[str, str, re.Pattern[str]] | None:
+    """(cuenta, categoria, patron) de una marca de la tabla, o None.
+
+    >>> marca_conocida('MCDONAL D NVIGA O')[:2]
+    ('McDonalds', 'Restaurante')
+    >>> marca_conocida('MINISO VIVA ENVIGADO') is None
+    True
+    """
+    compacto = (clave or '').replace(' ', '')
+    for cuenta, categoria, patron in MARCAS:
+        if patron.search(compacto):
+            return cuenta, categoria, patron
+    return None
