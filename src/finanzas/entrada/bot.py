@@ -36,6 +36,7 @@ from finanzas.aplicacion import (
     presupuestos,
     publicador,
     ruteo,
+    sobres,
     sospechosos,
     tablero,
     taxonomia,
@@ -611,6 +612,7 @@ DESCRIPCIONES = (
     ('/listo', 'ya están bien, no me preguntes más'),
     ('/productos', 'clasificar lo que compraste en el super'),
     ('/hoy', 'cuánto puedes gastar hoy, de verdad'),
+    ('/mercado', 'los sobres de mercado de la quincena y qué se los llevó'),
     ('/puedo', '«/puedo 180000 restaurante»: si te alcanza, y cómo quedas'),
     ('/presupuestos', 'cómo van los cinco presupuestos del mes'),
     ('/plan', 'tu plan de caja y el fondo; «/plan» y lo que cambia, para cambiarlo'),
@@ -2770,11 +2772,25 @@ def cmd_hoy(cx, chat, _texto=''):
         telegram.enviar(chat, 'Esto todavía es solo de Juan.')
         return
     texto = disponible.texto_hoy(disponible.leer(cx=cx))
+    try:
+        texto += '\n\n' + sobres.texto_bloque(sobres.leer(cx))
+    except Exception as ex:
+        # Sin sobres, el /hoy de siempre: es lo que llega a las 8.
+        registro.aviso(f'sobres: {type(ex).__name__}: {ex}')
     uid = _uid(cx, chat)
     total_preg = sum(f['n'] for f in db.resumen(cx, uid) if f['pregunta'] != 'nada')
     if total_preg:
         texto += f'\n\n❓ Tengo <b>{total_preg}</b> por preguntarte. /pendientes'
     telegram.enviar(chat, texto)
+
+
+def _cmd_mercado(cx, chat, _texto=''):
+    """Los sobres de la quincena con lo que mas se llevo cada uno. Salen de
+    las facturas del super, que son de Juan."""
+    if not _es_juan(cx, chat):
+        telegram.enviar(chat, 'Esto todavía es solo de Juan.')
+        return
+    telegram.enviar(chat, sobres.texto_mercado(sobres.leer(cx)))
 
 
 _MONTO = re.compile(r'(\d[\d.,]*)\s*(k|mil|m|millon(?:es)?|palos?)?\b', re.I)
@@ -2844,6 +2860,7 @@ COMANDOS = {
     '/version': _cmd_version,
     '/presupuestos': _cmd_presupuestos,
     '/hoy': cmd_hoy,
+    '/mercado': _cmd_mercado,
     '/puedo': _cmd_puedo,
     '/plan': _cmd_plan,
     '/prestamos': lambda cx, chat, _texto: telegram.enviar(
