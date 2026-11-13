@@ -38,6 +38,8 @@ from finanzas.entrada import bot, bot_libros, demonio
 INTERVALO_MIN = int(config.get('INGESTA_INTERVALO_MIN', '15'))
 # Hora local del resumen diario. Vacio = no mandar resumen.
 HORA_RESUMEN = config.get('RESUMEN_HORA', '21:00')
+# Y en la mañana, cuanto se puede gastar hoy. Vacio lo apaga.
+HORA_MANANA = config.get('MANANA_HORA', '08:00')
 # Hora de la conciliacion contra extractos, una vez al dia.
 HORA_CONCILIAR = config.get('CONCILIAR_HORA', '03:30')
 # Cada cuanto se sube el dashboard de mercado a Postgres. Mas espaciado que la
@@ -169,6 +171,7 @@ def pasada(cx, uid):
 def hilo_ingesta(uid):
     cx = db.conectar()
     proximo_resumen = _proxima_hora(HORA_RESUMEN)
+    proxima_manana = _proxima_hora(HORA_MANANA)
     proxima_concil = _proxima_hora(HORA_CONCILIAR)
     # Arranca vencido: si hay DSN, la primera vuelta ya carga. Al encender
     # esto por primera vez el dashboard lleva semanas viejo y no tiene sentido
@@ -205,6 +208,16 @@ def hilo_ingesta(uid):
                         log('resumen', f'ERROR ({u["nombre"]}): {ex}')
                     _sincronizar_plan(cx, u)
                 proximo_resumen = _proxima_hora(HORA_RESUMEN)
+
+            if proxima_manana and ahora >= proxima_manana:
+                chat = config.get('TELEGRAM_CHAT_ID_JUAN')
+                if chat:
+                    try:
+                        bot.cmd_hoy(cx, chat)
+                        log('hoy', 'mandado')
+                    except Exception as ex:
+                        log('hoy', f'ERROR: {type(ex).__name__}: {ex}')
+                proxima_manana = _proxima_hora(HORA_MANANA)
 
             if proxima_concil and ahora >= proxima_concil:
                 try:
