@@ -24,6 +24,7 @@ from finanzas.aplicacion import (
     catalogo,
     categorias,
     clasificador,
+    disponible,
     interprete,
     libros,
     movimientos,
@@ -609,6 +610,8 @@ DESCRIPCIONES = (
     ('/ultimos', 'los últimos movimientos, tocables para cambiarlos'),
     ('/listo', 'ya están bien, no me preguntes más'),
     ('/productos', 'clasificar lo que compraste en el super'),
+    ('/hoy', 'cuánto puedes gastar hoy, de verdad'),
+    ('/puedo', '«/puedo 180000 restaurante»: si te alcanza, y cómo quedas'),
     ('/presupuestos', 'cómo van los cinco presupuestos del mes'),
     ('/plan', 'tu plan de caja y el fondo; «/plan» y lo que cambia, para cambiarlo'),
     ('/prestamos', 'quién te debe y a quién le debes'),
@@ -2760,6 +2763,69 @@ def _toque_plan(t):
 TOQUES['pv'] = _toque_plan
 
 
+def cmd_hoy(cx, chat, _texto=''):
+    """Lo libre de verdad: lo que queda despues de apartar las cuentas fijas
+    y el mercado que falta. Es de Juan: son sus presupuestos."""
+    if not _es_juan(cx, chat):
+        telegram.enviar(chat, 'Esto todavía es solo de Juan.')
+        return
+    texto = disponible.texto_hoy(disponible.leer(cx=cx))
+    uid = _uid(cx, chat)
+    total_preg = sum(f['n'] for f in db.resumen(cx, uid) if f['pregunta'] != 'nada')
+    if total_preg:
+        texto += f'\n\n❓ Tengo <b>{total_preg}</b> por preguntarte. /pendientes'
+    telegram.enviar(chat, texto)
+
+
+_MONTO = re.compile(r'(\d[\d.,]*)\s*(k|mil|m|millon(?:es)?|palos?)?\b', re.I)
+
+
+def _leer_monto(texto):
+    """«180000», «180.000», «180k», «180 mil», «1,2M». None si no hay."""
+    m = _MONTO.search(texto or '')
+    if not m:
+        return None
+    sufijo = (m.group(2) or '').lower()
+    numero = m.group(1)
+    try:
+        if sufijo in ('m', 'millon', 'millones', 'palo', 'palos'):
+            return float(numero.replace(',', '.')) * 1_000_000
+        valor = _dinero.parse_monto(numero)
+    except ValueError:
+        return None
+    return valor * 1000 if sufijo in ('k', 'mil') else valor
+
+
+def _cmd_puedo(cx, chat, texto):
+    if not _es_juan(cx, chat):
+        telegram.enviar(chat, 'Esto todavía es solo de Juan.')
+        return
+    resto = texto.split(maxsplit=1)[1] if ' ' in texto.strip() else ''
+    monto = _leer_monto(resto)
+    if not monto:
+        telegram.enviar(
+            chat,
+            'Dime cuánto y en qué: «/puedo 180000 restaurante», «/puedo 60k steam».',
+        )
+        return
+    d = disponible.leer(cx=cx)
+    cual = disponible.presupuesto_de(_MONTO.sub(' ', resto))
+    if cual is None:
+        # Sin saber en que, se dice en donde cabe.
+        lineas = [f'¿{_dinero.formatear(monto, "COP")} en qué?']
+        for n in (disponible.DIARIO, disponible.ANTOJOS):
+            r = disponible.puedo(d, monto, n)
+            lineas.append(
+                f'{"✅" if r.cabe else "❌"} en {n}: quedan {_plata(r.queda)}'
+            )
+        lineas.append('<i>«/puedo 180000 restaurante» lo dice exacto.</i>')
+        telegram.enviar(chat, '\n'.join(lineas))
+        return
+    telegram.enviar(
+        chat, disponible.texto_puedo(d, disponible.puedo(d, monto, cual), monto)
+    )
+
+
 def _cmd_presupuestos(_cx, chat, _texto):
     telegram.enviar(chat, '<b>Presupuestos del mes</b>\n\n' + presupuestos.formatear())
 
@@ -2777,6 +2843,8 @@ COMANDOS = {
     '/sinconfirmar': _cmd_sinconfirmar,
     '/version': _cmd_version,
     '/presupuestos': _cmd_presupuestos,
+    '/hoy': cmd_hoy,
+    '/puedo': _cmd_puedo,
     '/plan': _cmd_plan,
     '/prestamos': lambda cx, chat, _texto: telegram.enviar(
         chat, bot_libros.texto_de_prestamos(cx, _usuario_de(cx, chat))

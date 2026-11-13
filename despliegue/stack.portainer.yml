@@ -100,6 +100,8 @@ services:
 
       INGESTA_INTERVALO_MIN: ${INGESTA_INTERVALO_MIN:-15}
       RESUMEN_HORA: ${RESUMEN_HORA:-21:00}
+      MANANA_HORA: ${MANANA_HORA:-08:00}
+      MERCADO_META: ${MERCADO_META:-1200000}
       CONCILIAR_HORA: ${CONCILIAR_HORA:-03:30}
       # Arranca en 'no' a proposito: la primera vez conviene ver el log en seco.
       INGESTA_EN_SERIO: ${INGESTA_EN_SERIO:-no}
