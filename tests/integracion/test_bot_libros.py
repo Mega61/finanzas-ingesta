@@ -752,6 +752,13 @@ class TestMenosMensajes:
         self._varias(alm, ella, 8)
         assert bot.preguntar_pendientes(alm.cx) == bot.MAX_PREGUNTAS == 3
 
+    def test_la_cola_de_ella_no_se_come_las_de_el(self, mundo):
+        alm, tg, _ff, _act, juan, ella = mundo
+        self._varias(alm, ella, 8)
+        _alerta(alm, juan, 'j1', instrumento='5868', fecha=date(2026, 9, 1))
+        bot.preguntar_pendientes(alm.cx)
+        assert JUAN in {chat for chat, *_ in tg.enviados}
+
     def test_tope_por_dia(self, mundo):
         alm, tg, *_rest, ella = mundo
         self._varias(alm, ella, 15)

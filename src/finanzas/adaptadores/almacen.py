@@ -600,8 +600,17 @@ class Almacen:
     def pendientes_por_preguntar(self, limite: int = 50) -> list[sqlite3.Row]:
         """Los que toca preguntar AHORA. La vista ya excluye los preguntados
         hace menos de un dia, para no repetir la misma pregunta cada pasada."""
+        # El cupo es POR PERSONA. Con un LIMIT para todos, la cola de una
+        # (las ventas del estudio) se comia las preguntas del otro.
         return self.cx.execute(
-            'SELECT * FROM v_por_preguntar LIMIT ?', (limite,)
+            """SELECT * FROM (
+                   SELECT v.*, ROW_NUMBER() OVER (
+                       PARTITION BY v.usuario_id ORDER BY v.fecha DESC, v.id DESC
+                   ) AS turno
+                   FROM v_por_preguntar v)
+               WHERE turno <= ?
+               ORDER BY fecha DESC, id DESC""",
+            (limite,),
         ).fetchall()
 
     def pendientes_abiertos(self, limite: int = 50) -> list[sqlite3.Row]:
