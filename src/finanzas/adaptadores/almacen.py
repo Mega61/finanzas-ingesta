@@ -1481,6 +1481,24 @@ class Almacen:
             (cufe,),
         ).fetchall()
 
+    def lineas_de_mercado(self, nits, desde: str, hasta: str) -> list[sqlite3.Row]:
+        """Las lineas de las facturas de esos NIT entre dos fechas, con el
+        grupo y la categoria del catalogo y el signo de la factura: una nota
+        credito resta. Un producto que el catalogo todavia no tiene sale con
+        grupo NULL, y quien lee lo trata como 'Sin clasificar'."""
+        nits = sorted(nits)
+        marcas = ','.join('?' * len(nits))
+        return self.cx.execute(
+            f"""SELECT f.fecha, f.signo, l.nit, l.codigo, l.descripcion, l.total,
+                       c.grupo, c.categoria
+                FROM factura_lineas l
+                JOIN facturas f ON f.cufe = l.cufe
+                LEFT JOIN catalogo c ON c.nit = l.nit AND c.codigo = l.codigo
+                WHERE f.nit IN ({marcas}) AND f.fecha BETWEEN ? AND ?
+                ORDER BY f.fecha, l.cufe, l.n""",
+            (*nits, desde, hasta),
+        ).fetchall()
+
     def catalogo_ver(self, nit: str, codigo: str):
         return self.cx.execute(
             'SELECT * FROM catalogo WHERE nit = ? AND codigo = ?', (nit, codigo)
