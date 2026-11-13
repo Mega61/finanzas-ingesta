@@ -700,6 +700,96 @@ class TestLaVentaDeAgendapro:
         assert alm.pendiente(pid)['firefly_id'] == 'ag-c'
         assert act.creadas == []
 
+    def test_el_aviso_sale_al_dia_siguiente_no_a_los_cuatro(self, mundo):
+        """La Caja se cierra el mismo dia. Esperar cuatro dias para decir «no
+        cerraste el 27» era avisar cuando ya nadie se acordaba."""
+        alm, tg, *_rest, ella = mundo
+        ayer = fechas.hoy() - timedelta(days=1)
+        pid = self._transferencia(alm, ella, fecha=ayer)
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
+        _toque(alm, f'va:{pid}:2')
+        alm.cx.execute(
+            'UPDATE pendientes SET actualizado_en = ? WHERE id = ?',
+            (f'{ayer} 15:00:00', pid),
+        )
+        bot_libros.revisar_ventas_en_espera(alm.cx)
+        assert 'cerrar el' in tg.ultimo()[1]
+
+    def test_un_toque_de_noche_no_corre_la_espera_un_dia(self, mundo):
+        """SQLite guarda `actualizado_en` en UTC: las 8 de la noche en Bogota
+        son la 1 de la mañana del dia siguiente."""
+        alm, *_rest, ella = mundo
+        ayer = fechas.hoy() - timedelta(days=1)
+        pid = self._transferencia(alm, ella, fecha=ayer)
+        alm.cx.execute(
+            'UPDATE pendientes SET actualizado_en = ? WHERE id = ?',
+            (f'{fechas.hoy()} 01:00:00', pid),
+        )
+        assert bot_libros._espera_desde(alm.pendiente(pid)) == ayer
+
+    def test_un_puente_caido_no_tumba_la_revision(self, mundo, monkeypatch):
+        alm, _tg, *_rest, ella = mundo
+        pid = self._transferencia(alm, ella, fecha=fechas.hoy())
+        _toque(alm, f'ld:{pid}:{_libro(alm, ella, "estudio")}')
+        _toque(alm, f'va:{pid}:2')
+
+        def caido(*_a, **_k):
+            raise TimeoutError('el puente no contesta')
+
+        monkeypatch.setattr(bot_libros.publicador_actual, 'venta_de_agendapro', caido)
+        assert bot_libros.revisar_ventas_en_espera(alm.cx) == 0
+
+
+class TestMenosMensajes:
+    """Seis preguntas cada 15 minutos, repetidas cada 24 horas para siempre:
+    una semana sin contestar eran 90 mensajes seguidos."""
+
+    def _varias(self, alm, ella, n):
+        return [_alerta(alm, ella, f'm{i}') for i in range(n)]
+
+    def test_tres_por_pasada(self, mundo):
+        alm, _tg, *_rest, ella = mundo
+        self._varias(alm, ella, 8)
+        assert bot.preguntar_pendientes(alm.cx) == bot.MAX_PREGUNTAS == 3
+
+    def test_tope_por_dia(self, mundo):
+        alm, tg, *_rest, ella = mundo
+        self._varias(alm, ella, 15)
+        for _ in range(6):
+            bot.preguntar_pendientes(alm.cx)
+        assert len(tg.enviados) == bot.TOPE_DIARIO
+
+    def test_de_noche_no_pregunta(self, mundo, monkeypatch):
+        alm, _tg, *_rest, ella = mundo
+        self._varias(alm, ella, 2)
+        monkeypatch.setattr(bot, '_es_de_noche', lambda hora=None: True)
+        assert bot.preguntar_pendientes(alm.cx) == 0
+        assert bot.preguntar_pendientes(alm.cx, pedido=True) == 2
+
+    def test_se_rinde_despues_de_tres(self, mundo):
+        alm, _tg, *_rest, ella = mundo
+        (pid,) = self._varias(alm, ella, 1)
+
+        def hace_dias(n):
+            alm.cx.execute(
+                "UPDATE pendientes SET preguntado_en = datetime('now', ?) WHERE id = ?",
+                (f'-{n} days', pid),
+            )
+
+        assert bot.preguntar_pendientes(alm.cx) == 1
+        assert bot.preguntar_pendientes(alm.cx) == 0, 'no en la misma hora'
+        hace_dias(2)
+        assert bot.preguntar_pendientes(alm.cx) == 1, 'recordatorio al otro dia'
+        hace_dias(2)
+        assert bot.preguntar_pendientes(alm.cx) == 0, 'el tercero espera 3 dias'
+        hace_dias(4)
+        assert bot.preguntar_pendientes(alm.cx) == 1
+        hace_dias(30)
+        assert bot.preguntar_pendientes(alm.cx) == 0, 'y despues se calla'
+        # pero si la pide, vuelve
+        alm.reabrir_preguntas([pid])
+        assert bot.preguntar_pendientes(alm.cx) == 1
+
 
 class TestLoParecido:
     def test_pregunta_si_es_el_mismo_y_no_duplica(self, mundo):

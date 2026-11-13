@@ -300,6 +300,12 @@ REGLAS = [
         'Alimentacion',
         'Frutas y verduras',
     ),
+    # ---------- red de arrastre: bolsas -----------------------------------
+    # Las de basura ya cayeron arriba. Cualquier otra «bolsa» es la del cajero,
+    # y cada almacen la llama distinto («Bolsa Biodegradable Farmatodo 8 kg»,
+    # «IMP BOLSA», «BOLSA EXITO»): el bot preguntaba por cada una, por 300
+    # pesos. Va al final para que la leche en bolsa siga siendo leche.
+    (r'\bbolsa', 'Servicios', 'Bolsas y empaques'),
 ]
 COMPILADAS = [(re.compile(p, re.I), g, c) for p, g, c in REGLAS]
 
@@ -323,14 +329,13 @@ NO_CONSUMIBLES = frozenset({'Tecnologia', 'Electrodomesticos', 'Hogar'})
 # sus facturas son mecato y la otra mitad drogueria, y sin catalogo no habia
 # como decir cual era cual. Todas quedaban en Mercado por la regla del
 # comercio, incluido el ibuprofeno.
-NITS_MERCADO = frozenset(
-    {
-        '890900608',  # Exito
-        '900276962',  # D1
-        '900522508',  # Supervaquita
-        '830129327',  # Farmatodo
-    }
-)
+TIENDAS = {
+    '890900608': 'Éxito',
+    '900276962': 'D1',
+    '900522508': 'Supervaquita',
+    '830129327': 'Farmatodo',
+}
+NITS_MERCADO = frozenset(TIENDAS)
 
 # Un medicamento. Va antes que la regla del IVA 0%, que manda todo exento a
 # Carnes: en una drogueria lo exento es la amoxicilina, no el pollo. Los

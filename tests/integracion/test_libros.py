@@ -95,6 +95,50 @@ class TestLaMigracion:
         ).fetchall()
         assert {tuple(f) for f in filas} == {(libro['id'], 'unico')}
 
+    def test_la_008_cuenta_lo_ya_preguntado_y_saca_las_bolsas(self, tmp_path):
+        """Produccion llega en la 7 con la cola llena: lo ya preguntado cuenta
+        como una vez, y las bolsas que esperaban pregunta se cierran."""
+        hasta_7 = tmp_path / 'hasta_7'
+        hasta_7.mkdir()
+        for n, archivo in Almacen.migraciones_de(MIGRACIONES):
+            if n <= 7:
+                (hasta_7 / archivo.name).write_text(archivo.read_text('utf-8'))
+        alm = _base(hasta_7)
+        assert alm.version() == 7
+        uid = alm.guardar_usuario('Juan', 'https://ff.juan', 'tok', '555')
+        cid = _correo(alm, uid)
+        pid = _mov(
+            alm,
+            uid,
+            cid,
+            'a',
+            estado='publicado',
+            pregunta='categoria',
+            libro_id=_libro(alm, uid),
+            destino_por='unico',
+        )
+        alm.cx.execute(
+            "UPDATE pendientes SET preguntado_en = datetime('now', '-2 days')"
+        )
+        alm.cx.execute(
+            """INSERT INTO catalogo (nit, codigo, descripcion, grupo, categoria)
+               VALUES ('830129327', 'B1', 'Bolsa Biodegradable Farmatodo',
+                       'Sin clasificar', 'Sin clasificar'),
+                      ('890900608', 'B2', 'BOLSA BASURA', 'Sin clasificar',
+                       'Sin clasificar')"""
+        )
+        alm.cx.commit()
+
+        alm.inicializar(ESQUEMA, MIGRACIONES)
+
+        assert alm.version() == ULTIMA
+        assert alm.pendiente(pid)['veces_preguntado'] == 1
+        assert [p['id'] for p in alm.pendientes_por_preguntar()] == [pid]
+        grupos = dict(
+            alm.cx.execute('SELECT codigo, categoria FROM catalogo').fetchall()
+        )
+        assert grupos == {'B1': 'Bolsas y empaques', 'B2': 'Sin clasificar'}
+
     def test_migrar_dos_veces_no_hace_nada(self):
         alm = _base()
         assert alm.version() == ULTIMA

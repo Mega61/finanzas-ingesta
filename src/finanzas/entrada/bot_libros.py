@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import html
 import time
+from datetime import UTC
 from typing import Any
 
 from finanzas.adaptadores import actual, firefly, ia, telegram
@@ -1406,15 +1407,27 @@ def _registrar(
 
 # ------------------------------------------------- las ventas que se esperan
 
+# Hasta cuantos dias despues de la transferencia tiene sentido ofrecer «espera».
 DIAS_DE_ESPERA = 4
+# Y cuantos dias se espera callado antes de avisar que falta cerrar el dia.
+# Eran los mismos 4: el aviso de «no cerraste el 27» llegaba el 31, cuando
+# ya nadie se acordaba de ese dia. La Caja se cierra el mismo dia, asi que si
+# al dia siguiente no llego, ya falta algo.
+DIAS_PARA_AVISAR = 1
 
 
 def _espera_desde(p: Any) -> Any:
     """Desde cuando se espera: la transferencia, o el dia en que ella dijo
     «espera» si fue despues. Contar solo desde la transferencia hacia que una
-    vieja venciera en la pasada siguiente y se preguntara otra vez de una."""
+    vieja venciera en la pasada siguiente y se preguntara otra vez de una.
+
+    `actualizado_en` lo escribe SQLite en UTC: leido tal cual, un toque
+    despues de las 7 de la noche contaba como del dia siguiente."""
     f = fechas.a_fecha(p['fecha'])
-    dijo = fechas.a_fecha(str(p['actualizado_en'] or '')[:10])
+    dijo = None
+    if p['actualizado_en']:
+        instante = fechas.a_instante(p['actualizado_en'], tz=UTC)
+        dijo = instante.astimezone(fechas.BOGOTA).date() if instante else None
     return max(d for d in (f, dijo) if d) if (f or dijo) else None
 
 
@@ -1446,7 +1459,7 @@ def _avisar_falta_cierre(cx: Any, p: Any, chat: Any) -> None:
         cerca = publicador_actual.ventas_cerca(cliente, p, alm.ventas_ya_enlazadas(p))
         if f:
             cerrado = publicador_actual.dia_cerrado_en_caja(cliente, f)
-    except (libros.LibroNoDisponible, actual.ApiError):
+    except Exception:  # sin el puente igual se avisa, con menos detalle
         pass
     if cerrado:
         causa = (
@@ -1472,6 +1485,18 @@ def _avisar_falta_cierre(cx: Any, p: Any, chat: Any) -> None:
     _enviar(cx, chat, p, texto, botones)
 
 
+def _avisar_sin_tumbar(cx: Any, p: Any, chat: Any) -> None:
+    try:
+        _avisar_falta_cierre(cx, p, chat)
+    except Exception as ex:
+        # Telegram caido: vuelve a la espera, y el aviso sale en otra pasada.
+        _a(cx).actualizar_pendiente(
+            p['id'], decidido_por=p['decidido_por'], pregunta=p['pregunta']
+        )
+        cx.commit()
+        print(f'  no pude avisar la venta de #{p["id"]}: {ex}')
+
+
 def revisar_ventas_en_espera(cx: Any) -> int:
     """Las transferencias que la persona dijo que eran de una clienta y que
     la Caja todavia no habia subido. Se enlazan cuando aparecen; si en unos
@@ -1480,14 +1505,19 @@ def revisar_ventas_en_espera(cx: Any) -> int:
     Devuelve cuantas enlazo."""
     alm = _a(cx)
     enlazadas = 0
+    # Un cliente por libro, no por venta: cada uno nuevo volvia a pedir las
+    # cuentas al puente de Actual, y con la lista creciendo la pasada tardaba
+    # minutos.
+    clientes: dict[int, Any] = {}
     for p in alm.en_espera_de_agendapro() + alm.vencidas_de_agendapro():
-        lb = alm.libro(p['libro_id'])
         chat = p['telegram_chat_id']
         try:
+            if p['libro_id'] not in clientes:
+                clientes[p['libro_id']] = libros.cliente(alm.libro(p['libro_id']))
             venta = publicador_actual.venta_de_agendapro(
-                libros.cliente(lb), p, alm.ventas_ya_enlazadas(p)
+                clientes[p['libro_id']], p, alm.ventas_ya_enlazadas(p)
             )
-        except (libros.LibroNoDisponible, actual.ApiError) as ex:
+        except Exception as ex:  # un timeout del puente no tumba la pasada
             print(f'  no pude revisar la venta de #{p["id"]}: {ex}')
             continue
         if venta:
@@ -1507,9 +1537,9 @@ def revisar_ventas_en_espera(cx: Any) -> int:
             # que vencieron antes de este aviso quedaron con la pregunta de la
             # categoria abierta; esas reciben el aviso una vez, y se cierra.
             if p['pregunta'] and chat:
-                _avisar_falta_cierre(cx, p, chat)
+                _avisar_sin_tumbar(cx, p, chat)
             continue
         desde = _espera_desde(p)
-        if desde and (fechas.hoy() - desde).days >= DIAS_DE_ESPERA and chat:
-            _avisar_falta_cierre(cx, p, chat)
+        if desde and (fechas.hoy() - desde).days >= DIAS_PARA_AVISAR and chat:
+            _avisar_sin_tumbar(cx, p, chat)
     return enlazadas

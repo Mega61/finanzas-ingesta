@@ -692,8 +692,30 @@ class Almacen:
 
     def marcar_preguntado(self, pendiente_id: int) -> None:
         self.cx.execute(
-            "UPDATE pendientes SET preguntado_en = datetime('now') WHERE id = ?",
+            """UPDATE pendientes SET preguntado_en = datetime('now'),
+                      veces_preguntado = veces_preguntado + 1
+                WHERE id = ?""",
             (pendiente_id,),
+        )
+        self.cx.commit()
+
+    def preguntadas_ultimo_dia(self, usuario_id: int) -> int:
+        """Cuantas preguntas le salieron a esa persona en las ultimas 24h. Es
+        el tope diario: sin el, una semana sin contestar salia de un tiron."""
+        return self.cx.execute(
+            """SELECT count(*) FROM pendientes
+                WHERE usuario_id = ?
+                  AND preguntado_en >= datetime('now', '-1 day')""",
+            (usuario_id,),
+        ).fetchone()[0]
+
+    def reabrir_preguntas(self, ids: list[int]) -> None:
+        """/pendientes: el usuario las pide, asi que vuelven a salir aunque el
+        bot ya se hubiera rendido con ellas."""
+        self.cx.executemany(
+            'UPDATE pendientes SET preguntado_en = NULL, veces_preguntado = 0 '
+            'WHERE id = ?',
+            [(i,) for i in ids],
         )
         self.cx.commit()
 
@@ -1502,6 +1524,12 @@ class Almacen:
         return self.cx.execute(
             'SELECT * FROM v_catalogo_por_preguntar LIMIT ?', (limite,)
         ).fetchall()
+
+    def catalogo_preguntados_ultimo_dia(self) -> int:
+        return self.cx.execute(
+            'SELECT count(*) FROM catalogo '
+            "WHERE preguntado_en >= datetime('now', '-1 day')"
+        ).fetchone()[0]
 
     def catalogo_marcar_preguntado(self, nit: str, codigo: str) -> None:
         self.cx.execute(

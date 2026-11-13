@@ -51,3 +51,10 @@ def _sin_la_configuracion_real_de_personas(monkeypatch):
     desarrollo, con correos y tarjetas de verdad. Ninguna prueba la lee: las
     que necesitan personas las declaran ellas mismas."""
     monkeypatch.setattr(personas, '_texto_crudo', lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _siempre_de_dia(monkeypatch):
+    """De noche el bot no pregunta. Sin esto la suite falla segun la hora a
+    la que se corra; la prueba del silencio lo vuelve a cambiar."""
+    monkeypatch.setattr(bot, '_es_de_noche', lambda hora=None: False)

@@ -174,3 +174,82 @@ def test_no_se_repite_la_pregunta_en_la_siguiente_pasada(cx, falso):
     facturas.clasificar(cx)
     assert bot.preguntar_productos(cx) == 1
     assert bot.preguntar_productos(cx) == 0
+
+
+def _sembrar_varios(cx, n):
+    for i in range(n):
+        cufe = f'CUFE-V{i}'
+        cx.execute(
+            """INSERT INTO facturas (cufe, nit, proveedor, numero, tipo, signo,
+                  fecha, total) VALUES (?, '890900608', 'EXITO', ?, 'factura',
+                  1, '2026-11-01', 10000)""",
+            (cufe, f'V{i}'),
+        )
+        cx.execute(
+            """INSERT INTO factura_lineas (cufe, n, nit, codigo, descripcion,
+                  cantidad, precio_unitario, total, fecha)
+               VALUES (?, 1, '890900608', ?, ?, 1, 10000, 10000, '2026-11-01')""",
+            (cufe, f'RARO{i}', f'Cosa Rara {i}'),
+        )
+    cx.commit()
+    facturas.clasificar(cx)
+
+
+def test_tres_productos_al_dia_no_por_pasada(cx, falso):
+    """Eran tres cada 15 minutos mientras quedara catalogo sin clasificar."""
+    _sembrar_varios(cx, 8)
+    assert bot.preguntar_productos(cx) == 3
+    assert bot.preguntar_productos(cx) == 0
+    assert len(falso.enviados) == 3
+
+
+def test_dice_en_que_almacen_fue(cx, falso):
+    _sembrar(cx)
+    facturas.clasificar(cx)
+    bot.preguntar_productos(cx)
+    assert 'en Éxito' in falso.enviados[0][0]
+
+
+def test_no_importa_cierra_la_pregunta_para_siempre(cx, falso):
+    """«Saltar» solo aplazaba: lo que nadie sabia que era volvia cada 3 dias."""
+    _sembrar(cx)
+    facturas.clasificar(cx)
+    bot.preguntar_productos(cx)
+    fila = Almacen(cx).catalogo_sin_clasificar(1)[0]
+    _, botones = falso.enviados[0]
+    planos = [d for fila_b in botones for _, d in fila_b]
+    assert f'fx:{fila["id"]}:1' in planos
+    bot._toque_producto_saltar(_toque(cx, f'fx:{fila["id"]}:1'))
+    cx.execute("UPDATE catalogo SET preguntado_en = datetime('now', '-30 days')")
+    assert Almacen(cx).catalogo_por_preguntar(5) == []
+
+
+def test_lo_de_menos_de_tres_mil_no_se_pregunta(cx, falso):
+    cx.execute(
+        """INSERT INTO facturas (cufe, nit, proveedor, numero, tipo, signo,
+              fecha, total) VALUES ('C1', '890900608', 'EXITO', 'F1', 'factura',
+              1, '2026-11-01', 1500)"""
+    )
+    cx.execute(
+        """INSERT INTO factura_lineas (cufe, n, nit, codigo, descripcion,
+              cantidad, precio_unitario, total, fecha)
+           VALUES ('C1', 1, '890900608', 'CHI1', 'Chicle Rarisimo', 1, 1500,
+                   1500, '2026-11-01')"""
+    )
+    cx.commit()
+    facturas.clasificar(cx)
+    assert bot.preguntar_productos(cx) == 0
+
+
+@pytest.mark.parametrize(
+    'desc',
+    ['Bolsa Biodegradable Farmatodo 8 kg x 1 und', 'IMP BOLSA', 'BOLSA EXITO'],
+)
+def test_cualquier_bolsa_es_bolsa(desc):
+    assert catalogo.clasificar_texto(desc)[1:3] == ('Servicios', 'Bolsas y empaques')
+
+
+def test_la_leche_en_bolsa_sigue_siendo_leche():
+    assert catalogo.clasificar_texto('LECHE ENTERA BOLSA 1100ML')[2] == (
+        'Lacteos y huevos'
+    )

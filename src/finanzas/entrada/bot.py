@@ -54,7 +54,17 @@ def _a(cx):
 # Cuantas categorias ofrecer como botones antes de pedir texto libre.
 MAX_BOTONES = 8
 # Cuantas preguntas mandar de una, para no ahogar el chat.
-MAX_PREGUNTAS = 6
+MAX_PREGUNTAS = 3
+# Y cuantas al dia por persona. Con seis por pasada y sin tope, una semana sin
+# contestar salia como 90 mensajes seguidos. Lo que no cabe espera a mañana.
+TOPE_DIARIO = 10
+# De noche no se pregunta: lo que llegue espera a la mañana.
+SILENCIO_DESDE, SILENCIO_HASTA = 22, 7
+
+
+def _es_de_noche(hora=None):
+    h = fechas.ahora().hour if hora is None else hora
+    return h >= SILENCIO_DESDE or h < SILENCIO_HASTA
 
 
 # ------------------------------------------------------------------ formato
@@ -126,13 +136,18 @@ def sugerir_categorias(cx, usuario_id, p, todas=None):
 # ---------------------------------------------------------------- preguntar
 
 
-def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
+def preguntar_pendientes(cx, limite=MAX_PREGUNTAS, pedido=False):
     """Manda las preguntas abiertas, cada una con el Firefly de su persona.
     Devuelve cuantas mando.
 
     Antes era una sola pasada con las categorias del Firefly del entorno: a
     cualquier persona se le ofrecian las categorias de Juan.
+
+    `pedido` es cuando la persona las pidio con /pendientes: ahi no aplican ni
+    el silencio de la noche ni el tope del dia.
     """
+    if not pedido and _es_de_noche():
+        return 0
     filas = db.pendientes_por_preguntar(cx, limite=limite)
     if not filas:
         return 0
@@ -140,7 +155,13 @@ def preguntar_pendientes(cx, limite=MAX_PREGUNTAS):
     por_persona = {}
     for p in filas:
         por_persona.setdefault(p['usuario_id'], []).append(p)
-    for uid, suyas in por_persona.items():
+    for uid, todas in por_persona.items():
+        suyas = todas
+        if not pedido:
+            cupo = TOPE_DIARIO - _a(cx).preguntadas_ultimo_dia(uid)
+            suyas = todas[: max(cupo, 0)]
+            if not suyas:
+                continue
         with firefly.usar(libros.conexion_firefly_de(_a(cx), uid)):
             if ruteo.usa_ruteo(_a(cx), uid):
                 mandadas += sum(
@@ -1719,7 +1740,7 @@ def _editar_por_texto(cx, chat, texto, tx_id=None, campo=None):
 
 # Su propio cupo, aparte de MAX_PREGUNTAS. Sin esto una semana clasificando
 # mercado tapa las alertas del banco, que son las que hay que mirar el mismo
-# dia.
+# dia. Es POR DIA: por pasada eran tres cada 15 minutos, todo el dia.
 MAX_PRODUCTOS = 3
 
 
@@ -1744,10 +1765,12 @@ def _texto_producto(p):
     plata = _dinero.formatear(_columna(p, 'gasto', 0), 'COP')
     veces = _columna(p, 'compras', 0)
     cuantas = 'una vez' if veces == 1 else f'{veces} veces'
+    tienda = catalogo.TIENDAS.get(_columna(p, 'nit', ''), '')
+    en = f' en {tienda}' if tienda else ''
     return (
         '🛒 <b>¿Qué es esto?</b>\n\n'
         f'<b>{_escapar(p["descripcion"] or p["codigo"])}</b>\n'
-        f'comprado {cuantas} · {plata}\n\n'
+        f'comprado {cuantas}{en} · {plata}\n\n'
         '<i>El nombre viene cortado por el almacén. '
         'Lo que respondas queda para siempre.</i>'
         + SALTO
@@ -1835,7 +1858,10 @@ def _toque_mezcla(t):
 def preguntar_productos(cx, limite=MAX_PRODUCTOS):
     """Manda las preguntas de catalogo pendientes. Devuelve cuantas mando."""
     chat = config.get('TELEGRAM_CHAT_ID_JUAN')
-    if not chat:
+    if not chat or _es_de_noche():
+        return 0
+    limite -= _a(cx).catalogo_preguntados_ultimo_dia()
+    if limite <= 0:
         return 0
     filas = _a(cx).catalogo_por_preguntar(limite)
     mandadas = 0
@@ -1858,7 +1884,7 @@ def _preguntar_producto_uno(cx, chat, p, encabezado=''):
     botones = _botonera(
         [(g, f'fg:{p["id"]}:{i}') for i, g in enumerate(catalogo.GRUPOS)]
     )
-    botones.append([('🤷 Saltar', f'fx:{p["id"]}:0')])
+    botones.append(_salidas_de_producto(p))
     texto = _texto_producto(p)
     if encabezado:
         texto = f'{encabezado}{SALTO}{SALTO}{texto}'
@@ -1929,7 +1955,7 @@ def _toque_producto_volver(t):
     botones = _botonera(
         [(g, f'fg:{p["id"]}:{i}') for i, g in enumerate(catalogo.GRUPOS)]
     )
-    botones.append([('🤷 Saltar', f'fx:{p["id"]}:0')])
+    botones.append(_salidas_de_producto(p))
     telegram.editar(t.chat, t.mid, _texto_producto_simple(p), botones)
 
 
@@ -1939,8 +1965,33 @@ def _texto_producto_simple(p):
     )
 
 
+def _salidas_de_producto(p):
+    """Las dos salidas sin clasificar. «Saltar» solo aplazaba, asi que lo que
+    nadie sabe que es volvia cada tres dias para siempre."""
+    return [
+        ('🤷 Después', f'fx:{p["id"]}:0'),
+        ('🙈 No importa', f'fx:{p["id"]}:1'),
+    ]
+
+
 def _toque_producto_saltar(t):
-    """No se sabe. Queda marcado como preguntado y vuelve a la cola en 3 dias."""
+    """0: no se sabe ahora, vuelve a la cola en 3 dias. 1: no importa, y no
+    vuelve: queda fuera de la canasta, como lo que no es mercado."""
+    if t.idx == 1:
+        p = db.catalogo_por_id(t.cx, t.pid)
+        if p is None:
+            t.aviso('ese producto ya no está')
+            return
+        grupo = catalogo.NO_ES_MERCADO
+        db.catalogo_responder_id(
+            t.cx, t.pid, catalogo.tipo_de(grupo), grupo, 'No importa'
+        )
+        t.aviso('no vuelvo a preguntar')
+        t.reemplazar(
+            f'🙈 <b>{_escapar(p["descripcion"] or p["codigo"])}</b>\n'
+            'No vuelvo a preguntar por eso.'
+        )
+        return
     db.catalogo_marcar_preguntado_id(t.cx, t.pid)
     t.aviso('lo dejo para después')
     t.reemplazar('🤷 Lo dejo para después.')
@@ -2594,10 +2645,8 @@ def _cmd_pendientes(cx, chat, _texto):
     if not abiertos:
         telegram.enviar(chat, 'No tengo nada por preguntarte. ✅')
         return
-    for p in abiertos:
-        db.pendiente_actualizar(cx, p['id'], preguntado_en=None)
-    cx.commit()
-    preguntar_pendientes(cx)
+    _a(cx).reabrir_preguntas([p['id'] for p in abiertos])
+    preguntar_pendientes(cx, pedido=True)
 
 
 def _cmd_resumen(cx, chat, _texto):
