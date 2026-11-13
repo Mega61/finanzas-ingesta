@@ -290,20 +290,8 @@ CREATE TABLE IF NOT EXISTS textos_en_espera (
 
 -- ------------------------------------------------------------------- vistas
 
--- Lo que el bot tiene que preguntar ahora mismo. Incluye cosas ya publicadas
--- en Firefly: estan en el libro, pero sin confirmar.
--- Ojo con `preguntado_en`: sin ese filtro el servicio repetia la misma
--- pregunta en cada pasada, o sea cada 15 minutos hasta que contestaras.
--- Se vuelve a preguntar solo despues de 24h, como recordatorio.
-CREATE VIEW IF NOT EXISTS v_por_preguntar AS
-SELECT p.*, u.telegram_chat_id, u.nombre AS usuario
-FROM pendientes p JOIN usuarios u ON u.id = p.usuario_id
-WHERE p.pregunta IS NOT NULL
-  AND p.estado IN ('nuevo', 'publicado', 'error')
-  AND u.activo = 1
-  AND (p.preguntado_en IS NULL
-       OR julianday('now') - julianday(p.preguntado_en) > 1.0)
-ORDER BY p.fecha DESC, p.id DESC;
+-- Lo que el bot tiene que preguntar ahora mismo: v_por_preguntar. Vive en
+-- migraciones/008_menos_mensajes.sql porque depende de `veces_preguntado`.
 
 -- Lo mismo pero SIN el filtro de tiempo, para cuando el usuario pide la lista
 -- el mismo dia con /pendientes. La de arriba existe para no repetir la misma
@@ -453,6 +441,9 @@ LEFT JOIN (SELECT nit, codigo, SUM(total) AS gasto, COUNT(*) AS compras
            FROM factura_lineas GROUP BY nit, codigo) g
   ON g.nit = c.nit AND g.codigo = c.codigo
 WHERE c.grupo = 'Sin clasificar'
+  -- Lo que no llega a 3.000 en total no vale una pregunta: era el chicle de
+  -- la caja y la bolsa de 300 pesos lo que se quedaba al final de la cola.
+  AND (g.gasto IS NULL OR g.gasto >= 3000)
   AND (c.preguntado_en IS NULL
        OR julianday('now') - julianday(c.preguntado_en) > 3.0)
 ORDER BY COALESCE(g.gasto, 0) DESC;

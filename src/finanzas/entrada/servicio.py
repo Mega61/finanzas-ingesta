@@ -129,11 +129,16 @@ def pasada(cx, uid):
     if nuevos:
         demonio.paso_procesar(cx, uid)
     conteo = demonio.paso_publicar(cx, en_serio=EN_SERIO) or {}
-    # Las transferencias de clientas que esperaban a Agendapro: si ya
-    # aparecieron, se enlazan antes de preguntar nada.
-    bot_libros.revisar_ventas_en_espera(cx)
     # lo que no se supo clasificar se pregunta de una
     mandadas = bot.preguntar_pendientes(cx)
+    # Las transferencias de clientas que esperaban a la Caja: si ya
+    # aparecieron, se enlazan. Va DESPUES de preguntar y aislada: habla con el
+    # puente de Actual, y un puente lento o caido tumbaba la pasada entera
+    # antes de mandar una sola pregunta, la venta nueva incluida.
+    try:
+        bot_libros.revisar_ventas_en_espera(cx)
+    except Exception as ex:
+        log('ventas', f'no pude revisar las que esperan: {ex}')
     # Las facturas de supermercado van despues y con su propio cupo: son
     # menos urgentes que una alerta del banco y no deben taparla.
     demonio.paso_facturas(cx)
