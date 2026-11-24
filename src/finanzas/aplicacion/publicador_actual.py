@@ -84,23 +84,35 @@ def _ventas(
     ]
 
 
+def restante(t: Mapping[str, Any], pagado: Mapping[str, float]) -> int:
+    """Lo que le falta a una venta, en centavos: su monto menos lo que otras
+    transferencias ya pagaron de ella (`pagado` va en pesos)."""
+    return (t.get('amount') or 0) - round(pagado.get(t.get('id'), 0) * 100)
+
+
 def venta_de_agendapro(
     cliente: actual.Cliente, p: Any, pagado: Mapping[str, float] = MappingProxyType({})
 ) -> dict[str, Any] | None:
     """La venta de Agendapro que es esta transferencia, si hay UNA sola.
 
-    Mismo monto exacto -- la clienta transfiere lo que se le cobro, con la
-    propina incluida, y eso es lo que Agendapro sube -- desde el dia anterior
-    hasta VENTA_DESPUES dias despues: la que paga el sabado queda en Agendapro
-    el lunes (el extracto de septiembre tiene varias). Con dos candidatas no se
-    elige: se pregunta. `pagado` es lo que otras transferencias ya pagaron de
-    cada venta: una venta ya pagada no se cobra dos veces.
+    Mismo monto exacto que lo que le FALTA a la venta -- la clienta transfiere
+    lo que se le cobro, con la propina incluida, y eso es lo que Agendapro sube
+    -- desde el dia anterior hasta VENTA_DESPUES dias despues: la que paga el
+    sabado queda en Agendapro el lunes (el extracto de septiembre tiene
+    varias). Con dos candidatas no se elige: se pregunta. `pagado` es lo que
+    otras transferencias ya pagaron de cada venta: una venta ya pagada no se
+    cobra dos veces, y una pagada a medias (30.000 de 100.000) espera justo el
+    resto (70.000) y lo enlaza sola.
+
+    Un adelanto de temporada no necesita nada especial: el panel lo sube como
+    su propia venta (`abono:<id>`) el dia en que entro, y la cuenta de la cita
+    sube solo el resto (`ea-appt:<id>`). Son dos ventas exactas.
     """
     monto = actual.centavos(p['valor'])
     candidatas = [
         t
         for t in _ventas(cliente, p, 1, VENTA_DESPUES, pagado)
-        if t.get('amount') == monto
+        if restante(t, pagado) == monto
     ]
     return candidatas[0] if len(candidatas) == 1 else None
 
@@ -141,7 +153,7 @@ def ventas_cerca(
 
     def orden(t: dict[str, Any]) -> tuple[int, int]:
         d = fechas.a_fecha(t.get('date'))
-        return abs((t.get('amount') or 0) - monto), abs((d - f).days) if d and f else 99
+        return abs(restante(t, pagado) - monto), abs((d - f).days) if d and f else 99
 
     ventas.sort(key=orden)
     return ventas[:cuantas]

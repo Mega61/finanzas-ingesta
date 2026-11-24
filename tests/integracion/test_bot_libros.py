@@ -560,7 +560,8 @@ class TestLaVentaDeAgendapro:
 
     def test_una_venta_pagada_en_dos_transferencias(self, mundo):
         """Dayana pago su venta de 100.000 en dos: 30.000 y 70.000. La venta
-        sigue ofreciendose hasta que lo enlazado la cubre."""
+        sigue ofreciendose hasta que lo enlazado la cubre, y la segunda
+        transferencia -- justo lo que falta -- se propone sola."""
         alm, tg, _ff, act, _juan, ella = mundo
         act.tx.append(
             _venta(
@@ -568,17 +569,43 @@ class TestLaVentaDeAgendapro:
             )
         )
         estudio = _libro(alm, ella, 'estudio')
-        for eid, valor in (('a1', 30000.0), ('a2', 70000.0)):
-            pid = self._transferencia(alm, ella, valor=valor, eid=eid)
-            _toque(alm, f'ld:{pid}:{estudio}')
-            botones = [b[0] for b in tg.botones()]
-            assert any('Dayana' in b for b in botones), (eid, botones)
-            _toque(alm, f'vc:{pid}:0')
-            assert alm.pendiente(pid)['firefly_id'] == 'ag-d'
+        pid = self._transferencia(alm, ella, valor=30000.0, eid='a1')
+        _toque(alm, f'ld:{pid}:{estudio}')
+        botones = [b[0] for b in tg.botones()]
+        assert any('Dayana' in b for b in botones), botones
+        _toque(alm, f'vc:{pid}:0')
+        assert alm.pendiente(pid)['firefly_id'] == 'ag-d'
+        assert 'Pago parcial' in tg.editados[-1][1], 'dice cuanto falta'
+        assert '70.000' in tg.editados[-1][1]
+
+        pid = self._transferencia(alm, ella, valor=70000.0, eid='a2')
+        _toque(alm, f'ld:{pid}:{estudio}')
+        assert 'pagada en parte' in tg.ultimo()[1], tg.ultimo()[1]
+        assert '✅ Sí, es esa venta' in [b[0] for b in tg.botones()]
+        _toque(alm, f'va:{pid}:1')
+        assert alm.pendiente(pid)['firefly_id'] == 'ag-d'
         tercera = self._transferencia(alm, ella, valor=70000.0, eid='a3')
         _toque(alm, f'ld:{tercera}:{estudio}')
         assert not any('Dayana' in b[0] for b in tg.botones()), 'ya esta pagada'
         assert act.creadas == []
+
+    def test_una_venta_pagada_en_parte_muestra_lo_que_falta(self, mundo):
+        """Si lo que llega no es justo el resto, la venta sigue en la lista,
+        pero con lo que le falta: es lo que ella compara."""
+        alm, tg, _ff, act, _juan, ella = mundo
+        act.tx.append(
+            _venta(
+                'ag-d', date(2026, 9, 25), 100000, 'Dayana Vargas · Semi · Venta 1163'
+            )
+        )
+        estudio = _libro(alm, ella, 'estudio')
+        pid = self._transferencia(alm, ella, valor=30000.0, eid='a1')
+        _toque(alm, f'ld:{pid}:{estudio}')
+        _toque(alm, f'vc:{pid}:0')
+        otra = self._transferencia(alm, ella, valor=50000.0, eid='a2')
+        _toque(alm, f'ld:{otra}:{estudio}')
+        botones = [b[0] for b in tg.botones()]
+        assert any('Dayana' in b and 'faltan' in b for b in botones), botones
 
     def test_elegir_servicios_no_escribe_la_venta(self, mundo):
         """Angel y Veronica: la venta no estaba aun, ella dijo «otra cosa» y
