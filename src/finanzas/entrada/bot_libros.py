@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import html
 import time
+from collections.abc import Mapping
 from datetime import UTC
 from typing import Any
 
@@ -397,16 +398,23 @@ def _la_venta(venta: dict[str, Any]) -> str:
     return f'💈 <b>{_e(venta.get("notes") or "Venta")}</b> · {_e(venta.get("date"))}'
 
 
-def _quien(venta: dict[str, Any]) -> str:
+def _quien(venta: dict[str, Any], pagado: Mapping[str, float] | None = None) -> str:
     """El boton de una venta: clienta y servicio sin el metodo de pago, que en
-    un boton no cabe y no ayuda a reconocerla."""
+    un boton no cabe y no ayuda a reconocerla. Una venta ya pagada en parte
+    muestra lo que le falta, que es lo que ella va a comparar."""
     partes = [
         x
         for x in (venta.get('notes') or 'Venta').split(' · ')
         if x not in ('transferencia', 'efectivo', 'otro')
     ]
     fecha = str(venta.get('date') or '')[5:]
-    return f'💈 {" · ".join(partes)[:40]} · {_plata(venta.get("amount", 0) / 100)} · {fecha}'
+    falta = publicador_actual.restante(venta, pagado or {})
+    monto = (
+        f'faltan {_plata(falta / 100)}'
+        if falta != venta.get('amount', 0)
+        else _plata(venta.get('amount', 0) / 100)
+    )
+    return f'💈 {" · ".join(partes)[:40]} · {monto} · {fecha}'
 
 
 def _puede_esperar(p: Any) -> bool:
@@ -438,9 +446,15 @@ def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
     except (libros.LibroNoDisponible, actual.ApiError):
         return False
     if venta:
+        parcial = venta.get('amount') != actual.centavos(p['valor'])
         texto = (
             describir(cx, p)
-            + '\n\nEn la Caja hay una venta igual:\n'
+            + (
+                '\n\nEn la Caja hay una venta pagada en parte a la que le falta '
+                'justo esto:\n'
+                if parcial
+                else '\n\nEn la Caja hay una venta igual:\n'
+            )
             + _la_venta(venta)
             + '\n\n<b>¿Es esa venta?</b>'
             '\n<i>Si es, no agrego nada: ya está en el libro.</i>'
@@ -457,7 +471,7 @@ def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
                 '\n<i>No hay una venta igual en la Caja. Si es una de estas, '
                 'tócala y la enlazo:</i>'
             )
-        botones = [[(_quien(t), f'vc:{p["id"]}:{i}')] for i, t in enumerate(cerca)]
+        botones = [[(_quien(t, ya), f'vc:{p["id"]}:{i}')] for i, t in enumerate(cerca)]
         # Siempre hay un «sí» y un «no». Antes, vencida la espera y sin ventas
         # cerca, el unico boton era «No está en Agendapro»; ella elegia
         # Servicios, el bot volvia a esperar, y a los dias la misma pregunta.
@@ -465,6 +479,8 @@ def _preguntar_si_es_venta(cx: Any, p: Any, chat: Any, lb: Any) -> bool:
             texto += (
                 '\n<i>Las ventas llegan cuando se cierra el día en la Caja del '
                 'panel; si no se ha cerrado, espero y la enlazo sola.</i>'
+                '\n<i>Si es un <b>adelanto</b> de una cita, regístralo en la cita '
+                '(Agenda → Adelanto): llega como su propia venta y la enlazo sola.</i>'
             )
             botones.append([('⏳ Sí, todavía no se cierra el día', f'va:{p["id"]}:2')])
         else:
@@ -1035,11 +1051,12 @@ def toque_venta_cercana(t: Any) -> None:
         t.aviso('esa opción ya no está')
         return
     lb = alm.libro(p['libro_id'])
+    ya = alm.ventas_ya_enlazadas(p)
     venta = next(
         (
             v
             for v in publicador_actual.ventas_cerca(
-                libros.cliente(lb), p, alm.ventas_ya_enlazadas(p), cuantas=50
+                libros.cliente(lb), p, ya, cuantas=50
             )
             if str(v['id']) == ids[t.idx]
         ),
@@ -1053,9 +1070,18 @@ def toque_venta_cercana(t: Any) -> None:
     t.cx.commit()
     t.aviso('enlazada')
     ojo = ''
-    if venta.get('amount') != actual.centavos(p['valor']):
+    faltaba = publicador_actual.restante(venta, ya)
+    llegaron = actual.centavos(p['valor'])
+    if llegaron < faltaba:
+        # Un pago en partes: la venta sigue abierta por lo que falta, y la
+        # transferencia de ese resto se enlaza sola cuando llegue.
         ojo = (
-            f'\n⚠️ La venta dice {_plata(venta["amount"] / 100)} y llegaron '
+            f'\n💵 Pago parcial: de esa venta faltan {_plata((faltaba - llegaron) / 100)}. '
+            'Cuando llegue el resto, lo enlazo solo.'
+        )
+    elif llegaron > faltaba:
+        ojo = (
+            f'\n⚠️ A la venta le faltaban {_plata(faltaba / 100)} y llegaron '
             f'{_plata(float(p["valor"]))}: corrígela en la Caja si no cuadra.'
         )
     t.reemplazar(
@@ -1453,10 +1479,12 @@ def _avisar_falta_cierre(cx: Any, p: Any, chat: Any) -> None:
     f = fechas.a_fecha(p['fecha'])
     dia = f'el <b>{fechas.corta(f)}</b>' if f else 'ese día'
     cerca: list[dict[str, Any]] = []
+    ya: Mapping[str, float] = {}
     cerrado = None
     try:
         cliente = libros.cliente(alm.libro(p['libro_id']))
-        cerca = publicador_actual.ventas_cerca(cliente, p, alm.ventas_ya_enlazadas(p))
+        ya = alm.ventas_ya_enlazadas(p)
+        cerca = publicador_actual.ventas_cerca(cliente, p, ya)
         if f:
             cerrado = publicador_actual.dia_cerrado_en_caja(cliente, f)
     except Exception:  # sin el puente igual se avisa, con menos detalle
@@ -1472,11 +1500,13 @@ def _avisar_falta_cierre(cx: Any, p: Any, chat: Any) -> None:
             f'⏳ No ha llegado la venta de la Caja: '
             f'{"falta" if cerrado is False else "lo más seguro es que falte"} '
             f'cerrar {dia} en la Caja del panel. Ciérralo y la enlazo sola, '
-            'no tienes que contestarme.'
+            'no tienes que contestarme.\n'
+            'Si es un <b>adelanto</b> de una cita, regístralo en la cita '
+            '(Agenda → Adelanto) con ese día y también la enlazo sola.'
         )
     texto = causa + '\n\n' + describir(cx, p)
     alm.guardar_sugerencias(p['id'], [str(t['id']) for t in cerca])
-    botones = [[(_quien(t), f'vc:{p["id"]}:{i}')] for i, t in enumerate(cerca)]
+    botones = [[(_quien(t, ya), f'vc:{p["id"]}:{i}')] for i, t in enumerate(cerca)]
     if cerca:
         texto += '\n\n<i>Si es una de estas, tócala y la enlazo:</i>'
     texto += '\n\n' + _OJO_DOBLE
